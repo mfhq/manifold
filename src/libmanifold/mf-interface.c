@@ -99,6 +99,11 @@ static SD_VARLINK_DEFINE_STRUCT_TYPE(
     SD_VARLINK_FIELD_COMMENT("Bytes of disk space that the operation freed."),
     SD_VARLINK_DEFINE_FIELD(bytesFreed, SD_VARLINK_INT, 0));
 
+static SD_VARLINK_DEFINE_STRUCT_TYPE(
+    Done,
+    SD_VARLINK_FIELD_COMMENT("The components that the operation changed, in their new state."),
+    SD_VARLINK_DEFINE_FIELD_BY_TYPE(components, Component, SD_VARLINK_ARRAY));
+
 static SD_VARLINK_DEFINE_ENUM_TYPE(
     TransactionFlag,
     SD_VARLINK_FIELD_COMMENT("The service may interact with the user, e.g. to ask for authorization of an operation."),
@@ -137,6 +142,18 @@ static SD_VARLINK_DEFINE_METHOD_FULL(
     SD_VARLINK_SUPPORTS_MORE,
     MF_TRANSACTION_FLAGS_INPUT,
     MF_OPERATION_OUTPUT);
+
+static SD_VARLINK_DEFINE_METHOD(
+    MarkComponent,
+    SD_VARLINK_FIELD_COMMENT("Identifier of the component to mark."),
+    SD_VARLINK_DEFINE_INPUT(componentId, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("Version to mark, with all of its revisions. The current version is marked if this is not given."),
+    SD_VARLINK_DEFINE_INPUT(version, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("The install mode to record."),
+    SD_VARLINK_DEFINE_INPUT_BY_TYPE(mode, InstallMode, 0),
+    MF_TRANSACTION_FLAGS_INPUT,
+    SD_VARLINK_FIELD_COMMENT("The versions that were marked."),
+    SD_VARLINK_DEFINE_OUTPUT_BY_TYPE(done, Done, 0));
 
 static SD_VARLINK_DEFINE_ERROR(
     Failed,
@@ -213,6 +230,8 @@ SD_VARLINK_DEFINE_INTERFACE(
     &vl_type_Progress,
     SD_VARLINK_SYMBOL_COMMENT("Result of an operation."),
     &vl_type_Result,
+    SD_VARLINK_SYMBOL_COMMENT("Result of an operation that does not install or remove components."),
+    &vl_type_Done,
     SD_VARLINK_SYMBOL_COMMENT("A general flag that changes the behavior of operations."),
     &vl_type_TransactionFlag,
 
@@ -226,6 +245,10 @@ SD_VARLINK_DEFINE_INTERFACE(
                               "no component links to, and files left behind by interrupted installations. "
                               "Called with the 'more' flag, reports its progress. Privileged."),
     &vl_method_Cleanup,
+    SD_VARLINK_SYMBOL_COMMENT("Mark a version of a component as kept until it is removed explicitly (manual), "
+                              "or as removed once it is not needed anymore (auto). Nothing is removed "
+                              "right away. Privileged."),
+    &vl_method_MarkComponent,
 
     SD_VARLINK_SYMBOL_COMMENT("The operation failed."),
     &vl_error_Failed,

@@ -6,7 +6,7 @@
 
 """
 End-to-end tests of manifoldd and the manifold tool, in the sandbox: bundles
-are installed and removed with the manifold tool, and the tests check
+are installed, removed and marked with the manifold tool, and the tests check
 its output and the store that manifoldd writes. The store writer itself is
 tested in test-store.c.
 
@@ -443,6 +443,39 @@ class RemovalTest(InstallerTestCase):
         with self.assertRaises(VarlinkError) as refused:
             self.daemon.call('org.freedesktop.manifold.Cleanup', {'flags': ['bogus']})
         self.assertEqual(refused.exception.parameters, {'parameter': 'flags'})
+
+
+class MarkTest(InstallerTestCase):
+    """Marking versions as installed manually or automatically."""
+
+    def test_marked_version_stays(self):
+        self.install_core()
+        self.install_app()
+        # without a version, the current one is marked
+        self.assertIn(f'app      {APP_ID} 0.1.0', self.manifold('mark', 'manual', APP_ID))
+        self.assertIn((APP_ID, '0.1.0', 'manual'), self.installed())
+        self.assertIn('current manual', self.manifold('list', APP_ID))
+
+        # a newer version does not supersede a version that is marked manual
+        self.assertNotIn('Removed', self.install(self.kit, self.app2))
+        self.assertEqual(self.manifold('list', APP_ID).count(APP_ID), 2)
+
+        # once the old version is marked auto again, a cleanup removes it, as it is not the newest
+        # version
+        self.manifold('mark', 'auto', APP_ID, '0.1.0')
+        self.assertIn((APP_ID, '0.1.0', 'auto'), self.installed())
+        self.assertIn(f'app      {APP_ID} 0.1.0', self.manifold('cleanup'))
+        self.assertEqual(self.version_dirs('apps', APP_ID), [f'0.2.0-{self.app2.revision}'])
+
+    def test_mark_missing_component(self):
+        self.install_core()
+        self.assertIn(
+            f'{APP_ID} is not installed', self.manifold('mark', 'manual', APP_ID, expect=1)
+        )
+        self.assertIn(
+            f'{CORE_ID} 9.9 is not installed',
+            self.manifold('mark', 'auto', CORE_ID, '9.9', expect=1),
+        )
 
 
 if __name__ == '__main__':
