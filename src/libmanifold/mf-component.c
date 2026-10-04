@@ -89,6 +89,23 @@ mf_component_kind_to_string(MfComponentKind kind)
 }
 
 /**
+ * mf_component_kind_is_always_auto:
+ * @kind: the kind of a component
+ * @sdk: whether the component is an SDK
+ *
+ * Check whether components of a kind are always installed with
+ * %MF_INSTALL_MODE_AUTO. This is the case for applications and plugins,
+ * but not for their SDKs.
+ *
+ * Returns: %TRUE for an application or plugin that is not an SDK
+ */
+gboolean
+mf_component_kind_is_always_auto(MfComponentKind kind, gboolean sdk)
+{
+    return !sdk && (kind == MF_COMPONENT_KIND_APP || kind == MF_COMPONENT_KIND_PLUGIN);
+}
+
+/**
  * mf_component_kind_from_string:
  * @kind_str: (nullable): the name of a kind
  *
@@ -304,7 +321,7 @@ mf_component_is_current(MfComponent *component)
  * mf_component_get_install_mode:
  * @component: an #MfComponent
  *
- * Returns: why the component is installed: explicitly, or as a dependency only
+ * Returns: the install mode of the component
  */
 MfInstallMode
 mf_component_get_install_mode(MfComponent *component)
