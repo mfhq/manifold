@@ -194,6 +194,14 @@ class InstallTest(InstallerTestCase):
         self.assertNotIn('manual', self.manifold('list', '--kind', 'kit'))
         self.assertNotIn('manual', self.manifold('list', '--kind', 'app'))
 
+    def test_result_leaves_out_installed_components(self):
+        self.install_core()
+        self.install(self.kit)
+        # the kit in the bundle of the app is installed already
+        out = self.install_app()
+        self.assertIn(f'app      {APP_ID} ', out)
+        self.assertNotIn(self.kit.component, out)
+
     def test_wrong_architecture_is_refused(self):
         other = 'aarch64' if host_architecture() == 'x86_64' else 'x86_64'
         core = Image(CORE_ID, 'core', '13.4', architecture=other)
