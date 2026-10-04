@@ -136,30 +136,41 @@ mf_hex_hash_is_valid(const char *hash)
 /**
  * mf_get_host_architecture:
  *
- * The architecture of the host, as Manifold names it: the CPU part of its
- * multiarch tuple, e.g. `x86_64`. This is what `uname -m` says, except that
- * every 32-bit x86 is `i386`.
+ * Get the architecture of the host. Manifold names an architecture by the
+ * CPU part of its multiarch tuple, e.g. `x86_64`. The exception is 32-bit
+ * ARM, which is named by its ABI like in Debian: `armhf` (hard-float) or
+ * `armel` (soft-float).
+ *
+ * A CPU can run more than one userland (an x86_64 CPU can run an i386
+ * userland), and the kernel does not tell us which userland is in use.
+ * So on x86 and ARM, we return the architecture that this library was built
+ * for. On all other CPUs, we return the machine name that `uname -m` prints.
  *
  * Returns: the architecture of the host
  */
 const char *
 mf_get_host_architecture(void)
 {
+#if defined(__x86_64__)
+    return "x86_64";
+#elif defined(__i386__)
+    return "i386";
+#elif defined(__arm__) && defined(__ARM_PCS_VFP)
+    return "armhf";
+#elif defined(__arm__)
+    return "armel";
+#else
     static char *architecture = NULL;
 
     if (g_once_init_enter_pointer(&architecture)) {
         struct utsname uts = {0};
-        const char *machine;
 
         uname(&uts);
-        machine = uts.machine;
-        if (strlen(machine) == 4 && machine[0] == 'i' && machine[1] >= '3' && machine[1] <= '6' &&
-            g_str_has_suffix(machine, "86"))
-            machine = "i386";
-        g_once_init_leave_pointer(&architecture, g_strdup(machine));
+        g_once_init_leave_pointer(&architecture, g_strdup(uts.machine));
     }
 
     return architecture;
+#endif
 }
 
 /**

@@ -144,6 +144,26 @@ mfr_app_load_runtime_info(MfrApp *app, const char *root, MfComponent *app_compon
     }
 }
 
+/**
+ * mfr_build_multiarch_tuple:
+ *
+ * Build the multiarch tuple of an architecture.
+ *
+ * Manifold uses the CPU part of the multiarch tuple as architecture name.
+ * 32-bit ARM is the exception, there we use the Debian names "armhf" and "armel".
+ *
+ * Returns: (transfer full): the multiarch tuple
+ */
+static char *
+mfr_build_multiarch_tuple(const char *architecture)
+{
+    if (g_strcmp0(architecture, "armhf") == 0)
+        return g_strdup("arm-linux-gnueabihf");
+    if (g_strcmp0(architecture, "armel") == 0)
+        return g_strdup("arm-linux-gnueabi");
+    return g_strconcat(architecture, "-linux-gnu", NULL);
+}
+
 G_DEFINE_FINAL_TYPE(MfrApp, mfr_app, G_TYPE_OBJECT)
 
 /**
@@ -186,8 +206,7 @@ mfr_app_load(const char *component_id, GError **error)
     if (app->command == NULL)
         return glnx_null_throw(error, "The manifest of %s has no command to run", component_id);
 
-    /* Manifold names architectures as the multiarch tuples do */
-    app->tuple = g_strconcat(mf_manifest_get_architecture(manifest), "-linux-gnu", NULL);
+    app->tuple = mfr_build_multiarch_tuple(mf_manifest_get_architecture(manifest));
 
     if (!mfr_fill_layer(MF_STORAGE_DIR, component, &app->layers[MFR_LAYER_APP], error))
         return NULL;
