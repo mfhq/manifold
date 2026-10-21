@@ -326,6 +326,20 @@ class InstallTest(InstallerTestCase):
         )
         self.assertIn(f'{platform.component} 6.8-22910119', self.manifold('list'))
 
+    def test_exact_base_must_be_installed(self):
+        # a different revision of the core provides the same identity, but it is
+        # not the revision the platform and the SDK were built against
+        core = rebuild(self.core)
+        platform = Image(CORE_ID + '.qt6', 'platform', '6.8', base=self.core)
+        self.install(core)
+
+        for image in (platform, self.sdk):
+            self.assertIn(
+                f'needs base {CORE_ID} 13.4-{self.core.revision}',
+                self.install(image, expect=1),
+            )
+            self.assertNotIn(image.verity_hash, self.stored_images())
+
     def test_platform_must_sit_on_a_core(self):
         platform = Image(CORE_ID + '.qt6', 'platform', '6.8', base=self.kit)
         self.install_core()
