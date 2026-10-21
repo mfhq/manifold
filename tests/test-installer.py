@@ -376,6 +376,14 @@ class InstallTest(InstallerTestCase):
             for name in dirs + files:
                 self.assertFalse(name.startswith('.tmp-'), f'leftover {root}/{name}')
 
+    def test_installed_version_stays_when_it_can_not_become_current(self):
+        self.install_core()
+        # put a directory at the path of the current link, which a link can not replace
+        os.makedirs(f'{STORE}/apps/{APP_ID}/current/in-the-way')
+
+        self.assertIn(f'app      {APP_ID} ', self.install_app())
+        self.assertTrue(os.path.isdir(f'{STORE}/apps/{APP_ID}/0.1.0-{self.app.revision}'))
+
     def test_install_reports_progress(self):
         replies = self.install_file(self.bundle(self.core, self.sdk))
         items = [r['progress']['item'] for r in replies[:-1] if 'item' in r['progress']]
