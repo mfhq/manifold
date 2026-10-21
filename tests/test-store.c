@@ -462,6 +462,17 @@ test_current_is_newest(Fixture *f, gconstpointer user_data)
 }
 
 /**
+ * mft_removal_item:
+ *
+ * Get the item at @index of a removal plan.
+ */
+static MfdRemovalItem *
+mft_removal_item(MfdRemovalPlan *rmplan, guint index)
+{
+    return g_ptr_array_index(rmplan->items, index);
+}
+
+/**
  * test_plan_removal:
  */
 static void
@@ -480,10 +491,15 @@ test_plan_removal(Fixture *f, gconstpointer user_data)
      * and the stray image that no component uses */
     app_removal = mfd_manager_plan_removal(manager, TEST_APP_ID, NULL, NULL, &error);
     g_assert_no_error(error);
-    g_assert_cmpuint(app_removal->dirs->len, ==, 2);
-    g_assert_cmpstr(g_ptr_array_index(app_removal->dirs, 0), ==, APPS "/" TEST_APP_ID "/0.1.0-1");
-    g_assert_cmpstr(g_ptr_array_index(app_removal->dirs, 1), ==, RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1");
-    g_assert_cmpstr(mf_component_get_id(g_ptr_array_index(app_removal->components, 1)), ==, TEST_KIT_ID);
+    g_assert_cmpuint(app_removal->items->len, ==, 2);
+    g_assert_cmpstr(mft_removal_item(app_removal, 0)->version_dir, ==, APPS "/" TEST_APP_ID "/0.1.0-1");
+    g_assert_cmpstr(mft_removal_item(app_removal, 1)->version_dir,
+                    ==,
+                    RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1");
+    g_assert_cmpstr(mf_component_get_id(mft_removal_item(app_removal, 1)->component), ==, TEST_KIT_ID);
+    /* the app is removed on request, and the kit because no component needs it anymore */
+    g_assert_cmpint(mft_removal_item(app_removal, 0)->action, ==, MF_ACTION_REMOVE);
+    g_assert_cmpint(mft_removal_item(app_removal, 1)->action, ==, MF_ACTION_CLEANUP);
     g_assert_cmpuint(app_removal->images->len, ==, 3);
     g_assert_cmpuint(app_removal->image_bytes, ==, 1024 + 2048 + 8192);
 
@@ -497,7 +513,7 @@ test_plan_removal(Fixture *f, gconstpointer user_data)
     /* a cleanup that finds no unneeded component only removes the images that no component uses */
     cleanup = mfd_manager_plan_removal(manager, NULL, NULL, NULL, &error);
     g_assert_no_error(error);
-    g_assert_cmpuint(cleanup->dirs->len, ==, 0);
+    g_assert_cmpuint(cleanup->items->len, ==, 0);
     g_assert_cmpuint(cleanup->images->len, ==, 1);
     g_assert_cmpstr(g_ptr_array_index(cleanup->images, 0), ==, stray_hash);
     g_assert_cmpuint(cleanup->image_bytes, ==, 8192);
@@ -561,7 +577,7 @@ test_shared_dependency_stays(Fixture *f, gconstpointer user_data)
 
     removal = mfd_manager_plan_removal(manager, TEST_APP_ID, NULL, NULL, &error);
     g_assert_no_error(error);
-    g_assert_cmpuint(removal->dirs->len, ==, 1);
+    g_assert_cmpuint(removal->items->len, ==, 1);
     g_assert_cmpuint(removal->images->len, ==, 1);
     g_assert_cmpstr(g_ptr_array_index(removal->images, 0), ==, f->app_hash);
 }
@@ -590,8 +606,10 @@ test_old_dependency_is_removed(Fixture *f, gconstpointer user_data)
      * needed, and a cleanup removes it */
     cleanup = mfd_manager_plan_removal(manager, NULL, NULL, NULL, &error);
     g_assert_no_error(error);
-    g_assert_cmpuint(cleanup->dirs->len, ==, 1);
-    g_assert_cmpstr(g_ptr_array_index(cleanup->dirs, 0), ==, RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1");
+    g_assert_cmpuint(cleanup->items->len, ==, 1);
+    g_assert_cmpstr(mft_removal_item(cleanup, 0)->version_dir,
+                    ==,
+                    RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1");
     g_assert_cmpuint(cleanup->images->len, ==, 1);
     g_assert_cmpstr(g_ptr_array_index(cleanup->images, 0), ==, f->kit_hash);
 }
@@ -624,9 +642,9 @@ test_dependency_chain_removal(Fixture *f, gconstpointer user_data)
 
     cleanup = mfd_manager_plan_removal(manager, NULL, NULL, NULL, &error);
     g_assert_no_error(error);
-    g_assert_cmpuint(cleanup->dirs->len, ==, 2);
-    g_assert_cmpstr(g_ptr_array_index(cleanup->dirs, 0), ==, APPS "/" TEST_APP_ID "/0.0.1-1");
-    g_assert_cmpstr(g_ptr_array_index(cleanup->dirs, 1),
+    g_assert_cmpuint(cleanup->items->len, ==, 2);
+    g_assert_cmpstr(mft_removal_item(cleanup, 0)->version_dir, ==, APPS "/" TEST_APP_ID "/0.0.1-1");
+    g_assert_cmpstr(mft_removal_item(cleanup, 1)->version_dir,
                     ==,
                     RUNTIMES "/" TEST_CORE_ID ".0123456789abcdef/20251201T0000-1");
     g_assert_cmpuint(cleanup->images->len, ==, 2);
@@ -659,14 +677,14 @@ test_newest_app_stays(Fixture *f, gconstpointer user_data)
 
     cleanup = mfd_manager_plan_removal(manager, NULL, NULL, NULL, &error);
     g_assert_no_error(error);
-    g_assert_cmpuint(cleanup->dirs->len, ==, 1);
-    g_assert_cmpstr(g_ptr_array_index(cleanup->dirs, 0), ==, APPS "/" TEST_APP_ID "/0.2.0-1");
+    g_assert_cmpuint(cleanup->items->len, ==, 1);
+    g_assert_cmpstr(mft_removal_item(cleanup, 0)->version_dir, ==, APPS "/" TEST_APP_ID "/0.2.0-1");
 
     /* if 0.3.0 is removed, 0.2.0 is the newest remaining version and is kept */
     removal = mfd_manager_plan_removal(manager, TEST_APP_ID, "0.3.0", NULL, &error);
     g_assert_no_error(error);
-    g_assert_cmpuint(removal->dirs->len, ==, 1);
-    g_assert_cmpstr(g_ptr_array_index(removal->dirs, 0), ==, APPS "/" TEST_APP_ID "/0.3.0-1");
+    g_assert_cmpuint(removal->items->len, ==, 1);
+    g_assert_cmpstr(mft_removal_item(removal, 0)->version_dir, ==, APPS "/" TEST_APP_ID "/0.3.0-1");
 }
 
 /**
@@ -676,7 +694,7 @@ static void
 mft_count_removed(const MfProgress *progress, gpointer user_data)
 {
     const MfItemProgress *item = mf_progress_get_item(progress);
-    guint *counts = user_data; /* removed components, removed images */
+    guint *counts = user_data; /* components removed on request, and as not needed anymore */
 
     /* each item is reported when it starts and when it finishes; only count finished ones */
     g_assert_nonnull(item);
@@ -708,8 +726,9 @@ test_remove(Fixture *f, gconstpointer user_data)
     result = mfd_manager_remove(manager, TEST_APP_ID, NULL, mft_count_removed, counts, NULL, &error);
     g_assert_no_error(error);
     g_assert_nonnull(result);
-    g_assert_cmpuint(counts[0], ==, 2);
-    g_assert_cmpuint(counts[1], ==, 2);
+    /* the app was removed on request, the kit was cleaned up, and images are not reported as items */
+    g_assert_cmpuint(counts[0], ==, 1);
+    g_assert_cmpuint(counts[1], ==, 1);
     g_assert_cmpuint(mf_result_get_removed(result)->len, ==, 2);
     g_assert_cmpuint(mf_result_get_removed_images(result)->len, ==, 2);
     g_assert_cmpuint(mf_result_get_bytes_freed(result), ==, 1024 + 2048);
