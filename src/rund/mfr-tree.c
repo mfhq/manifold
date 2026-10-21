@@ -272,19 +272,66 @@ mfr_write_environment_record(MfrTree *tree, const char *path, GError **error)
 }
 
 /**
+ * mfr_host_path_is_bound:
+ *
+ * Check whether a path of the host is at the same path in every tree, as it
+ * is one of HOST_BINDS or below one of them.
+ */
+static gboolean
+mfr_host_path_is_bound(const char *path)
+{
+    for (size_t i = 0; i < G_N_ELEMENTS(HOST_BINDS); i++) {
+        size_t length = strlen(HOST_BINDS[i].path);
+
+        if (strncmp(path, HOST_BINDS[i].path, length) == 0 && (path[length] == '\0' || path[length] == '/'))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+/**
+ * mfr_read_run_link:
+ * @path: a file in /etc of the host, or its placeholder in the layer of a tree
+ *
+ * Read a symbolic link that points to a file in a subdirectory of /run.
+ *
+ * Returns: (transfer full) (nullable): the absolute path of the link target, or
+ *   %NULL if @path is not a link or does not point into a subdirectory of /run
+ */
+static char *
+mfr_read_run_link(const char *path)
+{
+    g_autofree char *target = g_file_read_link(path, NULL);
+    g_autofree char *canonical = NULL;
+
+    if (target == NULL)
+        return NULL;
+    canonical = g_canonicalize_filename(target, "/etc");
+    if (!g_str_has_prefix(canonical, "/run/") || strchr(canonical + strlen("/run/"), '/') == NULL)
+        return NULL;
+    return g_steal_pointer(&canonical);
+}
+
+/**
  * mfr_prepare_etc_files:
  *
- * Create placeholders in the tree's layer for the host files listed in
- * HOST_ETC_FILES, which hide the image's versions:
- *  - If the host's file is a symlink into /run, recreate that symlink. /run is
- *    bound into every tree, so it resolves to the live host file, even if the
- *    host replaces it (e.g. resolv.conf managed by systemd-resolved).
- *  - Otherwise create an empty file, which mfr_bind_etc_files() later
- *    bind-mounts the host's file over.
- *  - If the host does not have the file, create nothing, so the image's
- *    version (if any) stays visible.
+ * Create placeholders in the layer of the tree for the files of the host
+ * that are listed in HOST_ETC_FILES. A placeholder hides the file of the
+ * same name in the images.
+ *  - If the file of the host is a link into a subdirectory of /run, we create
+ *    the same link, and a mount point for the subdirectory, unless the
+ *    subdirectory is bind-mounted into every tree anyway.
+ *    mfr_bind_etc_files() later binds the subdirectory, so the link always
+ *    resolves to the current file of the host, even after the host replaced
+ *    the file (e.g. resolv.conf managed by NetworkManager).
+ *  - Otherwise we create an empty file. mfr_bind_etc_files() later
+ *    bind-mounts the file of the host over it.
+ *  - If the host does not have the file, we create nothing, so the file of
+ *    the images (if any) stays visible.
  *
- * Entries left by a previous assembly of the reused layer are removed first.
+ * The layer may be reused, so we first remove the placeholders that a
+ * previous assembly created.
  */
 static gboolean
 mfr_prepare_etc_files(const char *layer_dir, GError **error)
@@ -296,17 +343,22 @@ mfr_prepare_etc_files(const char *layer_dir, GError **error)
     for (size_t i = 0; i < G_N_ELEMENTS(HOST_ETC_FILES); i++) {
         g_autofree char *host_path = g_build_filename("/etc", HOST_ETC_FILES[i], NULL);
         g_autofree char *path = g_build_filename(etc_dir, HOST_ETC_FILES[i], NULL);
-        g_autofree char *target = g_file_read_link(host_path, NULL);
-        g_autofree char *canonical = target != NULL ? g_canonicalize_filename(target, "/etc") : NULL;
+        g_autofree char *run_target = mfr_read_run_link(host_path);
 
         /* remove the placeholder of a previous assembly */
         if (unlink(path) != 0 && errno != ENOENT)
             return glnx_throw_errno_prefix(error, "Unable to remove %s", path);
         if (!g_file_test(host_path, G_FILE_TEST_EXISTS))
             continue;
-        if (canonical != NULL && g_str_has_prefix(canonical, "/run/")) {
-            if (symlink(target, path) != 0)
+        if (run_target != NULL) {
+            g_autofree char *run_dir = g_path_get_dirname(run_target);
+            g_autofree char *mount_point = g_build_filename(layer_dir, run_dir, NULL);
+
+            if (symlink(run_target, path) != 0)
                 return glnx_throw_errno_prefix(error, "Unable to link %s", path);
+            if (!mfr_host_path_is_bound(run_dir) &&
+                !glnx_shutil_mkdir_p_at(AT_FDCWD, mount_point, 0755, NULL, error))
+                return FALSE;
         } else if (!g_file_set_contents(path, "", 0, error)) {
             return FALSE;
         }
@@ -318,17 +370,32 @@ mfr_prepare_etc_files(const char *layer_dir, GError **error)
 /**
  * mfr_bind_etc_files:
  *
- * Bindmount the host's files over the empty ones of the layer, read-only.
+ * Bind-mount the files of the host over the empty placeholder files of the
+ * layer, and bind-mount the subdirectories of /run that the placeholder links
+ * point into. All of these mounts are read-only.
  */
 static gboolean
 mfr_bind_etc_files(const char *tree_path, const char *layer_dir, GError **error)
 {
+    g_autoptr(GHashTable) bound_dirs = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
     for (size_t i = 0; i < G_N_ELEMENTS(HOST_ETC_FILES); i++) {
         g_autofree char *host_path = g_build_filename("/etc", HOST_ETC_FILES[i], NULL);
         g_autofree char *placeholder = g_build_filename(layer_dir, "etc", HOST_ETC_FILES[i], NULL);
         g_autofree char *target = g_build_filename(tree_path, "etc", HOST_ETC_FILES[i], NULL);
+        g_autofree char *run_target = mfr_read_run_link(placeholder);
 
-        /* a link into /run needs no bind mount, and it would be followed outside of the tree */
+        if (run_target != NULL) {
+            g_autofree char *run_dir = g_path_get_dirname(run_target);
+            g_autofree char *dir_target = g_build_filename(tree_path, run_dir, NULL);
+
+            if (mfr_host_path_is_bound(run_dir) || !g_hash_table_add(bound_dirs, g_strdup(run_dir)))
+                continue;
+            if (!mfr_bind_mount(run_dir, dir_target, TRUE, error))
+                return FALSE;
+            continue;
+        }
+        /* never mount on a link, as the kernel would follow it to a path outside of the tree */
         if (g_file_test(placeholder, G_FILE_TEST_IS_SYMLINK) ||
             !g_file_test(placeholder, G_FILE_TEST_IS_REGULAR))
             continue;
