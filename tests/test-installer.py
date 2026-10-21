@@ -534,6 +534,16 @@ class RemovalTest(InstallerTestCase):
             f'{APP_ID} 9.9.9 is not installed', self.manifold('remove', APP_ID, '9.9.9', expect=1)
         )
 
+    def test_unneeded_dependents_are_removed_first(self):
+        self.install_core()
+        # nothing builds on the SDK, so once it is marked auto, a cleanup would remove it
+        self.manifold('mark', 'auto', CORE_ID + '.sdk')
+        items = self.remove_component(CORE_ID)
+        self.assertEqual(
+            list(dict.fromkeys(items)), [('cleanup', CORE_ID + '.sdk'), ('remove', CORE_ID)]
+        )
+        self.assertEqual(self.installed(), [])
+
     def test_several_versions(self):
         # an older version installed after a newer one replaces nothing
         self.install_core()
