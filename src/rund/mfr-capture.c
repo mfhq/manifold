@@ -50,9 +50,10 @@
  *   environment.json    the loader variables, "" for one that must be unset
  *   stamp               what on the host the capture was made from
  *
- * A capture is stale when the host libraries it links to changed. Checking
- * every link is done when the daemon starts. Before a launch, only the
- * modification times of the library directories are compared.
+ * A capture is stale when the host libraries it links to changed, or when
+ * loader manifests were added, removed or replaced. Checking every link is
+ * done when the daemon starts. Before a launch, only the modification times
+ * of the library and manifest directories are compared.
  */
 
 /* where the rewritten loader manifests go in a tree, kept apart from the image's own */
@@ -1744,6 +1745,14 @@ mfr_capture_job_write_stamp(MfrCaptureJob *job, const char *dir, GError **error)
         if (!g_str_equal(host_dir, host_libdir) && mfr_stamp_add_dir(&dirs, host_dir) < 0)
             return glnx_throw(error, "Unable to record directories");
     }
+    /* we copy loader manifests instead of linking them, so we record their directories. The mtime
+     * of a directory changes when a manifest is added, removed or replaced. */
+    for (size_t i = 0; i < G_N_ELEMENTS(LOADER_MANIFEST_KINDS); i++) {
+        for (size_t j = 0; LOADER_MANIFEST_KINDS[i].dirs[j] != NULL; j++) {
+            if (mfr_stamp_add_dir(&dirs, LOADER_MANIFEST_KINDS[i].dirs[j]) < 0)
+                return glnx_throw(error, "Unable to record directories");
+        }
+    }
     if (!mfr_stamp_add_link_targets(job->overrides_dir, &targets, error))
         return FALSE;
     if (targets.entries == NULL)
@@ -1980,8 +1989,9 @@ mfr_stamp_find_changed(sd_json_variant *stamp, const char *key, const char **ret
 /**
  * mfr_capture_is_fresh:
  *
- * Whether the library directories of the host are as they were when the
- * capture was made. Cheap enough for every launch.
+ * Check whether the library and manifest directories of the host are
+ * unchanged since the capture was made. We only compare the modification
+ * times of the directories, which is cheap enough to do for every launch.
  */
 gboolean
 mfr_capture_is_fresh(const MfrCapture *capture)
