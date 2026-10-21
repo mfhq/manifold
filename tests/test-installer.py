@@ -131,6 +131,17 @@ class InstallerTestCase(unittest.TestCase):
                 fd=f.fileno(),
             )
 
+    def remove_component(self, component_id):
+        """Call RemoveComponent directly, and return the action and the subject of every
+        item it reported progress for."""
+        replies = self.daemon.call(
+            'org.freedesktop.manifold.RemoveComponent', {'componentId': component_id}, more=True
+        )
+        return [
+            (r['progress']['item']['action'], r['progress']['item']['subject'])
+            for r in replies[:-1]
+        ]
+
     def installed(self):
         """Read the installed components from the store on disk, as the daemon has no
         method to list them. Returns a sorted list of (ID, version, mode)."""
@@ -386,6 +397,14 @@ class RemovalTest(InstallerTestCase):
             self.installed(), [(CORE_ID, '13.4', 'manual'), (CORE_ID + '.sdk', '13.4', 'manual')]
         )
 
+    def test_removal_reports_components(self):
+        self.install_core()
+        self.install_app()
+        self.assertEqual(
+            set(self.remove_component(APP_ID)),
+            {('remove', APP_ID), ('cleanup', self.kit.component)},
+        )
+
     def test_kit_installed_on_purpose_stays(self):
         self.install_core()
         self.install_app()
@@ -448,8 +467,9 @@ class RemovalTest(InstallerTestCase):
 
         with open(stray, 'wb') as f:
             f.write(b'x' * 4096)
+        # removing images alone reports no progress, as a hash means nothing to a user
         replies = self.daemon.call('org.freedesktop.manifold.Cleanup', more=True)
-        self.assertEqual([r['progress']['percent'] for r in replies[:-1]], [0, 100])
+        self.assertEqual(len(replies), 1)
         self.assertEqual(replies[-1]['result']['removedImages'], ['f' * 64])
         self.assertEqual(replies[-1]['result']['bytesFreed'], 4096)
 
