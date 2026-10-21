@@ -966,16 +966,81 @@ mfd_manager_complete_removal_plan(MfdManager *manager,
 }
 
 /**
+ * mfd_version_selects:
+ * @version: a version, or a full version if @full is set
+ *
+ * Check whether @version matches the version of an installed component.
+ */
+static gboolean
+mfd_version_selects(MfComponent *component, const char *version, gboolean full)
+{
+    return g_str_equal(full ? mf_component_get_full_version(component) : mf_component_get_version(component),
+                       version);
+}
+
+/**
+ * mfd_manager_resolve_version:
+ * @version: (nullable): a version, which selects all of its revisions, or
+ *   a full version (`<version>-<rev>`), which selects one revision
+ * @ret_full: (out): whether @version is a full version
+ *
+ * Find out whether @version is a version or a full version, by comparing it
+ * with the installed versions of the component.
+ *
+ * A version may itself end in a dash and a number, like a full version does.
+ * We therefore refuse a @version that matches the version of one installed
+ * component, and the full version of a different one.
+ */
+static gboolean
+mfd_manager_resolve_version(MfdManager *manager,
+                            const char *component_id,
+                            const char *version,
+                            gboolean *ret_full,
+                            GError **error)
+{
+    g_autoptr(GPtrArray) components = NULL;
+    gboolean as_version = FALSE;
+    gboolean as_full = FALSE;
+
+    *ret_full = FALSE;
+    if (version == NULL)
+        return TRUE;
+    components = mf_store_list_components(manager->store, component_id, MF_COMPONENT_KIND_UNKNOWN, error);
+    if (components == NULL)
+        return FALSE;
+    for (guint i = 0; i < components->len; i++) {
+        auto component = MF_COMPONENT (g_ptr_array_index(components, i));
+
+        as_version |= mfd_version_selects(component, version, FALSE);
+        as_full |= mfd_version_selects(component, version, TRUE);
+    }
+    if (as_version && as_full) {
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_FAILED,
+                    "%s %s is ambiguous: It matches both the version of an installed component, as well as its version and revision",
+                    component_id,
+                    version);
+        return FALSE;
+    }
+
+    *ret_full = as_full;
+    return TRUE;
+}
+
+/**
  * mfd_manager_plan_removal:
  * @manager: an #MfdManager
- * @component_id: (nullable): a component to remove, or %NULL to only clean up cruft
- * @version: (nullable): the version to remove, or %NULL for all versions
- * @ret_detail: (out caller-allocates) (optional): more about a failure
+ * @component_id: (nullable): a component to remove, or %NULL to only plan a cleanup
+ * @version: (nullable): the version to remove with all of its revisions, the
+ *   full version (`<version>-<rev>`) to remove one revision, or %NULL for all versions
+ * @ret_detail: (out caller-allocates) (optional): details about the failure
  * @error: a #GError
  *
- * Work out what a removal removes: the versions of the component, every
- * dependency nothing builds on once they are gone, and then every image
- * no remaining component links to. Nothing is changed.
+ * Create the removal plan for a component. The plan contains the requested
+ * versions of the component, every dependency that no kept component builds
+ * on after their removal, and every image that no kept component uses.
+ * The store is not changed.
  *
  * Returns: (transfer full): the plan, or %NULL on error
  */
@@ -989,6 +1054,7 @@ mfd_manager_plan_removal(MfdManager *manager,
     g_autoptr(MfdRemovalPlan) rmplan = mfd_removal_plan_new();
     g_autoptr(GPtrArray) installed = NULL;
     g_autoptr(GHashTable) used = NULL;
+    gboolean full = FALSE;
 
     g_return_val_if_fail(MFD_IS_MANAGER(manager), NULL);
 
@@ -997,11 +1063,13 @@ mfd_manager_plan_removal(MfdManager *manager,
         return NULL;
 
     if (component_id != NULL) {
+        if (!mfd_manager_resolve_version(manager, component_id, version, &full, error))
+            return NULL;
         for (guint i = 0; i < installed->len; i++) {
             MfdInstalledVersion *candidate = g_ptr_array_index(installed, i);
 
             if (g_str_equal(mf_component_get_id(candidate->component), component_id) &&
-                (version == NULL || g_str_equal(mf_component_get_version(candidate->component), version)))
+                (version == NULL || mfd_version_selects(candidate->component, version, full)))
                 mfd_removal_plan_add_item(rmplan, candidate, MF_ACTION_REMOVE);
         }
         if (rmplan->items->len == 0) {
@@ -1308,7 +1376,8 @@ mfd_manager_install_bundle(MfdManager *manager,
  * mfd_manager_remove:
  * @manager: an #MfdManager
  * @component_id: (nullable): the component to remove, or %NULL to only remove cruft
- * @version: (nullable): the version to remove, or %NULL for all versions
+ * @version: (nullable): the version to remove, with all of its revisions, `<version>-<rev>`
+ *     to specify the revision too, or %NULL for all versions
  * @progress_func: (nullable): called whenever the operation progresses
  * @user_data: passed to @progress_func
  * @ret_detail: (out caller-allocates) (optional): more about a failure
@@ -1362,24 +1431,25 @@ mfd_manager_remove(MfdManager *manager,
 /**
  * mfd_manager_mark_selects:
  *
- * Whether marking @version of a component, or its current version if
- * @version is %NULL, marks @component.
+ * Check whether @component is one of the versions to mark. If @version is
+ * %NULL, only the current version is marked.
  */
 static gboolean
-mfd_manager_mark_selects(MfComponent *component, const char *version)
+mfd_manager_mark_selects(MfComponent *component, const char *version, gboolean full)
 {
     if (version == NULL)
         return mf_component_is_current(component);
-    return g_str_equal(mf_component_get_version(component), version);
+    return mfd_version_selects(component, version, full);
 }
 
 /**
  * mfd_manager_mark:
  * @manager: an #MfdManager
  * @component_id: the component to mark
- * @version: (nullable): the version to mark, with all of its revisions, or %NULL for the current one
+ * @version: (nullable): the version to mark with all of its revisions, the
+ *   full version (`<version>-<rev>`) to mark one revision, or %NULL for the current version
  * @mode: the install mode to record
- * @ret_detail: (out caller-allocates) (optional): more about a failure
+ * @ret_detail: (out caller-allocates) (optional): details about the failure
  * @error: a #GError
  *
  * Mark versions of a component as kept until they are removed explicitly
@@ -1399,12 +1469,15 @@ mfd_manager_mark(MfdManager *manager,
 {
     g_autoptr(GPtrArray) components = NULL;
     g_autoptr(GPtrArray) marked = g_ptr_array_new_with_free_func(g_object_unref);
+    gboolean full = FALSE;
     guint n_marked = 0;
 
     g_return_val_if_fail(MFD_IS_MANAGER(manager), NULL);
     g_return_val_if_fail(mode == MF_INSTALL_MODE_MANUAL || mode == MF_INSTALL_MODE_AUTO, NULL);
 
     if (!mf_store_load(manager->store, error))
+        return NULL;
+    if (!mfd_manager_resolve_version(manager, component_id, version, &full, error))
         return NULL;
     components = mf_store_list_components(manager->store, component_id, MF_COMPONENT_KIND_UNKNOWN, error);
     if (components == NULL)
@@ -1414,7 +1487,7 @@ mfd_manager_mark(MfdManager *manager,
         MfComponent *component = g_ptr_array_index(components, i);
         g_autofree char *version_dir = NULL;
 
-        if (!mfd_manager_mark_selects(component, version))
+        if (!mfd_manager_mark_selects(component, version, full))
             continue;
         version_dir = mf_store_get_component_dir(manager->store, component);
         if (!mfd_store_writer_set_mode(manager->writer, version_dir, mode, error))
@@ -1435,7 +1508,7 @@ mfd_manager_mark(MfdManager *manager,
     for (guint i = 0; i < components->len; i++) {
         MfComponent *component = g_ptr_array_index(components, i);
 
-        if (mfd_manager_mark_selects(component, version))
+        if (mfd_manager_mark_selects(component, version, full))
             g_ptr_array_add(marked, g_object_ref(component));
     }
 
