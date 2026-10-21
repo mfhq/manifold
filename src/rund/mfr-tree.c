@@ -62,6 +62,9 @@ static const char *const HOST_ETC_FILES[] = {
     "machine-id",
 };
 
+/* the mount options of procfs that restrict which processes are visible, and to which users */
+static const char *const PROC_VISIBILITY_OPTIONS[] = {"hidepid=", "gid=", "subset="};
+
 /**
  * MfrTree:
  * The mount trees applications are launched in.
@@ -209,6 +212,86 @@ mfr_mount_overlay(const char *target, const char *options, unsigned long flags, 
     if (mount("overlay", target, "overlay", flags, options) != 0)
         return glnx_throw_errno_prefix(error, "Unable to mount overlay at %s", target);
     return TRUE;
+}
+
+/**
+ * mfr_mountinfo_get_super_options:
+ * @line: a line of a mountinfo file
+ * @fs_type: the filesystem type the mount must have
+ * @mount_point: (nullable): the mount point the mount must have, with the escapes
+ *   that mountinfo uses, or %NULL to accept any mount point
+ *
+ * Get the superblock options of a mount from its line in a mountinfo file.
+ *
+ * Returns: (transfer full) (nullable): the superblock options, or %NULL if the
+ *   mount in @line has a different filesystem type or mount point
+ */
+static char *
+mfr_mountinfo_get_super_options(const char *line, const char *fs_type, const char *mount_point)
+{
+    /* the mount point is the fifth field. The fields after the " - " separator
+     * are the filesystem type, the mount source and the superblock options. */
+    const char *separator = strstr(line, " - ");
+    g_auto(GStrv) mount_fields = g_strsplit(line, " ", 6);
+    g_auto(GStrv) fs_fields = NULL;
+
+    if (separator == NULL || g_strv_length(mount_fields) < 6)
+        return NULL;
+    if (mount_point != NULL && !g_str_equal(mount_fields[4], mount_point))
+        return NULL;
+    fs_fields = g_strsplit(separator + strlen(" - "), " ", 3);
+    if (g_strv_length(fs_fields) < 3 || !g_str_equal(fs_fields[0], fs_type))
+        return NULL;
+    return g_strdup(fs_fields[2]);
+}
+
+/**
+ * mfr_read_host_proc_options:
+ *
+ * Read the mount options of the procfs of the host that restrict which
+ * processes are visible, and to which users.
+ *
+ * Returns: (transfer full) (nullable): the options, separated by commas, or
+ *   %NULL on error
+ */
+static char *
+mfr_read_host_proc_options(GError **error)
+{
+    g_autofree char *mountinfo = NULL;
+    g_autofree char *super_options = NULL;
+    g_auto(GStrv) lines = NULL;
+    g_auto(GStrv) all_options = NULL;
+    g_autoptr(GString) options = g_string_new(NULL);
+
+    if (!g_file_get_contents("/proc/self/mountinfo", &mountinfo, NULL, error))
+        return NULL;
+    lines = g_strsplit(mountinfo, "\n", -1);
+    /* if /proc is mounted multiple times, the last mount is the visible one */
+    for (size_t i = 0; lines[i] != NULL; i++) {
+        char *line_options = mfr_mountinfo_get_super_options(lines[i], "proc", "/proc");
+
+        if (line_options != NULL) {
+            g_free(super_options);
+            super_options = line_options;
+        }
+    }
+    if (super_options == NULL) {
+        glnx_throw(error, "The host has no procfs at /proc");
+        return NULL;
+    }
+
+    all_options = g_strsplit(super_options, ",", -1);
+    for (size_t i = 0; all_options[i] != NULL; i++) {
+        for (size_t j = 0; j < G_N_ELEMENTS(PROC_VISIBILITY_OPTIONS); j++) {
+            if (!g_str_has_prefix(all_options[i], PROC_VISIBILITY_OPTIONS[j]))
+                continue;
+            if (options->len > 0)
+                g_string_append_c(options, ',');
+            g_string_append(options, all_options[i]);
+        }
+    }
+
+    return g_string_free_and_steal(g_steal_pointer(&options));
 }
 
 /**
@@ -512,8 +595,11 @@ out:
 /**
  * mfr_tree_mount_tree:
  *
- * Mount the tree as applications see it: the read-only overlay of the system
- * layers, with the application's image at /app and the host bound into it.
+ * Mount the tree in its final form, as the application will see it. The
+ * tree is a read-only overlay of the layer of the tree, the capture and the
+ * runtime images, with the application bound at /app and the directories of
+ * the host bound into it. The tree gets a new procfs with the visibility
+ * options of the procfs of the host, so it does not show more processes.
  */
 static gboolean
 mfr_tree_mount_tree(MfrTree *tree,
@@ -526,7 +612,10 @@ mfr_tree_mount_tree(MfrTree *tree,
     g_autofree char *proc_dir = g_build_filename(tree->mount_path, "proc", NULL);
     g_autofree char *tmp_dir = g_build_filename(tree->mount_path, "tmp", NULL);
     g_autofree char *app_target = g_build_filename(tree->mount_path, "app", NULL);
+    g_autofree char *proc_options = mfr_read_host_proc_options(error);
 
+    if (proc_options == NULL)
+        return FALSE;
     if (!mfr_mount_overlay(tree->mount_path, options, MS_RDONLY | MS_NOSUID | MS_NODEV, error))
         return FALSE;
     tree->mounted = TRUE;
@@ -539,7 +628,7 @@ mfr_tree_mount_tree(MfrTree *tree,
     if (!mfr_bind_host(tree->mount_path, error))
         return FALSE;
 
-    if (mount("proc", proc_dir, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) != 0)
+    if (mount("proc", proc_dir, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, proc_options) != 0)
         return glnx_throw_errno_prefix(error, "Unable to mount /proc at %s", proc_dir);
     /* a /tmp of the tree's own, but we share it across launches */
     if (mount("tmpfs", tmp_dir, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777") != 0)
@@ -727,17 +816,12 @@ mfr_collect_tree_layers(const char *mountinfo, GHashTable *layers)
     g_auto(GStrv) lines = g_strsplit(mountinfo, "\n", -1);
 
     for (size_t i = 0; lines[i] != NULL; i++) {
-        /* after the separator: the filesystem type, the source, and the superblock options */
-        const char *fields = strstr(lines[i], " - ");
-        g_auto(GStrv) parts = NULL;
+        g_autofree char *super_options = mfr_mountinfo_get_super_options(lines[i], "overlay", NULL);
         g_auto(GStrv) options = NULL;
 
-        if (fields == NULL)
+        if (super_options == NULL)
             continue;
-        parts = g_strsplit(fields + strlen(" - "), " ", 3);
-        if (g_strv_length(parts) < 3 || !g_str_equal(parts[0], "overlay"))
-            continue;
-        options = g_strsplit(parts[2], ",", -1);
+        options = g_strsplit(super_options, ",", -1);
         for (size_t j = 0; options[j] != NULL; j++) {
             const char *value = NULL;
             g_auto(GStrv) dirs = NULL;
