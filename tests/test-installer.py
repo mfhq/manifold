@@ -263,6 +263,21 @@ class InstallTest(InstallerTestCase):
         self.assertNotIn(self.app.verity_hash, self.stored_images())
         self.assertNotIn(self.kit.verity_hash, self.stored_images())
 
+    def test_superseding_install_reports_progress_once(self):
+        kit = rebuild(self.kit)
+        app = rebuild(self.app, base=kit)
+        self.install_core()
+        self.install_app()
+
+        # the progress replies can only be checked on a direct call
+        replies = self.install_file(self.bundle(kit, app))
+        progress = [r['progress'] for r in replies[:-1]]
+        self.assertIn('cleanup', [p['item']['action'] for p in progress if 'item' in p])
+        # the removal of superseded versions does not reset the progress
+        percents = [p['percent'] for p in progress]
+        self.assertEqual(percents, sorted(percents))
+        self.assertEqual(percents[-1], 100)
+
     def test_rebuild_keeps_manual_versions(self):
         core = rebuild(self.core)
         # install the core without its SDK, as the SDK would keep the old core as its exact base
@@ -363,10 +378,13 @@ class InstallTest(InstallerTestCase):
 
     def test_install_reports_progress(self):
         replies = self.install_file(self.bundle(self.core, self.sdk))
-        items = [r['progress']['item'] for r in replies[:-1]]
+        items = [r['progress']['item'] for r in replies[:-1] if 'item' in r['progress']]
         self.assertEqual([i['action'] for i in items], ['install'] * 4)
         self.assertEqual([i['percent'] for i in items], [0, 100, 0, 100])
-        self.assertEqual([r['progress']['percent'] for r in replies[:-1]], [0, 50, 50, 100])
+        # the metadata, and removing superseded versions, count as one more item
+        self.assertEqual(
+            [round(r['progress']['percent']) for r in replies[:-1]], [0, 33, 33, 67, 100]
+        )
         self.assertEqual(items[0]['bytesTotal'], len(self.core.data))
         result = replies[-1]['result']
         self.assertEqual(result['bytesAdded'], len(self.core.data) + len(self.sdk.data))
