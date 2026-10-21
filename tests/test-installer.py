@@ -60,7 +60,7 @@ class InstallerTestCase(unittest.TestCase):
     def setUpClass(cls):
         cls.work = tempfile.mkdtemp(prefix='manifold-test-')
         cls.bundle_count = 0
-        cls.daemon = Daemon(ARGS.daemon, SOCKET)
+        cls.daemon = Daemon(ARGS.daemon, SOCKET, os.path.join(cls.work, 'manifoldd.log'))
         cls.daemon.start()
 
         cls.core = Image(CORE_ID, 'core', '13.4')
@@ -76,6 +76,17 @@ class InstallerTestCase(unittest.TestCase):
     def tearDownClass(cls):
         cls.daemon.stop()
         shutil.rmtree(cls.work, ignore_errors=True)
+
+    def run(self, result=None):
+        """Run a test. If the test fails, print the messages that the daemon logged during the
+        test."""
+        result = result if result is not None else self.defaultTestResult()
+        start = self.daemon.log_size()
+        problems = len(result.failures) + len(result.errors)
+        super().run(result)
+        if len(result.failures) + len(result.errors) > problems:
+            sys.stderr.write(f'--- the daemon logged:\n{self.daemon.read_log(start)}---\n')
+        return result
 
     def setUp(self):
         """Empty the store."""
