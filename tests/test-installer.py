@@ -174,6 +174,22 @@ class InstallerTestCase(unittest.TestCase):
         """Return the verity root hashes of the images in the store."""
         return sorted(name[: -len('.raw')] for name in os.listdir(f'{STORE}/images/by-verity'))
 
+    def mount_tmpfs(self, path):
+        """Mount a tmpfs at path until the test ends. The daemon can neither delete nor
+        rename a mount point."""
+        os.makedirs(path, exist_ok=True)
+        subprocess.run(['mount', '-t', 'tmpfs', 'tmpfs', path], check=True)
+        self.addCleanup(self.unmount_store)
+
+    def unmount_store(self):
+        """Unmount everything below the store. A mount may be at a different path by now,
+        if the daemon renamed one of its parent directories."""
+        with open('/proc/self/mountinfo', encoding='utf-8') as f:
+            mount_points = [line.split()[4] for line in f]
+        for path in reversed(mount_points):
+            if path.startswith(STORE + '/'):
+                subprocess.run(['umount', '-l', path], check=True)
+
 
 class InstallTest(InstallerTestCase):
     """Tests for installing bundles: which bundles are accepted or refused, and which
@@ -439,6 +455,28 @@ class RemovalTest(InstallerTestCase):
         self.assertEqual(
             self.installed(), [(CORE_ID, '13.4', 'manual'), (CORE_ID + '.sdk', '13.4', 'manual')]
         )
+
+    def test_removed_version_is_gone_even_if_not_deleted(self):
+        self.install_core()
+        self.install_app()
+        app_dir = f'{STORE}/apps/{APP_ID}'
+        self.mount_tmpfs(f'{app_dir}/0.1.0-{self.app.revision}/in-the-way')
+
+        self.manifold('remove', APP_ID)
+        self.assertEqual(self.version_dirs('apps', APP_ID), [])
+        self.assertFalse(os.path.lexists(f'{app_dir}/current'))
+        self.unmount_store()
+        self.manifold('cleanup')
+        self.assertEqual(os.listdir(app_dir), [])
+
+    def test_version_that_can_not_be_removed_stays_current(self):
+        self.install_core()
+        self.install_app()
+        app_dir = f'{STORE}/apps/{APP_ID}'
+        self.mount_tmpfs(f'{app_dir}/0.1.0-{self.app.revision}')
+
+        self.manifold('remove', APP_ID, expect=1)
+        self.assertEqual(os.readlink(f'{app_dir}/current'), f'0.1.0-{self.app.revision}')
 
     def test_removal_reports_components(self):
         self.install_core()
