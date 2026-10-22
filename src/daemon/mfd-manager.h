@@ -14,13 +14,15 @@ G_BEGIN_DECLS
 
 /**
  * MfdErrorDetail:
- * @component_id: the component the error is about
- * @version: the version of that component, for %MF_ERROR_ALREADY_INSTALLED
+ * @component_id: the component that the error is about
+ * @version: the version of @component_id, for %MF_ERROR_ALREADY_INSTALLED
  * @base_id: the missing base, for %MF_ERROR_MISSING_BASE
- * @base_version: its version, for %MF_ERROR_MISSING_BASE
- * @identity: its identity, for %MF_ERROR_MISSING_BASE
+ * @base_version: the version of the missing base, for %MF_ERROR_MISSING_BASE
+ * @identity: the identity that the missing base must provide, for %MF_ERROR_MISSING_BASE
  * @used_by: a component that needs @component_id, for %MF_ERROR_COMPONENT_IN_USE
- * @architecture: what @component_id was built for, for %MF_ERROR_WRONG_ARCHITECTURE
+ * @architecture: the architecture that @component_id was built for, for %MF_ERROR_WRONG_ARCHITECTURE
+ * @kind: the kind of the installed component with the ID @component_id, for %MF_ERROR_ID_CONFLICT
+ * @sdk: whether the installed component is an SDK, for %MF_ERROR_ID_CONFLICT
  *
  * Details about the failure of an operation, beyond the #GError.
  */
@@ -32,6 +34,8 @@ typedef struct {
     char *identity;
     char *used_by;
     char *architecture;
+    MfComponentKind kind;
+    gboolean sdk;
 } MfdErrorDetail;
 
 void mfd_error_detail_clear(MfdErrorDetail *detail);
