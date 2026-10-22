@@ -111,6 +111,57 @@ mf_component_kind_is_always_auto(MfComponentKind kind, gboolean sdk)
 }
 
 /**
+ * mf_component_kind_can_build_on:
+ * @kind: the kind of a component
+ * @sdk: whether the component is an SDK
+ * @base_kind: the kind of the base
+ * @base_sdk: whether the base is an SDK
+ *
+ * Check whether a component of one kind can build on a component of another
+ * kind. Components stack up in layers: a core has no base, a platform
+ * builds on a core, a kit on a platform or a core, an application on a kit, a
+ * platform or a core, and a plugin on an application.
+ *
+ * The base can also be an SDK, for example if a development tool runs on the
+ * SDK of its kit. All layers below an SDK then have to be part of the SDK
+ * stack, which is checked by the builder.
+ *
+ * The SDK of a core, a platform or a kit extends that component. The SDK of
+ * an application or a plugin can also build on a lower layer, e.g. the SDK
+ * of its kit.
+ *
+ * Returns: %TRUE if a component of @kind can build on a component of @base_kind
+ */
+gboolean
+mf_component_kind_can_build_on(MfComponentKind kind,
+                               gboolean sdk,
+                               MfComponentKind base_kind,
+                               gboolean base_sdk)
+{
+    if (kind == MF_COMPONENT_KIND_UNKNOWN || base_kind == MF_COMPONENT_KIND_UNKNOWN)
+        return FALSE;
+    /* an SDK can extend the component of its own layer, which is not an SDK itself */
+    if (base_kind == kind)
+        return sdk && !base_sdk;
+
+    /* all other components build on a lower layer, which may be an SDK */
+    switch (kind) {
+    case MF_COMPONENT_KIND_PLATFORM:
+        return !sdk && base_kind == MF_COMPONENT_KIND_CORE;
+    case MF_COMPONENT_KIND_KIT:
+        return !sdk && (base_kind == MF_COMPONENT_KIND_CORE || base_kind == MF_COMPONENT_KIND_PLATFORM);
+    case MF_COMPONENT_KIND_APP:
+        return base_kind == MF_COMPONENT_KIND_CORE || base_kind == MF_COMPONENT_KIND_PLATFORM ||
+               base_kind == MF_COMPONENT_KIND_KIT;
+    case MF_COMPONENT_KIND_PLUGIN:
+        return base_kind == MF_COMPONENT_KIND_APP;
+    default:
+        /* a core has no base */
+        return FALSE;
+    }
+}
+
+/**
  * mf_component_kind_from_string:
  * @kind_str: (nullable): the name of a kind
  *
