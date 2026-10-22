@@ -460,16 +460,33 @@ class InstallTest(InstallerTestCase):
         )
         self.assertNotIn(sdk.verity_hash, self.stored_images())
 
-    def test_corrupt_bundle_leaves_nothing(self):
+    def test_failed_component_keeps_the_ones_installed_before(self):
+        # the app comes first in the bundle, but is installed after the kit it builds on
         self.install_core()
         self.assertIn(
             'could not be verified',
             self.install(self.kit, self.app, corrupt_image=self.app, expect=1),
         )
+
+        self.assertIn((self.kit.component, self.kit.version, 'auto'), self.installed())
+        self.assertIn(self.kit.verity_hash, self.stored_images())
+        self.assertNotIn(APP_ID, [component_id for component_id, _, _ in self.installed()])
         self.assertNotIn(self.app.verity_hash, self.stored_images())
         for root, dirs, files in os.walk(STORE):
             for name in dirs + files:
                 self.assertFalse(name.startswith('.tmp-'), f'leftover {root}/{name}')
+
+    def test_component_that_can_not_be_recorded_leaves_no_image(self):
+        self.install_core()
+        # put a file at the path where the directory of the app has to be created
+        with open(f'{STORE}/apps/{APP_ID}', 'w', encoding='utf-8'):
+            pass
+
+        self.assertIn('Unable to create directory', self.install_app(expect=1))
+        self.assertNotIn(self.app.verity_hash, self.stored_images())
+        self.assertIn(self.kit.verity_hash, self.stored_images())
+        os.unlink(f'{STORE}/apps/{APP_ID}')
+        self.assertIn((self.kit.component, self.kit.version, 'auto'), self.installed())
 
     def test_installed_version_stays_when_it_can_not_become_current(self):
         self.install_core()
@@ -484,7 +501,7 @@ class InstallTest(InstallerTestCase):
         items = [r['progress']['item'] for r in replies[:-1] if 'item' in r['progress']]
         self.assertEqual([i['action'] for i in items], ['install'] * 4)
         self.assertEqual([i['percent'] for i in items], [0, 100, 0, 100])
-        # the metadata, and removing superseded versions, count as one more item
+        # removing superseded versions counts as one more item
         self.assertEqual(
             [round(r['progress']['percent']) for r in replies[:-1]], [0, 33, 33, 67, 100]
         )
