@@ -417,10 +417,48 @@ class InstallTest(InstallerTestCase):
         self.install_core()
         self.install(self.kit)
         self.assertIn(
-            'the base of a platform must be a core, not the kit',
+            f'platform {platform.component} can not build on kit {self.kit.component}',
             self.install(platform, expect=1),
         )
         self.assertNotIn(platform.verity_hash, self.stored_images())
+
+    def test_kit_can_not_build_on_a_kit(self):
+        kit = Image(CORE_ID + '.0123456789abcdef', 'kit', '20260301T1200', base=self.kit)
+        self.install_core()
+        self.install(self.kit)
+        self.assertIn(
+            f'kit {kit.component} can not build on kit {self.kit.component}',
+            self.install(kit, expect=1),
+        )
+        self.assertNotIn(kit.verity_hash, self.stored_images())
+
+    def test_app_can_build_on_an_sdk(self):
+        # this is like a development tool that runs on the SDK stack
+        app = Image('com.example.OnSdk', 'app', '1.0', base=self.sdk)
+        self.install_core()
+        self.assertIn(
+            f'app      {app.component} ',
+            self.install(app),
+        )
+        self.assertEqual(
+            os.readlink(f'{STORE}/apps/{app.component}/1.0-{app.revision}/base'),
+            f'../../../runtimes/{self.sdk.component}/current',
+        )
+
+    def test_app_sdk_can_build_on_the_kit_sdk(self):
+        app_sdk = Image(APP_ID + '.sdk', 'app', '0.1.0', sdk=True, base=self.kit_sdk)
+        self.install_core()
+        self.install(self.kit, self.kit_sdk, self.app, app_sdk)
+        self.assertIn((app_sdk.component, app_sdk.version, 'manual'), self.installed())
+
+    def test_runtime_sdk_extends_its_own_layer(self):
+        sdk = Image(self.kit.component + '.sdk', 'kit', self.kit.version, sdk=True, base=self.core)
+        self.install_core()
+        self.assertIn(
+            f'kit SDK {sdk.component} can not build on core {CORE_ID}',
+            self.install(sdk, expect=1),
+        )
+        self.assertNotIn(sdk.verity_hash, self.stored_images())
 
     def test_corrupt_bundle_leaves_nothing(self):
         self.install_core()
