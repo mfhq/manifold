@@ -56,7 +56,8 @@
  * of the library and manifest directories are compared.
  */
 
-/* where the rewritten loader manifests go in a tree, kept apart from the image's own */
+/* directory in a tree that contains the captured vendor drivers and the rewritten loader
+ * manifests. It is separate from the driver and manifest directories of the images. */
 constexpr char GRAPHICS_OVERRIDES[] = "/usr/lib/manifold/graphics";
 
 constexpr char OVERRIDES_NAME[] = "overrides";
@@ -506,10 +507,12 @@ typedef struct {
     const char *core_mount;
     const char *tuple;
     char *overrides_dir;
-    char *libdir;       /* overrides_dir/usr/lib/<tuple> */
-    char *tree_libdir;  /* /usr/lib/<tuple> */
-    GHashTable *env;    /* variable -> GPtrArray of values */
-    GHashTable *placed; /* host path of a driver -> path in the tree */
+    char *libdir;           /* overrides_dir/usr/lib/<tuple> */
+    char *tree_libdir;      /* /usr/lib/<tuple> */
+    char *drivers_dir;      /* overrides_dir/GRAPHICS_OVERRIDES/<tuple> */
+    char *tree_drivers_dir; /* GRAPHICS_OVERRIDES/<tuple> */
+    GHashTable *env;        /* variable -> GPtrArray of values */
+    GHashTable *placed;     /* host path of a driver -> path in the tree */
     /* the drivers of the host, one list for each kind */
     MfrDriverList drivers[G_N_ELEMENTS(DRIVER_SUBDIRS)];
     /* the host directories that we searched for drivers */
@@ -813,22 +816,24 @@ mfr_capture_job_register_patterns(MfrCaptureJob *job, GPtrArray *argv)
 /**
  * mfr_capture_job_capture_drivers:
  *
- * Capture the dlopen()ed vendor drivers of the host (DRI, VA-API, GBM and
- * VDPAU) into subdirectories of the libdir named as on the host. Their loaders
- * do not look up SONAMEs, but scan one directory each, which the variables of
- * DRIVER_SUBDIRS point them at, so the drivers cannot share the libdir with everything else.
+ * Capture the vendor drivers of the host that are loaded with dlopen() (DRI,
+ * VA-API, GBM and VDPAU) into subdirectories of GRAPHICS_OVERRIDES.
  *
- * The capture tool takes a single destination, so this runs it once per
- * subdirectory. The dependencies of the drivers were captured into the libdir
- * by the main run already, so only the drivers themselves are taken here, and
- * always the host's, even if the core has newer ones.
+ * We use directories that are separate from the driver directories of the
+ * image, so drivers of the host and drivers of the image are never loaded
+ * into the same process.
+ *
+ * The capture tool only accepts a single destination directory, so we run
+ * it once for each subdirectory. The dependencies of the drivers were
+ * captured by the main run already. We always capture the drivers of the
+ * host, even if the core has newer ones.
  */
 static gboolean
 mfr_capture_job_capture_drivers(MfrCaptureJob *job, GError **error)
 {
     for (size_t i = 0; i < G_N_ELEMENTS(DRIVER_SUBDIRS); i++) {
         GPtrArray *drivers = job->drivers[i].paths;
-        g_autofree char *dest = g_build_filename(job->libdir, DRIVER_SUBDIRS[i].subdir, NULL);
+        g_autofree char *dest = g_build_filename(job->drivers_dir, DRIVER_SUBDIRS[i].subdir, NULL);
         g_autoptr(GPtrArray) argv = NULL;
 
         if (drivers->len == 0)
@@ -1620,8 +1625,8 @@ static void
 mfr_capture_job_add_driver_path_vars(MfrCaptureJob *job)
 {
     for (size_t i = 0; i < G_N_ELEMENTS(DRIVER_SUBDIRS); i++) {
-        g_autofree char *dir = g_build_filename(job->libdir, DRIVER_SUBDIRS[i].subdir, NULL);
-        g_autofree char *tree_dir = g_build_filename(job->tree_libdir, DRIVER_SUBDIRS[i].subdir, NULL);
+        g_autofree char *dir = g_build_filename(job->drivers_dir, DRIVER_SUBDIRS[i].subdir, NULL);
+        g_autofree char *tree_dir = g_build_filename(job->tree_drivers_dir, DRIVER_SUBDIRS[i].subdir, NULL);
 
         if (!g_file_test(dir, G_FILE_TEST_IS_DIR))
             continue;
@@ -1840,6 +1845,8 @@ mfr_capture_build(const char *dir, const char *core_mount, const char *tuple, GE
     job.overrides_dir = g_build_filename(dir, OVERRIDES_NAME, NULL);
     job.libdir = g_build_filename(job.overrides_dir, "usr/lib", tuple, NULL);
     job.tree_libdir = g_build_filename("/usr/lib", tuple, NULL);
+    job.tree_drivers_dir = g_build_filename(GRAPHICS_OVERRIDES, tuple, NULL);
+    job.drivers_dir = g_build_filename(job.overrides_dir, job.tree_drivers_dir, NULL);
     job.env = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify) g_ptr_array_unref);
     job.placed = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
     job.host_dirs = g_ptr_array_new_with_free_func(g_free);
@@ -1880,6 +1887,8 @@ out:
     g_free(job.overrides_dir);
     g_free(job.libdir);
     g_free(job.tree_libdir);
+    g_free(job.drivers_dir);
+    g_free(job.tree_drivers_dir);
     g_hash_table_unref(job.env);
     g_hash_table_unref(job.placed);
     g_ptr_array_unref(job.host_dirs);
