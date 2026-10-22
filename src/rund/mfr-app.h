@@ -27,19 +27,29 @@ typedef enum {
 } MfrLayerKind;
 
 /**
+ * MfrImage:
+ *
+ * The data needed to mount the filesystem of an image with dm-verity.
+ */
+typedef struct {
+    char   *image_path;
+    char   *verity_hash;
+    guint64 data_offset; /* where the filesystem partition starts in the image */
+    guint64 hash_offset; /* where the verity partition starts in the image */
+} MfrImage;
+
+/**
  * MfrLayer:
  *
- * One image of a mount tree, and what is needed to mount it. A layer the
- * application does not have has no hash.
+ * One layer of a mount tree, with the component and the image of the layer.
+ * If the application has no component for a layer, the verity hash of the
+ * layer is %NULL.
  */
 typedef struct {
     MfrLayerKind kind;
     char        *component_id;
     char        *version;
-    char        *verity_hash;
-    char        *image_path;
-    guint64      data_offset; /* where the filesystem partition starts in the image */
-    guint64      hash_offset; /* where the verity partition starts in the image */
+    MfrImage     image;
 } MfrLayer;
 
 #define MFR_TYPE_APP (mfr_app_get_type())
@@ -48,17 +58,16 @@ G_DECLARE_FINAL_TYPE(MfrApp, mfr_app, MFR, APP, GObject)
 /**
  * MfrApp:
  *
- * An installed application, as its directory in the store describes it.
- * What it describes does not change once loaded, so its fields are read
- * directly.
+ * An installed application, with the images of all its layers, as read
+ * from the store. All of the fields here are read-only.
  */
 struct _MfrApp {
     GObject  parent_instance;
 
     char    *component_id;
     char    *version;
-    char    *command; /* the program to run, below /app/bin */
-    char    *tuple;   /* multiarch tuple of the application */
+    char    *command;    /* the program to run, below /app/bin */
+    char    *arch_tuple; /* multiarch tuple of the application */
     MfrLayer layers[MFR_LAYER_LAST];
 };
 

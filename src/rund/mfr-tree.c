@@ -67,18 +67,25 @@ static const char *const PROC_VISIBILITY_OPTIONS[] = {"hidepid=", "gid=", "subse
 
 /**
  * MfrTree:
- * The mount trees applications are launched in.
+ *
+ * A mount tree that an application is launched in.
  *
  * A tree is assembled at MF_RUN_MOUNT_DIR/trees/<key>/ in the mount
- * namespace of the daemon, and stays there until it is torn down. Launching
- * an application hands out a clone of it. The key names the images and
- * the capture a tree was made from, so a tree can be reused as long as these
- * are what the component still consists of.
+ * namespace of the daemon, and stays mounted there until it is torn down.
+ * Every launch of the application receives a clone of the tree. The key is
+ * a hash of the verity hashes of the images and of the capture ID, so a tree
+ * can be reused for as long as the application has the same layers and the
+ * capture is unchanged.
  *
- * Besides the mounts, a tree has a directory of its own below
- * MF_RUN_CACHE_DIR/trees/<key>/, holding the layer that is specific to the
- * tree: the ld.so.cache for the layers and the capture, the record of what
- * was assembled, and the directories the host is bound at.
+ * The images are mounted by the image mount cache #MfrImageMounts. The capture
+ * is taken from the table of captures, which #MfrComposer owns and passes to
+ * every new #MfrTree. The tree itself only mounts the overlay and the
+ * bind mounts of the host.
+ *
+ * Besides the mounts, a tree has a cache directory at
+ * MF_RUN_CACHE_DIR/trees/<key>/. It contains the overlay layer that is
+ * specific to the tree, with the ld.so.cache for the images and the capture,
+ * the environment record, and the mount points for the directories of the host.
  */
 struct _MfrTree {
     GObject parent_instance;
@@ -89,6 +96,9 @@ struct _MfrTree {
     char *executable; /* the program to run, absolute within the tree */
     MfrApp *app;
     MfrCapture *capture;
+    MfrImageMounts *img_mounts; /* the cache that mounts the images of the layers */
+    MfrImageMount
+        *mounts[MFR_LAYER_LAST]; /* the mounted images of the layers, NULL if the app has no such layer */
     char **environment;
     gboolean mounted;
 };
@@ -111,6 +121,7 @@ mfr_tree_finalize(GObject *object)
     g_free(tree->executable);
     g_clear_object(&tree->app);
     g_clear_object(&tree->capture);
+    g_clear_object(&tree->img_mounts);
     g_strfreev(tree->environment);
 
     G_OBJECT_CLASS(mfr_tree_parent_class)->finalize(object);
@@ -133,8 +144,8 @@ mfr_make_tree_key(const MfrApp *app, const MfrCapture *capture)
     g_autoptr(GChecksum) checksum = g_checksum_new(G_CHECKSUM_SHA256);
 
     for (MfrLayerKind kind = 0; kind < MFR_LAYER_LAST; kind++) {
-        if (app->layers[kind].verity_hash != NULL)
-            g_checksum_update(checksum, (const guchar *) app->layers[kind].verity_hash, -1);
+        if (app->layers[kind].image.verity_hash != NULL)
+            g_checksum_update(checksum, (const guchar *) app->layers[kind].image.verity_hash, -1);
         g_checksum_update(checksum, (const guchar *) ":", 1);
     }
     g_checksum_update(checksum, (const guchar *) mfr_capture_get_id(capture), -1);
@@ -652,9 +663,77 @@ mfr_tree_mount_tree(MfrTree *tree,
 }
 
 /**
+ * mfr_tree_release_images:
+ *
+ * Release the image mounts of the tree.
+ */
+static void
+mfr_tree_release_images(MfrTree *tree)
+{
+    for (MfrLayerKind kind = 0; kind < MFR_LAYER_LAST; kind++) {
+        mfr_image_mounts_release(tree->img_mounts, tree->mounts[kind]);
+        tree->mounts[kind] = NULL;
+    }
+}
+
+/**
+ * mfr_tree_acquire_images:
+ *
+ * Acquire the image mount of every layer of the application, and mount the
+ * images that are not mounted yet.
+ *
+ * Returns: %TRUE if every image is mounted
+ */
+static gboolean
+mfr_tree_acquire_images(MfrTree *tree, GError **error)
+{
+    for (MfrLayerKind kind = 0; kind < MFR_LAYER_LAST; kind++) {
+        const MfrLayer *layer = &tree->app->layers[kind];
+
+        if (layer->image.verity_hash == NULL)
+            continue;
+        tree->mounts[kind] = mfr_image_mounts_acquire(tree->img_mounts, &layer->image, error);
+        if (tree->mounts[kind] == NULL)
+            return FALSE;
+        g_info("Using %s %s at %s",
+               layer->component_id,
+               layer->version,
+               mfr_image_mount_get_path(tree->mounts[kind]));
+    }
+
+    return TRUE;
+}
+
+/**
+ * mfr_tree_ensure_capture:
+ * @captures: (element-type utf8 MfrCapture): table of captures, indexed by the verity hash of their core
+ *
+ * Look up the capture for the core of the application in the table, or
+ * create it, and make sure that the capture is up to date with the host.
+ * The image of the core must be mounted already.
+ */
+static gboolean
+mfr_tree_ensure_capture(MfrTree *tree, GHashTable *captures, GError **error)
+{
+    const char *core_hash = tree->app->layers[MFR_LAYER_CORE].image.verity_hash;
+    MfrCapture *capture = g_hash_table_lookup(captures, core_hash);
+
+    if (capture == NULL) {
+        capture = mfr_capture_new(core_hash, tree->app->arch_tuple);
+        g_hash_table_insert(captures, g_strdup(core_hash), capture);
+    }
+    if (!mfr_capture_ensure(capture, mfr_image_mount_get_path(tree->mounts[MFR_LAYER_CORE]), error))
+        return FALSE;
+
+    tree->capture = g_object_ref(capture);
+    return TRUE;
+}
+
+/**
  * mfr_tree_teardown:
  *
- * Take a tree down. Applications that were launched in it keep their clone.
+ * Unmount a tree and release its image mounts. Applications that were
+ * launched in the tree keep their clone of it.
  */
 void
 mfr_tree_teardown(MfrTree *tree)
@@ -666,6 +745,7 @@ mfr_tree_teardown(MfrTree *tree)
     }
     if (rmdir(tree->mount_path) != 0 && errno != ENOENT)
         g_warning("Unable to remove %s: %s", tree->mount_path, g_strerror(errno));
+    mfr_tree_release_images(tree);
 }
 
 /**
@@ -693,28 +773,28 @@ mfr_tree_has_program(MfrTree *tree, const char *path)
  * Assemble and mount a tree from its mounted images and its capture.
  */
 static gboolean
-mfr_tree_assemble_internal(MfrTree *tree, const char *const *image_paths, GError **error)
+mfr_tree_assemble_internal(MfrTree *tree, GError **error)
 {
     g_autofree char *layer_dir = g_build_filename(tree->cache_dir, LAYER_NAME, NULL);
     g_autofree char *work_dir = g_build_filename(tree->cache_dir, WORK_NAME, NULL);
     g_autofree char *lower = NULL;
-    g_autofree char *app_dir = g_build_filename(image_paths[MFR_LAYER_APP], "app", NULL);
+    g_autofree char *app_dir = g_build_filename(mfr_image_mount_get_path(tree->mounts[MFR_LAYER_APP]),
+                                                "app",
+                                                NULL);
     g_autoptr(GPtrArray) lowers = g_ptr_array_new();
 
-    /* overlayfs wants the highest layer first: the overrides, then the runtime of the
-     * application. The application itself is no layer, its /app is bound into the tree. */
+    /* overlayfs expects the topmost layer first, so we add the overrides of the capture,
+     * and then the runtime images from kit to core. The application image is not a layer
+     * of the overlay, its /app directory is bind-mounted into the tree instead. */
     g_ptr_array_add(lowers, (char *) mfr_capture_get_overrides_dir(tree->capture));
-    for (const MfrLayerKind *kind = (MfrLayerKind[]){MFR_LAYER_KIT, MFR_LAYER_PLATFORM, MFR_LAYER_CORE},
-                            *end = kind + 3;
-         kind < end;
-         kind++) {
-        if (image_paths[*kind] != NULL)
-            g_ptr_array_add(lowers, (char *) image_paths[*kind]);
+    for (int kind = MFR_LAYER_APP - 1; kind >= MFR_LAYER_CORE; kind--) {
+        if (tree->mounts[kind] != NULL)
+            g_ptr_array_add(lowers, (char *) mfr_image_mount_get_path(tree->mounts[kind]));
     }
     g_ptr_array_add(lowers, NULL);
 
     lower = g_strjoinv(":", (char **) lowers->pdata);
-    /* binding /app would follow a link outside of the image */
+    /* refuse a link, as binding it would follow the link to a path outside of the image */
     if (g_file_test(app_dir, G_FILE_TEST_IS_SYMLINK) || !g_file_test(app_dir, G_FILE_TEST_IS_DIR))
         return glnx_throw(error, "The application image has no /app directory");
 
@@ -743,29 +823,35 @@ mfr_tree_assemble_internal(MfrTree *tree, const char *const *image_paths, GError
 /**
  * mfr_tree_assemble:
  * @app: the application to assemble a tree for
- * @capture: the capture of the graphics stack for its core
- * @image_paths: where the image of each layer of @app is mounted, by kind
+ * @captures: (element-type utf8 MfrCapture): table of captures, indexed by the verity hash of their core
+ * @img_mounts: the cache of mounted images
  *
- * Mount a tree for an application.
+ * Assemble and mount a tree for an application. The images are mounted via
+ * @img_mounts, and the capture for the core is taken from @captures.
  *
- * Returns: (transfer full): the tree, or %NULL
+ * Returns: (transfer full): the tree, or %NULL on error
  */
 MfrTree *
-mfr_tree_assemble(MfrApp *app, MfrCapture *capture, const char *const *image_paths, GError **error)
+mfr_tree_assemble(MfrApp *app, GHashTable *captures, MfrImageMounts *img_mounts, GError **error)
 {
     g_autoptr(MfrTree) tree = g_object_new(MFR_TYPE_TREE, NULL);
 
-    tree->key = mfr_make_tree_key(app, capture);
+    tree->app = g_object_ref(app);
+    tree->img_mounts = g_object_ref(img_mounts);
+
+    /* a capture needs the mounted core, so we mount the images first */
+    if (!mfr_tree_acquire_images(tree, error) || !mfr_tree_ensure_capture(tree, captures, error)) {
+        mfr_tree_release_images(tree);
+        return NULL;
+    }
+
+    tree->key = mfr_make_tree_key(app, tree->capture);
     tree->mount_path = g_build_filename(MFR_TREES_MOUNT_DIR, tree->key, NULL);
     tree->cache_dir = g_build_filename(MFR_TREES_CACHE_DIR, tree->key, NULL);
-    tree->app = g_object_ref(app);
-    tree->capture = g_object_ref(capture);
     tree->environment = mfr_build_environment_vars(tree->capture);
 
     g_info("Assembling tree %s for %s %s", tree->key, app->component_id, app->version);
-    /* we keep the cache directory on failure, as an application launched before a
-     * restart may still use it, see mfr_tree_remove_unused() */
-    if (!mfr_tree_assemble_internal(tree, image_paths, error)) {
+    if (!mfr_tree_assemble_internal(tree, error)) {
         mfr_tree_teardown(tree);
         return NULL;
     }
@@ -776,15 +862,16 @@ mfr_tree_assemble(MfrApp *app, MfrCapture *capture, const char *const *image_pat
 /**
  * mfr_tree_matches:
  *
- * Whether a tree is made of the images an application consists of now, and
- * of the given capture.
+ * Check whether a tree can be reused for an application. The tree has to be
+ * assembled from the images that the application has now, and its capture
+ * has to be up to date with the host.
  */
 gboolean
-mfr_tree_matches(const MfrTree *tree, const MfrApp *app, const MfrCapture *capture)
+mfr_tree_matches(const MfrTree *tree, const MfrApp *app)
 {
-    g_autofree char *key = mfr_make_tree_key(app, capture);
+    g_autofree char *key = mfr_make_tree_key(app, tree->capture);
 
-    return g_str_equal(tree->key, key);
+    return g_str_equal(tree->key, key) && mfr_capture_is_fresh(tree->capture);
 }
 
 /**
@@ -946,7 +1033,7 @@ mfr_tree_remove_unused(void)
  *
  * Returns: (transfer none): the application that the tree was assembled for
  */
-const MfrApp *
+MfrApp *
 mfr_tree_get_app(const MfrTree *tree)
 {
     return tree->app;
