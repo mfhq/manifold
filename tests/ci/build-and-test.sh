@@ -32,8 +32,8 @@ if [ -d /opt/rh/gcc-toolset-15/root/usr/bin ]; then
     export PATH="/opt/rh/gcc-toolset-15/root/usr/bin:$PATH"
 fi
 
-# a new one, the source tree may have a build directory of its own
-builddir="ci-build"
+# use a separate build directory, as the source tree may already contain one
+builddir="build.ci"
 read -ra meson_args <<< "${CI_MESON_ARGS:-}"
 read -ra test_args <<< "${CI_TEST_ARGS:-}"
 
