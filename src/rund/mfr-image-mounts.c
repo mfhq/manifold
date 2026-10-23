@@ -364,6 +364,31 @@ mfr_image_mount_get_path(const MfrImageMount *img_mount)
 }
 
 /**
+ * mfr_image_mounts_remove_stale_devices:
+ *
+ * Remove the verity devices that a previous run of the daemon left behind.
+ * This function has to be called when the daemon starts, before it sets up
+ * any device of its own. If a running application still uses a device, the
+ * device is removed once the application exits, unless we reuse it first.
+ */
+void
+mfr_image_mounts_remove_stale_devices(void)
+{
+    g_autoptr(GDir) entries = g_dir_open(MAPPER_DIR, 0, NULL);
+    const char *name;
+
+    while (entries != NULL && (name = g_dir_read_name(entries)) != NULL) {
+        g_autoptr(GError) error = NULL;
+
+        if (!g_str_has_prefix(name, DEVICE_PREFIX))
+            continue;
+        g_info("Removing device %s once nothing uses it", name);
+        if (!mfr_verity_deactivate(name, &error))
+            g_warning("%s", error->message);
+    }
+}
+
+/**
  * mfr_image_mounts_init:
  */
 static void
