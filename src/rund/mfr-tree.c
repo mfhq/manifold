@@ -32,18 +32,19 @@ static const struct {
     const char *path;
     gboolean read_only;
 } HOST_BINDS[] = {
-    {"/dev",           FALSE},
-    {"/sys",           TRUE },
-    {"/home",          FALSE},
-    {"/srv",           FALSE},
-    {"/mnt",           FALSE},
-    {"/run/user",      FALSE},
-    {"/run/dbus",      FALSE},
-    {"/run/udev",      TRUE },
-    {"/run/systemd",   TRUE },
-    /* the tree has its own /tmp, and only needs the X11 sockets of the host there */
-    {"/tmp/.X11-unix", FALSE},
+    {"/dev",         FALSE},
+    {"/sys",         TRUE },
+    {"/home",        FALSE},
+    {"/srv",         FALSE},
+    {"/mnt",         FALSE},
+    {"/run/user",    FALSE},
+    {"/run/dbus",    FALSE},
+    {"/run/udev",    TRUE },
+    {"/run/systemd", TRUE },
 };
+
+/* the tree has its own /tmp, and only needs the X11 sockets of the host there */
+static const char *const HOST_TMP_BINDS[] = {"/tmp/.X11-unix"};
 
 /* host paths bind-mounted below /run/host, besides the root filesystem */
 static const char *const HOST_ROOT_BINDS[] = {"/usr", "/etc"};
@@ -365,18 +366,34 @@ mfr_write_environment_record(MfrTree *tree, const char *path, GError **error)
 }
 
 /**
+ * mfr_path_is_at_or_below:
+ *
+ * Returns: %TRUE if @path is @dir or a path below @dir
+ */
+static gboolean
+mfr_path_is_at_or_below(const char *path, const char *dir)
+{
+    size_t length = strlen(dir);
+
+    return strncmp(path, dir, length) == 0 && (path[length] == '\0' || path[length] == '/');
+}
+
+/**
  * mfr_host_path_is_bound:
  *
- * Check whether a path of the host is at the same path in every tree, as it
- * is one of HOST_BINDS or below one of them.
+ * Check whether a path of the host is bind-mounted at the same path in every
+ * tree. This is the case for the paths in HOST_BINDS and HOST_TMP_BINDS, and
+ * for all paths below them.
  */
 static gboolean
 mfr_host_path_is_bound(const char *path)
 {
     for (size_t i = 0; i < G_N_ELEMENTS(HOST_BINDS); i++) {
-        size_t length = strlen(HOST_BINDS[i].path);
-
-        if (strncmp(path, HOST_BINDS[i].path, length) == 0 && (path[length] == '\0' || path[length] == '/'))
+        if (mfr_path_is_at_or_below(path, HOST_BINDS[i].path))
+            return TRUE;
+    }
+    for (size_t i = 0; i < G_N_ELEMENTS(HOST_TMP_BINDS); i++) {
+        if (mfr_path_is_at_or_below(path, HOST_TMP_BINDS[i]))
             return TRUE;
     }
 
@@ -514,6 +531,7 @@ mfr_tree_prepare_layer(MfrTree *tree, const char *layer_dir, GError **error)
     g_autofree char *host_dir = g_build_filename(layer_dir, MFR_HOST_DIR, NULL);
     g_autofree char *app_dir = g_build_filename(layer_dir, "app", NULL);
     g_autofree char *proc_dir = g_build_filename(layer_dir, "proc", NULL);
+    g_autofree char *tmp_dir = g_build_filename(layer_dir, "tmp", NULL);
 
     /* we create every mount point of the tree as a directory in this layer. A mount
      * point in an image could be a link, which the kernel would follow to a path
@@ -521,7 +539,8 @@ mfr_tree_prepare_layer(MfrTree *tree, const char *layer_dir, GError **error)
     if (!glnx_shutil_mkdir_p_at(AT_FDCWD, record_dir, 0755, NULL, error) ||
         !glnx_shutil_mkdir_p_at(AT_FDCWD, host_dir, 0755, NULL, error) ||
         !glnx_shutil_mkdir_p_at(AT_FDCWD, app_dir, 0755, NULL, error) ||
-        !glnx_shutil_mkdir_p_at(AT_FDCWD, proc_dir, 0755, NULL, error))
+        !glnx_shutil_mkdir_p_at(AT_FDCWD, proc_dir, 0755, NULL, error) ||
+        !glnx_shutil_mkdir_p_at(AT_FDCWD, tmp_dir, 0755, NULL, error))
         return FALSE;
 
     /* create the mount points for the host. overlayfs merges each of them with a directory of the
@@ -529,9 +548,6 @@ mfr_tree_prepare_layer(MfrTree *tree, const char *layer_dir, GError **error)
     for (size_t i = 0; i < G_N_ELEMENTS(HOST_BINDS); i++) {
         g_autofree char *dir = g_build_filename(layer_dir, HOST_BINDS[i].path, NULL);
 
-        /* below /tmp, the mount point is made on the tree's tmpfs */
-        if (g_str_has_prefix(HOST_BINDS[i].path, "/tmp/"))
-            dir[strlen(layer_dir) + strlen("/tmp")] = '\0';
         if (!glnx_shutil_mkdir_p_at(AT_FDCWD, dir, 0755, NULL, error))
             return FALSE;
     }
@@ -641,6 +657,16 @@ mfr_tree_mount_tree(MfrTree *tree,
     /* a /tmp of the tree's own, but we share it across launches */
     if (mount("tmpfs", tmp_dir, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777") != 0)
         return glnx_throw_errno_prefix(error, "Unable to mount tmpfs at %s", tmp_dir);
+    /* the mount points below /tmp are made on the tmpfs */
+    for (size_t i = 0; i < G_N_ELEMENTS(HOST_TMP_BINDS); i++) {
+        g_autofree char *target = g_build_filename(tree->mount_path, HOST_TMP_BINDS[i], NULL);
+
+        if (!g_file_test(HOST_TMP_BINDS[i], G_FILE_TEST_IS_DIR))
+            continue;
+        if (!glnx_shutil_mkdir_p_at(AT_FDCWD, target, 01777, NULL, error) ||
+            !mfr_bind_mount(HOST_TMP_BINDS[i], target, FALSE, error))
+            return FALSE;
+    }
 
     /* bind-mount directories of the host at the same path in the tree */
     for (size_t i = 0; i < G_N_ELEMENTS(HOST_BINDS); i++) {
@@ -648,10 +674,6 @@ mfr_tree_mount_tree(MfrTree *tree,
 
         if (!g_file_test(HOST_BINDS[i].path, G_FILE_TEST_IS_DIR))
             continue;
-        /* a mount point below /tmp is made on the tree's tmpfs */
-        if (g_str_has_prefix(HOST_BINDS[i].path, "/tmp/") &&
-            !glnx_shutil_mkdir_p_at(AT_FDCWD, target, 01777, NULL, error))
-            return FALSE;
         if (!mfr_bind_mount(HOST_BINDS[i].path, target, HOST_BINDS[i].read_only, error))
             return FALSE;
     }
