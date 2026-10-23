@@ -292,10 +292,10 @@ mfd_install_plan_compare_layer(gconstpointer a, gconstpointer b)
 }
 
 /**
- * mfd_set_already_installed_error:
+ * mfd_set_error_already_installed:
  */
 static void
-mfd_set_already_installed_error(GError **error,
+mfd_set_error_already_installed(GError **error,
                                 MfdErrorDetail *ret_detail,
                                 const char *component_id,
                                 const char *version)
@@ -314,11 +314,11 @@ mfd_set_already_installed_error(GError **error,
 }
 
 /**
- * mfd_set_not_installed_error:
+ * mfd_set_error_not_installed:
  * @version: (nullable): the version, or %NULL for any version of the component
  */
 static void
-mfd_set_not_installed_error(GError **error,
+mfd_set_error_not_installed(GError **error,
                             MfdErrorDetail *ret_detail,
                             const char *component_id,
                             const char *version)
@@ -338,11 +338,11 @@ mfd_set_not_installed_error(GError **error,
 }
 
 /**
- * mfd_set_in_use_error:
- * @used_by: the ID of a kept component that builds on it
+ * mfd_set_error_in_use:
+ * @used_by: the ID of a component that is kept, and that builds on @component_id
  */
 static void
-mfd_set_in_use_error(GError **error,
+mfd_set_error_in_use(GError **error,
                      MfdErrorDetail *ret_detail,
                      const char *component_id,
                      const char *used_by)
@@ -361,12 +361,12 @@ mfd_set_in_use_error(GError **error,
 }
 
 /**
- * mfd_set_missing_base_error:
+ * mfd_set_error_missing_base:
  * @manifest: the manifest of the component whose base is missing
  * @base_version: the version of the base, with its revision if only that exact revision will do
  */
 static void
-mfd_set_missing_base_error(GError **error,
+mfd_set_error_missing_base(GError **error,
                            MfdErrorDetail *ret_detail,
                            MfManifest *manifest,
                            const char *base_version)
@@ -393,11 +393,11 @@ mfd_set_missing_base_error(GError **error,
 }
 
 /**
- * mfd_set_id_conflict_error:
- * @installed: the installed version that has the ID, but is of another kind
+ * mfd_set_error_id_conflict:
+ * @installed: the installed version that has the same ID, but is of a different kind
  */
 static void
-mfd_set_id_conflict_error(GError **error, MfdErrorDetail *ret_detail, MfComponent *installed)
+mfd_set_error_id_conflict(GError **error, MfdErrorDetail *ret_detail, MfComponent *installed)
 {
     const char *component_id = mf_component_get_id(installed);
     MfComponentKind kind = mf_component_get_kind(installed);
@@ -419,10 +419,10 @@ mfd_set_id_conflict_error(GError **error, MfdErrorDetail *ret_detail, MfComponen
 }
 
 /**
- * mfd_set_wrong_architecture_error:
+ * mfd_set_error_wrong_architecture:
  */
 static void
-mfd_set_wrong_architecture_error(GError **error,
+mfd_set_error_wrong_architecture(GError **error,
                                  MfdErrorDetail *ret_detail,
                                  const char *component_id,
                                  const char *architecture)
@@ -708,7 +708,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
     g_autoptr(MfComponent) existing = NULL;
 
     if (!g_str_equal(mf_manifest_get_architecture(manifest), mf_get_host_architecture())) {
-        mfd_set_wrong_architecture_error(error,
+        mfd_set_error_wrong_architecture(error,
                                          ret_detail,
                                          component_id,
                                          mf_manifest_get_architecture(manifest));
@@ -716,7 +716,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
     }
     other_kind = mfd_manager_find_other_kind(manager, manifest);
     if (other_kind != NULL) {
-        mfd_set_id_conflict_error(error, ret_detail, other_kind);
+        mfd_set_error_id_conflict(error, ret_detail, other_kind);
         return FALSE;
     }
 
@@ -733,7 +733,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
                       version,
                       mf_component_get_verity_hash(existing),
                       verity_hash);
-            mfd_set_already_installed_error(error, ret_detail, component_id, version);
+            mfd_set_error_already_installed(error, ret_detail, component_id, version);
             return FALSE;
         }
         if (dependency) {
@@ -744,7 +744,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
         /* only a runtime that came along as a dependency can be installed on purpose again */
         if (mf_component_kind_is_always_auto(kind, sdk) ||
             mf_component_get_install_mode(existing) != MF_INSTALL_MODE_AUTO) {
-            mfd_set_already_installed_error(error, ret_detail, component_id, version);
+            mfd_set_error_already_installed(error, ret_detail, component_id, version);
             return FALSE;
         }
         g_info("%s %s was a dependency, and is installed on purpose now", component_id, version);
@@ -780,7 +780,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
                     base_version,
                     mf_manifest_get_base_revision(manifest));
 
-                mfd_set_missing_base_error(error, ret_detail, manifest, base_version_name);
+                mfd_set_error_missing_base(error, ret_detail, manifest, base_version_name);
                 return FALSE;
             }
         } else if (!mfd_manager_resolve_dependency(manager,
@@ -789,7 +789,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
                                                    iplan,
                                                    &base_kind,
                                                    &base_sdk)) {
-            mfd_set_missing_base_error(error, ret_detail, manifest, base_version);
+            mfd_set_error_missing_base(error, ret_detail, manifest, base_version);
             return FALSE;
         }
 
@@ -1155,7 +1155,7 @@ mfd_manager_plan_removal(MfdManager *manager,
                 g_hash_table_add(requested, candidate);
         }
         if (g_hash_table_size(requested) == 0) {
-            mfd_set_not_installed_error(error, ret_detail, component_id, version);
+            mfd_set_error_not_installed(error, ret_detail, component_id, version);
             return NULL;
         }
     }
@@ -1172,7 +1172,7 @@ mfd_manager_plan_removal(MfdManager *manager,
             g_hash_table_contains(rmplan->cpts_set, candidate))
             continue;
         used = mfd_manager_find_used(manager, installed, rmplan->cpts_set);
-        mfd_set_in_use_error(error,
+        mfd_set_error_in_use(error,
                              ret_detail,
                              component_id,
                              mf_component_get_id(g_hash_table_lookup(used, candidate)));
@@ -1370,7 +1370,7 @@ mfd_manager_execute_install_plan(MfdManager *manager,
 
         /* the same version was installed in the meantime, and it uses the image, so we keep it */
         if (g_error_matches(local_error, MF_ERROR, MF_ERROR_ALREADY_INSTALLED)) {
-            mfd_set_already_installed_error(error, ret_detail, component_id, version);
+            mfd_set_error_already_installed(error, ret_detail, component_id, version);
             return FALSE;
         }
         if (added && !mfd_store_writer_remove_image(manager->writer, verity_hash, &remove_error))
@@ -1666,7 +1666,7 @@ mfd_manager_mark(MfdManager *manager,
         n_marked++;
     }
     if (n_marked == 0) {
-        mfd_set_not_installed_error(error, ret_detail, component_id, version);
+        mfd_set_error_not_installed(error, ret_detail, component_id, version);
         return NULL;
     }
 

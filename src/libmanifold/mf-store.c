@@ -434,6 +434,21 @@ mf_read_version_dir_at(const char *root,
 }
 
 /**
+ * mf_set_error_not_installed:
+ * @version: (nullable): the version, or %NULL for any version of the component
+ *
+ * Set an %MF_ERROR_NOT_FOUND error for a component that is not installed.
+ */
+static void
+mf_set_error_not_installed(GError **error, const char *component_id, const char *version)
+{
+    if (version == NULL)
+        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s is not installed"), component_id);
+    else
+        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s %s is not installed"), component_id, version);
+}
+
+/**
  * mf_find_component_subdir_at:
  *
  * Returns: the subdirectory of the store that a component is installed in, or %NULL on error.
@@ -448,7 +463,7 @@ mf_find_component_subdir_at(const char *root, const char *component_id, GError *
             return COMPONENT_SUBDIRS[i];
     }
 
-    g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s is not installed"), component_id);
+    mf_set_error_not_installed(error, component_id, NULL);
     return NULL;
 }
 
@@ -508,7 +523,7 @@ mf_version_dir_name_at(const char *root,
     }
 
     if (newest == NULL)
-        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s %s is not installed"), component_id, version);
+        mf_set_error_not_installed(error, component_id, version);
     return g_steal_pointer(&newest);
 }
 
@@ -938,7 +953,7 @@ mf_store_get_component(MfStore *store, const char *component_id, const char *ver
     if (found != NULL)
         return g_object_ref(found);
     if (!installed)
-        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s is not installed"), component_id);
+        mf_set_error_not_installed(error, component_id, NULL);
     else if (version == NULL)
         g_set_error(error,
                     MF_ERROR,
@@ -946,7 +961,7 @@ mf_store_get_component(MfStore *store, const char *component_id, const char *ver
                     _("%s is installed, but has no current version"),
                     component_id);
     else
-        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s %s is not installed"), component_id, version);
+        mf_set_error_not_installed(error, component_id, version);
     return NULL;
 }
 
