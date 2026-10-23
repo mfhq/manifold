@@ -25,6 +25,7 @@ static const char FULL_BLOCK[] = "█";
 struct MfcProgressBar {
     gboolean is_tty;
     gboolean utf8;
+    MfItemProgress *item; /* the item that the bar shows the progress of */
     char *label;
     gint64 start_time;
     gint64 last_draw_time;
@@ -84,28 +85,34 @@ mfc_shorten_label(const char *label, int max_chars, gboolean utf8)
 }
 
 /**
- * mfc_progress_bar_get_label:
+ * mfc_progress_bar_is_for:
  *
- * Returns: (nullable): the label of the bar that was begun, or %NULL
+ * Check if the bar was started for @item. Two items are the same if they
+ * have the same action, component and version.
+ *
+ * Returns: %TRUE if the bar is active and shows the progress of @item
  */
-const char *
-mfc_progress_bar_get_label(MfcProgressBar *bar)
+gboolean
+mfc_progress_bar_is_for(MfcProgressBar *bar, const MfItemProgress *item)
 {
-    return bar->label;
+    return bar->item != NULL && mf_item_progress_get_action(bar->item) == mf_item_progress_get_action(item) &&
+           g_strcmp0(mf_item_progress_get_subject(bar->item), mf_item_progress_get_subject(item)) == 0 &&
+           g_strcmp0(mf_item_progress_get_version(bar->item), mf_item_progress_get_version(item)) == 0;
 }
 
 /**
  * mfc_progress_bar_start:
- * @label: what the bar is about, shown in front of it
+ * @item: the item that the bar shows the progress of
+ * @label: the text that is displayed in front of the bar
  *
- * Begin a bar. A bar that was begun before is finished first.
+ * Start a new bar. If a bar is still active, it is finished first.
  */
 void
-mfc_progress_bar_start(MfcProgressBar *bar, const char *label)
+mfc_progress_bar_start(MfcProgressBar *bar, const MfItemProgress *item, const char *label)
 {
     mfc_progress_bar_finish(bar);
 
-    g_free(bar->label);
+    bar->item = mf_item_progress_copy(item);
     bar->label = g_strdup(label);
     bar->start_time = g_get_monotonic_time();
     bar->last_draw_time = 0;
@@ -191,5 +198,6 @@ mfc_progress_bar_finish(MfcProgressBar *bar)
     if (bar->drawn)
         g_print("\n");
     bar->drawn = FALSE;
+    g_clear_pointer(&bar->item, mf_item_progress_free);
     g_clear_pointer(&bar->label, g_free);
 }

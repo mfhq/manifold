@@ -66,7 +66,7 @@ mf_action_from_string(const char *action_str)
  * mf_item_progress_new:
  * @action: the action that is performed on the item
  * @subject: the ID of the component that the action is performed on
- * @version: (nullable): the version of the component
+ * @version: (nullable): the version of the component, with its revision
  *
  * Creates the progress of an item that was not started yet.
  *
@@ -156,7 +156,7 @@ mf_item_progress_get_subject(const MfItemProgress *item)
  * mf_item_progress_get_version:
  * @item: an #MfItemProgress
  *
- * Returns: (nullable): the version of the component, if we have any
+ * Returns: (nullable): the full version of the component, or %NULL if it is not known
  */
 const char *
 mf_item_progress_get_version(const MfItemProgress *item)
