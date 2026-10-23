@@ -959,7 +959,7 @@ mfr_collect_tree_layers(const char *mountinfo, GHashTable *layers)
  *
  * Returns: (transfer full) (element-type utf8): the paths of the layers
  */
-static GHashTable *
+GHashTable *
 mfr_tree_collect_used_layers(void)
 {
     g_autoptr(GHashTable) layers = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
@@ -995,20 +995,20 @@ mfr_tree_collect_used_layers(void)
 
 /**
  * mfr_tree_collect_used_captures:
+ * @used_layers: (element-type utf8): the layers from mfr_tree_collect_used_layers()
  *
  * Get the set of captures of the trees that are still in use.
  *
  * Returns: (transfer full) (element-type utf8): the IDs of the captures
  */
 GHashTable *
-mfr_tree_collect_used_captures(void)
+mfr_tree_collect_used_captures(GHashTable *used_layers)
 {
-    g_autoptr(GHashTable) layers = mfr_tree_collect_used_layers();
     g_autoptr(GHashTable) captures = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     GHashTableIter iter;
     gpointer layer;
 
-    g_hash_table_iter_init(&iter, layers);
+    g_hash_table_iter_init(&iter, used_layers);
     while (g_hash_table_iter_next(&iter, &layer, NULL)) {
         g_autofree char *record_path = g_build_filename(layer, ENVIRONMENT_RECORD, NULL);
         g_autoptr(sd_json_variant) record = mf_json_parse_file(record_path, NULL);
@@ -1023,14 +1023,14 @@ mfr_tree_collect_used_captures(void)
 
 /**
  * mfr_tree_remove_unused:
+ * @used_layers: (element-type utf8): the layers from mfr_tree_collect_used_layers()
  *
  * Remove the cache directory of every tree that is not in use anymore. This
  * function has to be called when the daemon starts, before it assembles any tree.
  */
 void
-mfr_tree_remove_unused(void)
+mfr_tree_remove_unused(GHashTable *used_layers)
 {
-    g_autoptr(GHashTable) used = mfr_tree_collect_used_layers();
     g_autoptr(GDir) entries = g_dir_open(MFR_TREES_CACHE_DIR, 0, NULL);
     const char *name;
 
@@ -1039,7 +1039,7 @@ mfr_tree_remove_unused(void)
         g_autofree char *layer = g_build_filename(dir, LAYER_NAME, NULL);
         g_autoptr(GError) error = NULL;
 
-        if (g_hash_table_contains(used, layer))
+        if (g_hash_table_contains(used_layers, layer))
             continue;
         g_info("Removing tree %s: it is not in use", name);
         if (!glnx_shutil_rm_rf_at(AT_FDCWD, dir, NULL, &error))
