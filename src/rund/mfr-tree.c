@@ -15,7 +15,6 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
-#include <sys/utsname.h>
 #include <unistd.h>
 #include <libglnx.h>
 #include <systemd/sd-json.h>
@@ -336,7 +335,6 @@ mfr_write_environment_record(MfrTree *tree, const char *path, GError **error)
     g_autoptr(sd_json_variant) record = NULL;
     g_autoptr(sd_json_variant) layers = NULL;
     g_autoptr(sd_json_variant) environment = NULL;
-    struct utsname uts = {0};
 
     int r = mfr_app_append_layers_json(tree->app, &layers);
     if (r < 0)
@@ -352,7 +350,6 @@ mfr_write_environment_record(MfrTree *tree, const char *path, GError **error)
         if (r < 0)
             return glnx_throw(error, "Unable to build environment record: %s", g_strerror(-r));
     }
-    uname(&uts);
 
     r = sd_json_buildo(&record,
                        SD_JSON_BUILD_PAIR_STRING("componentId", tree->app->component_id),
