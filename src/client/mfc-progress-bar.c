@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include <glib/gi18n-lib.h>
 
 constexpr int BAR_LENGTH_MIN = 10;
 constexpr int BAR_LENGTH_MAX = 20;
@@ -144,7 +145,8 @@ mfc_progress_bar_update(MfcProgressBar *bar, double percent_done, guint64 bytes_
         g_autofree char *rate = g_format_size(
             (guint64) (bytes_done * G_USEC_PER_SEC / (guint64) elapsed_usec));
 
-        speed = g_strdup_printf("%s/s", rate);
+        /* TRANSLATORS: a transfer rate, %s is an amount of data like "2.3 MB" */
+        speed = g_strdup_printf(_("%s/s"), rate);
     }
 
     /* The line has to fit into the terminal, otherwise every redraw would start a new line.

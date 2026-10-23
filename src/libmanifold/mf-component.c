@@ -8,6 +8,7 @@
 #include "mf-component-private.h"
 
 #include <string.h>
+#include <glib/gi18n-lib.h>
 
 #include "mf-error.h"
 #include "mf-manifest.h"
@@ -461,7 +462,7 @@ mf_component_fetch_manifest(MfComponent *component, GError **error)
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_NOT_FOUND,
-                    "%s %s was not read from a store",
+                    _("%s %s was not read from a store"),
                     component->component_id,
                     component->version);
         return NULL;
@@ -578,7 +579,7 @@ mf_component_new_from_reply(sd_json_variant *variant, GError **error)
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_FAILED,
-                    "Reply of the Manifold service was not understood: %s",
+                    _("Reply of the Manifold service was not understood: %s"),
                     g_strerror(-r));
         return NULL;
     }
