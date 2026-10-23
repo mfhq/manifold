@@ -101,6 +101,9 @@ def make_tree():
     with open(f'{TREE}/app/bin/probe', 'w', encoding='utf-8') as f:
         f.write(PROBE)
     os.chmod(f'{TREE}/app/bin/probe', 0o755)
+    # a directory with the name of a program, the runner has to skip it when it searches for the
+    # program
+    os.makedirs(f'{TREE}/app/bin/sh')
 
 
 class FakeService(threading.Thread):
