@@ -202,6 +202,36 @@ mfd_json_dispatch_transaction_flags(const char *name,
 }
 
 /**
+ * mfd_error_is_about_request:
+ *
+ * Returns: %TRUE if @error was caused by the request, %FALSE if it is a
+ *   failure of the service
+ */
+static gboolean
+mfd_error_is_about_request(const GError *error)
+{
+    if (error->domain != MF_ERROR)
+        return FALSE;
+
+    switch (error->code) {
+    case MF_ERROR_NOT_FOUND:
+    case MF_ERROR_PERMISSION_DENIED:
+    case MF_ERROR_INVALID_BUNDLE:
+    case MF_ERROR_WRONG_ARCHITECTURE:
+    case MF_ERROR_VERIFICATION_FAILED:
+    case MF_ERROR_MISSING_BASE:
+    case MF_ERROR_ALREADY_INSTALLED:
+    case MF_ERROR_COMPONENT_IN_USE:
+    case MF_ERROR_INVALID_MANIFEST:
+    case MF_ERROR_REVOKED:
+    case MF_ERROR_ID_CONFLICT:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+/**
  * mfd_service_reply_error:
  * @detail: (nullable): the details that the manager returned about the error
  *
@@ -215,7 +245,11 @@ mfd_service_reply_error(sd_varlink *link, const GError *error, const MfdErrorDet
 {
     const char *error_id = MF_VARLINK_ERROR_FAILED;
 
-    g_warning("%s", error->message);
+    /* we only warn about failures of our own, not about requests we can not fulfill */
+    if (mfd_error_is_about_request(error))
+        g_message("%s", error->message);
+    else
+        g_warning("%s", error->message);
 
     if (error->domain == MF_ERROR && detail != NULL && detail->component_id != NULL) {
         switch (error->code) {
@@ -459,7 +493,7 @@ mfd_service_install_bundle(MfdService *service, MfdRequest *request)
     g_autoptr(MfResult) result = NULL;
     g_autoptr(GError) error = NULL;
 
-    g_info("User %u requested to install a bundle", (unsigned int) request->uid);
+    g_message("User %u requested to install a bundle", (unsigned int) request->uid);
 
     bundle = mf_bundle_new_from_fd(request->bundle_fd, &error);
     if (bundle == NULL) {
@@ -502,12 +536,12 @@ mfd_service_remove(MfdService *service, MfdRequest *request)
     g_autoptr(GError) error = NULL;
 
     if (request->component_id == NULL)
-        g_info("User %u requested to clean up", (unsigned int) request->uid);
+        g_message("User %u requested to clean up", (unsigned int) request->uid);
     else
-        g_info("User %u requested to remove %s %s",
-               (unsigned int) request->uid,
-               request->component_id,
-               request->version != NULL ? request->version : "");
+        g_message("User %u requested to remove %s %s",
+                  (unsigned int) request->uid,
+                  request->component_id,
+                  request->version != NULL ? request->version : "");
 
     result = mfd_manager_remove(service->manager,
                                 request->component_id,
@@ -538,11 +572,11 @@ mfd_service_mark(MfdService *service, MfdRequest *request)
     g_autoptr(GError) error = NULL;
     int r;
 
-    g_info("User %u requested to mark %s %s as %s",
-           (unsigned int) request->uid,
-           request->component_id,
-           request->version != NULL ? request->version : "",
-           mf_install_mode_to_string(request->mode));
+    g_message("User %u requested to mark %s %s as %s",
+              (unsigned int) request->uid,
+              request->component_id,
+              request->version != NULL ? request->version : "",
+              mf_install_mode_to_string(request->mode));
 
     marked = mfd_manager_mark(service->manager,
                               request->component_id,
@@ -644,10 +678,10 @@ mfd_service_refuse_request(MfdService *service, MfdRequest *request, const GErro
                                MF_VARLINK_ERROR_FAILED,
                                SD_JSON_BUILD_PAIR_STRING("message", error->message));
     } else {
-        g_info("Denied call of %s by user %u: not authorized for %s",
-               request->method,
-               (unsigned int) request->uid,
-               request->action_id);
+        g_message("Denied call of %s by user %u: not authorized for %s",
+                  request->method,
+                  (unsigned int) request->uid,
+                  request->action_id);
         r = sd_varlink_error(request->link, SD_VARLINK_ERROR_PERMISSION_DENIED, NULL);
     }
     mfd_service_drop_request(service, request);
@@ -672,7 +706,7 @@ mfd_service_on_polkit_reply(sd_bus_message *reply, void *userdata, sd_bus_error 
 
     r = mfd_policy_read_reply(reply, &error);
     if (r > 0) {
-        g_info("User %u is authorized for %s", (unsigned int) request->uid, request->action_id);
+        g_message("User %u is authorized for %s", (unsigned int) request->uid, request->action_id);
         mfd_service_queue_request(service, request);
         return 0;
     }
@@ -1048,9 +1082,9 @@ mfd_service_on_disconnect(sd_varlink_server *server, sd_varlink *link, void *use
 
     /* drop the request of the disconnected caller */
     if (request != NULL) {
-        g_info("User %u disconnected before their call of %s was done",
-               (unsigned int) request->uid,
-               request->method);
+        g_message("User %u disconnected before their call of %s was done",
+                  (unsigned int) request->uid,
+                  request->method);
         mfd_service_drop_request(service, request);
     }
 
