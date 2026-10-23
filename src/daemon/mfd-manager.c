@@ -138,7 +138,7 @@ mfd_progress_tracker_clear(MfdProgressTracker *tracker)
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC(MfdProgressTracker, mfd_progress_tracker_clear)
 
 /* the number of bytes of an image that we copy between two progress reports */
-constexpr guint64 MFD_PROGRESS_STEP = 4 * 1024 * 1024;
+constexpr guint64 PROGRESS_STEP = 4 * 1024 * 1024;
 
 /**
  * mfd_progress_report:
@@ -242,7 +242,7 @@ mfd_on_copy_progress(guint64 bytes_copied, gpointer user_data)
 
     mf_item_progress_set_bytes_done(tracker->item, bytes_copied);
     /* the last bytes are reported when the item ends */
-    if (bytes_copied - tracker->bytes_last_reported < MFD_PROGRESS_STEP ||
+    if (bytes_copied - tracker->bytes_last_reported < PROGRESS_STEP ||
         bytes_copied == mf_item_progress_get_bytes_total(tracker->item))
         return;
     mfd_progress_report(tracker);
