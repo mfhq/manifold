@@ -11,8 +11,10 @@
 
 #include "mf-error.h"
 #include "mf-manifest.h"
-#include "mf-store-private.h"
 #include "mf-utils-private.h"
+
+/* the longest an identifier may be, as it is a directory name */
+constexpr size_t MF_COMPONENT_ID_LENGTH_MAX = 255;
 
 /**
  * MfComponent:
@@ -444,23 +446,17 @@ mf_component_get_dir(MfComponent *component)
  * @component: an #MfComponent
  * @error: a #GError
  *
- * Get the manifest associated with this component, which describes it in
- * full. If the component does not have it yet, it is read from the
- * component's storage directory, and kept for the next call.
+ * Get the manifest of the component. Only a component that was read from a
+ * store has a manifest.
  *
- * Returns: (transfer full): the manifest, or %NULL on error.
+ * Returns: (transfer full): the manifest, or %NULL with %MF_ERROR_NOT_FOUND
  */
 MfManifest *
 mf_component_fetch_manifest(MfComponent *component, GError **error)
 {
-    g_autoptr(GError) local_error = NULL;
-    MfManifest *manifest;
-
     g_return_val_if_fail(MF_IS_COMPONENT(component), NULL);
 
-    if (component->manifest != NULL)
-        return g_object_ref(component->manifest);
-    if (component->dir == NULL) {
+    if (component->manifest == NULL) {
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_NOT_FOUND,
@@ -469,34 +465,15 @@ mf_component_fetch_manifest(MfComponent *component, GError **error)
                     component->version);
         return NULL;
     }
-    manifest = mf_store_read_manifest_at(component->dir,
-                                         component->component_id,
-                                         component->version,
-                                         &local_error);
-    if (g_error_matches(local_error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) {
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_NOT_FOUND,
-                    "%s %s is not installed",
-                    component->component_id,
-                    component->version);
-        return NULL;
-    }
-    if (manifest == NULL) {
-        g_propagate_error(error, g_steal_pointer(&local_error));
-        return NULL;
-    }
 
-    component->manifest = manifest;
-    return g_object_ref(manifest);
+    return g_object_ref(component->manifest);
 }
 
 /**
  * mf_component_set_manifest:
  * @manifest: the manifest the component was read from
  *
- * Keep the manifest with the component, so that mf_component_fetch_manifest()
- * does not read it again.
+ * Set the manifest that mf_component_fetch_manifest() returns.
  */
 void
 mf_component_set_manifest(MfComponent *component, MfManifest *manifest)
