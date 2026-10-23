@@ -1263,9 +1263,6 @@ mfr_capture_job_resolve_library_path(MfrCaptureJob *job,
 
     if (mfr_loader_manifest_libpath_get_host_path(library_path, plan->source, &path))
         return g_strdup(g_hash_table_lookup(job->placed, path));
-    if (!plan->kind->is_json)
-        /* shared between architectures: resolved through ld.so.cache */
-        return g_strdup(library_path);
     /* The main run has captured every library that a manifest references by SONAME,
      * if the host has the library for our architecture. If the libdir has no link for
      * the library, the manifest is for a different architecture (e.g. a 32-bit driver),
@@ -1340,12 +1337,19 @@ mfr_capture_job_rewrite_icd_file(MfrCaptureJob *job,
     g_autofree char *entry = NULL;
     g_autofree char *line = NULL;
 
-    if (plan->absolute->len > 0)
-        entry = mfr_capture_job_resolve_library_path(job, plan, g_ptr_array_index(plan->absolute, 0));
-    else if (plan->sonames->len > 0)
+    if (plan->absolute->len > 0) {
+        const char *library_path = g_ptr_array_index(plan->absolute, 0);
+
+        entry = mfr_capture_job_resolve_library_path(job, plan, library_path);
+        if (entry == NULL)
+            return glnx_throw(error, "%s was not captured", library_path);
+    } else if (plan->sonames->len > 0) {
+        /* we keep a SONAME, because the file is shared between architectures and
+         * ld.so.cache resolves the SONAME for the architecture of the loading program */
         entry = g_strdup(g_ptr_array_index(plan->sonames, 0));
-    if (entry == NULL)
-        return glnx_throw(error, "nothing to point at");
+    } else {
+        return glnx_throw(error, "it does not refer to a library");
+    }
 
     line = g_strconcat(entry, "\n", NULL);
     return g_file_set_contents(target, line, -1, error);
