@@ -113,10 +113,41 @@ mft_clear_store(void)
     }
 }
 
+/**
+ * mft_catalog_component_xml:
+ * @ref: (nullable): the value of the `bundle` element, "<architecture>/<component>/<version>",
+ *   or %NULL to write no `bundle` element
+ * @extra: (nullable): more XML for the component, e.g. its icons
+ *
+ * Write out a component of an AppStream catalog.
+ */
 char *
-mft_metainfo_xml(const char *component_id)
+mft_catalog_component_xml(const char *component_id, const char *ref, const char *extra)
 {
-    return g_strdup_printf("<component><id>%s</id></component>\n", component_id);
+    g_autofree char *custom = NULL;
+
+    if (ref != NULL)
+        custom = g_strdup_printf("<custom><value key=\"manifold.id\">%s</value></custom>", ref);
+    return g_strdup_printf("<component type=\"generic\"><id>%s</id><name>%s</name>%s%s</component>\n",
+                           component_id,
+                           component_id,
+                           extra != NULL ? extra : "",
+                           custom != NULL ? custom : "");
+}
+
+/**
+ * mft_catalog_xml:
+ * @components: the components, as written by mft_catalog_component_xml()
+ *
+ * Write out an AppStream catalog with the origin of local bundles.
+ */
+char *
+mft_catalog_xml(const char *components)
+{
+    return g_strdup_printf(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<components version=\"1.0\" origin=\"manifold-local\">\n%s</components>\n",
+        components);
 }
 
 /**
