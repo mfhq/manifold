@@ -28,7 +28,7 @@
 #include "mfr-run-interface.h"
 
 /*
- * manifold-run is the runner that users call. It asks the compose service
+ * mfrun is the runner that users call. It asks the compose service
  * for the mount tree of a component, and launches the component in it.
  *
  * This tool is unprivileged and runs as the invoking user. It moves its own
