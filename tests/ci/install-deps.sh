@@ -79,6 +79,7 @@ case " $ID ${ID_LIKE:-} " in
             libfyaml-dev
             libxml2-dev
             libxmlb-dev
+            shared-mime-info
         )
         source_build_packages=(cmake curl)
 
