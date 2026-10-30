@@ -532,6 +532,7 @@ class InstallTest(InstallerTestCase):
                 data = f.read()
             self.assertIn(f'<id>{component}</id>', data)
             self.assertIn('origin="manifold-local"', data)
+            self.assertIn('<bundle type="manifold">', data)
             # only a repository serves the screenshots
             self.assertNotIn('<screenshot', data)
 
