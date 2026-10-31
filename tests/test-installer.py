@@ -20,6 +20,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mftest import (  # noqa: E402
@@ -101,7 +103,11 @@ class InstallerTestCase(unittest.TestCase):
         """Run the manifold tool, check its exit status, and return its standard
         output and its standard error."""
         result = subprocess.run(
-            [ARGS.client, '--socket', SOCKET, *args], capture_output=True, text=True, check=False
+            [ARGS.client, '--socket', SOCKET, *args],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         self.assertEqual(
             result.returncode,
@@ -156,6 +162,39 @@ class InstallerTestCase(unittest.TestCase):
             (r['progress']['item']['action'], r['progress']['item']['subject'])
             for r in replies[:-1]
         ]
+
+    def use_own_signing_keys(self):
+        """Give the test an empty directory for signing keys, so it never uses the keys
+        of the user who runs the tests. Returns the key directory."""
+        if shutil.which('ssh-keygen') is None:
+            self.skipTest('ssh-keygen is not available')
+        config_dir = tempfile.mkdtemp(prefix='config-', dir=self.work)
+        patcher = mock.patch.dict(os.environ, {'XDG_CONFIG_HOME': config_dir})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop('SSH_AUTH_SOCK', None)
+        os.environ.pop('MANIFOLD_SIGNING_KEY', None)
+        return os.path.join(config_dir, 'manifold', 'keys')
+
+    def check_bundle_signature(self, bundle, public_key_file):
+        """Check that a bundle is signed by the key in public_key_file, and by no other."""
+        signers_file = os.path.join(self.work, 'allowed-signers')
+        signature_file = os.path.join(self.work, 'index.json.sig')
+        with open(public_key_file, encoding='utf-8') as f:
+            public_key = f.read()
+        with open(signers_file, 'w', encoding='utf-8') as f:
+            f.write(f'signer {public_key}')
+        with zipfile.ZipFile(bundle) as archive:
+            index = archive.read('index.json')
+            with open(signature_file, 'wb') as f:
+                f.write(archive.read('index.json.sig'))
+        subprocess.run(
+            ['ssh-keygen', '-Y', 'verify', '-f', signers_file, '-I', 'signer']
+            + ['-n', 'manifold.bundle', '-s', signature_file],
+            input=index,
+            capture_output=True,
+            check=True,
+        )
 
     def installed(self):
         """Read the installed components from the store on disk, as the daemon has no
@@ -767,12 +806,90 @@ class MarkTest(InstallerTestCase):
         )
 
 
+class SigningTest(InstallerTestCase):
+    """Creating signing keys and signing bundles with the manifold tool."""
+
+    def test_signing_keys(self):
+        key_dir = self.use_own_signing_keys()
+        self.assertIn('There are no signing keys', self.manifold('key', 'list'))
+
+        # we don't create a key without a passphrase unless we are told to
+        self.assertIn('--no-passphrase', self.manifold('key', 'new', expect=3))
+        self.assertFalse(os.path.exists(key_dir))
+
+        out = self.manifold('key', 'new', '--no-passphrase', '--comment', 'our release key')
+        self.assertIn("'default'", out)
+        with open(f'{key_dir}/default.pub', encoding='utf-8') as f:
+            self.assertIn(f.read().strip(), out)
+        self.assertEqual(os.stat(key_dir).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(f'{key_dir}/default').st_mode & 0o777, 0o600)
+
+        self.manifold('key', 'new', '--no-passphrase', 'ci-1.x')
+        with open(f'{key_dir}/ci-1.x', 'rb') as f:
+            private_key = f.read()
+        self.assertIn(
+            'already exists', self.manifold('key', 'new', '--no-passphrase', 'ci-1.x', expect=1)
+        )
+        with open(f'{key_dir}/ci-1.x', 'rb') as f:
+            self.assertEqual(f.read(), private_key)
+
+        # key names that could be mistaken for a path, a hidden file, a public key or a fingerprint
+        for name in ('../key', '.key', 'key.pub', 'SHA256:key'):
+            self.manifold('key', 'new', '--no-passphrase', name, expect=2)
+        self.assertEqual(
+            sorted(os.listdir(key_dir)), ['ci-1.x', 'ci-1.x.pub', 'default', 'default.pub']
+        )
+
+        header, *rows = self.manifold('key', 'list').splitlines()
+        self.assertEqual(header.split(), ['NAME', 'FINGERPRINT', 'COMMENT'])
+        self.assertEqual([row.split()[0] for row in rows], ['ci-1.x', 'default'])
+        self.assertTrue(rows[1].split()[1].startswith('SHA256:'))
+        self.assertTrue(rows[1].endswith(' our release key'))
+
+    def test_sign_bundle(self):
+        key_dir = self.use_own_signing_keys()
+        bundle = self.bundle(self.core, signed=False)
+
+        self.manifold('bundle', 'sign', expect=3)
+        self.assertIn('manifold key new', self.manifold('bundle', 'sign', bundle, expect=3))
+
+        self.manifold('key', 'new', '--no-passphrase')
+        self.manifold('key', 'new', '--no-passphrase', 'other')
+        self.assertIn('with default', self.manifold('bundle', 'sign', bundle))
+        self.check_bundle_signature(bundle, f'{key_dir}/default.pub')
+
+        # a new signature replaces the old one, and the key can be given by name, or by path
+        self.assertIn('with other', self.manifold('bundle', 'sign', '--key=other', bundle))
+        self.check_bundle_signature(bundle, f'{key_dir}/other.pub')
+        self.manifold('bundle', 'sign', f'--key={key_dir}/default', bundle)
+        self.check_bundle_signature(bundle, f'{key_dir}/default.pub')
+
+        self.assertIn(
+            'no signing key named', self.manifold('bundle', 'sign', '--key=nope', bundle, expect=3)
+        )
+
+        # a key in the environment is preferred over the keys in the key directory
+        with open(f'{key_dir}/other', encoding='utf-8') as f:
+            with mock.patch.dict(os.environ, {'MANIFOLD_SIGNING_KEY': f.read()}):
+                self.assertIn('with $MANIFOLD_SIGNING_KEY', self.manifold('bundle', 'sign', bundle))
+        self.check_bundle_signature(bundle, f'{key_dir}/other.pub')
+
+        # we stop at a file we can't sign, and name the files that were not signed
+        missing = os.path.join(self.work, 'missing.manifold')
+        out = self.manifold('bundle', 'sign', missing, bundle, expect=1)
+        self.assertIn(f'The remaining files were not signed: {bundle}', out)
+
+        # signing rewrites the archive, which has to stay installable
+        self.manifold('install', bundle)
+        self.assertEqual(self.installed(), [(CORE_ID, '13.4', 'manual')])
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--daemon', required=True)
     parser.add_argument('--client', required=True)
     ARGS, remaining = parser.parse_known_args()
-    # b3sum hashes the bundles the test makes up, and varlinkctl makes the calls
+    # we need b3sum to hash the bundles that the test creates, and varlinkctl to call the daemon
     missing = [tool for tool in ('b3sum', 'varlinkctl') if shutil.which(tool) is None]
     if missing:
         print(f'SKIP: {" and ".join(missing)} not available')
