@@ -73,6 +73,15 @@ test('store-read',
     suite: 'unit',
 )
 
+test('integration',
+    executable('test-integration',
+        ['test-integration.c'],
+        include_directories: [root_inc_dir],
+        dependencies: [manifold_dep, mft_test_utils_dep],
+    ),
+    suite: 'unit',
+)
+
 #
 # Unit tests that need a sandbox
 #

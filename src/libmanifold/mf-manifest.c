@@ -13,6 +13,7 @@
 #include <systemd/sd-json.h>
 
 #include "mf-error.h"
+#include "mf-integration-private.h"
 #include "mf-json-private.h"
 #include "mf-sdautoptr-private.h"
 #include "mf-utils.h"
@@ -94,6 +95,8 @@ typedef struct {
     guint64 hash_size;
 
     char *command; /* applications only */
+
+    MfIntegration *integration; /* (nullable) */
 } MfManifestPrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE(MfManifest, mf_manifest, G_TYPE_OBJECT)
@@ -120,6 +123,7 @@ mf_manifest_finalize(GObject *object)
         g_free(priv->image_checksums[i]);
     g_free(priv->verity_hash);
     g_free(priv->command);
+    g_clear_object(&priv->integration);
 
     G_OBJECT_CLASS(mf_manifest_parent_class)->finalize(object);
 }
@@ -307,6 +311,7 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
     g_autofree char *text = NULL;
     g_autoptr(sd_json_variant) jo = NULL;
     sd_json_variant *app;
+    sd_json_variant *integration;
     const char *data;
     const char *value;
     guint64 format;
@@ -397,6 +402,13 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
     } else if (priv->kind == MF_COMPONENT_KIND_APP && !priv->sdk) {
         mf_set_error_invalid_manifest(error, "%s", _("an app must say what to run"));
         return FALSE;
+    }
+
+    integration = sd_json_variant_by_key(jo, "integration");
+    if (integration != NULL && !sd_json_variant_is_null(integration)) {
+        priv->integration = mf_integration_new_from_json(integration, error);
+        if (priv->integration == NULL)
+            return FALSE;
     }
 
     return TRUE;
@@ -799,4 +811,19 @@ mf_manifest_get_command(MfManifest *manifest)
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
     auto priv = GET_PRIVATE(manifest);
     return priv->command;
+}
+
+/**
+ * mf_manifest_get_integration:
+ * @manifest: an #MfManifest
+ *
+ * Returns: (transfer none) (nullable): what the image asks to install on the host,
+ *   or %NULL if the manifest has no integration section
+ */
+MfIntegration *
+mf_manifest_get_integration(MfManifest *manifest)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
+    auto priv = GET_PRIVATE(manifest);
+    return priv->integration;
 }

@@ -10,6 +10,7 @@ mflib_src = [
     'mf-manager.c',
     'mf-component.c',
     'mf-error.c',
+    'mf-integration.c',
     'mf-interface.c',
     'mf-json.c',
     'mf-manifest.c',
@@ -28,6 +29,7 @@ mflib_pub_headers = [
     'mf-manager.h',
     'mf-component.h',
     'mf-error.h',
+    'mf-integration.h',
     'mf-manifest.h',
     'mf-progress.h',
     'mf-result.h',
@@ -39,6 +41,7 @@ mflib_pub_headers = [
 mflib_priv_headers = [
     'mf-bundle-private.h',
     'mf-component-private.h',
+    'mf-integration-private.h',
     'mf-interface-private.h',
     'mf-json-private.h',
     'mf-macros-private.h',
