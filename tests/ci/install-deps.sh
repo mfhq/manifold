@@ -79,6 +79,8 @@ case " $ID ${ID_LIKE:-} " in
             libxml2-dev
             libxmlb-dev
             shared-mime-info
+            # the tests make real images, and read from them
+            erofs-utils
         )
         source_build_packages=(cmake curl)
 
@@ -124,6 +126,8 @@ case " $ID ${ID_LIKE:-} " in
             itstool
             'pkgconfig(libxml-2.0)'
             'pkgconfig(xmlb)'
+            # the tests make real images, and read from them
+            erofs-utils
         )
         source_build_packages=(cmake curl)
 
@@ -159,6 +163,7 @@ case " $ID ${ID_LIKE:-} " in
             libblake3
             b3sum
             openssh
+            erofs-utils
         )
         source_build_packages=(cmake)
 

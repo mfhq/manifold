@@ -50,6 +50,8 @@ MfIntegrationKind mf_integration_file_get_kind(MfIntegrationFile *file);
 const char       *mf_integration_file_get_path(MfIntegrationFile *file);
 const char       *mf_integration_file_get_checksum(MfIntegrationFile *file,
                                                    MfChecksumKind     kind);
+gboolean          mf_integration_file_check_content(MfIntegrationFile *file,
+                                                    GBytes            *content);
 GBytes           *mf_integration_file_render(MfIntegrationFile *file,
                                              MfManifest        *manifest,
                                              GBytes            *content,
