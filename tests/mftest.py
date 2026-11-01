@@ -22,6 +22,7 @@ import signal
 import socket
 import subprocess
 import sysconfig
+import tempfile
 import time
 import zipfile
 
@@ -29,6 +30,9 @@ import zipfile
 EXIT_SKIPPED = 77
 
 STORE = '/var/lib/manifold'
+
+# where the filesystem starts in an image
+DATA_OFFSET = 20480
 RUNTIME_DIR = '/run/manifold'
 
 CORE_ID = 'net.debian.core13'
@@ -188,8 +192,28 @@ class Daemon:
         return replies if more else replies[0]
 
 
+def make_erofs(files):
+    """Make a real EROFS filesystem that holds files, given by their absolute paths."""
+    with tempfile.TemporaryDirectory() as work:
+        for path, content in files.items():
+            target = f'{work}/tree{path}'
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, 'wb') as f:
+                f.write(content)
+        subprocess.run(
+            ['mkfs.erofs', '--quiet', '--all-root', f'{work}/filesystem', f'{work}/tree'],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        with open(f'{work}/filesystem', 'rb') as f:
+            return f.read()
+
+
 class Image:
-    """An image for a bundle, with its manifest. Its content is made up."""
+    """An image for a bundle, with its manifest. Its content is made up, unless it has an
+    integration section, which needs a real filesystem. That section maps the kinds of
+    files to their paths and contents. image_files are the files the image really holds,
+    if those are to differ from what the manifest records."""
 
     def __init__(
         self,
@@ -201,6 +225,8 @@ class Image:
         base=None,
         seed=None,
         architecture=None,
+        integration=None,
+        image_files=None,
     ):
         self.component = component
         self.kind = kind
@@ -211,7 +237,13 @@ class Image:
         self.architecture = architecture or host_architecture()
         self.name = f'{component}_{version}.raw'
         self.identity = fake_hash('identity:' + component)
-        self.data = hashlib.sha512((seed or self.name).encode()).digest() * 1024
+        self.integration = integration
+        if integration is None:
+            self.data = hashlib.sha512((seed or self.name).encode()).digest() * 1024
+        else:
+            if image_files is None:
+                image_files = {p: c for files in integration.values() for p, c in files.items()}
+            self.data = bytes(DATA_OFFSET) + make_erofs(image_files)
         self.verity_hash = fake_hash('verity:' + hashlib.sha256(self.data).hexdigest())
 
     def reference(self):
@@ -240,14 +272,26 @@ class Image:
                 'sha256': hashlib.sha256(self.data).hexdigest(),
                 'blake3': blake3_hex(self.data),
                 'verity-root-hash': self.verity_hash,
-                'data-offset': 20480,
-                'hash-offset': 22528,
+                'data-offset': DATA_OFFSET,
+                'hash-offset': max(22528, len(self.data)),
             },
         }
         if self.base is not None:
             m['base'] = self.base.reference()
         if self.kind == 'app' and not self.sdk:
             m['app'] = {'command': 'app'}
+        if self.integration is not None:
+            m['integration'] = {
+                kind: [
+                    {
+                        'path': path,
+                        'sha256': hashlib.sha256(content).hexdigest(),
+                        'blake3': blake3_hex(content),
+                    }
+                    for path, content in files.items()
+                ]
+                for kind, files in self.integration.items()
+            }
         return m
 
 

@@ -43,6 +43,7 @@ MF_BEGIN_PRIVATE_DECLS
 #define MF_STORE_ORIGIN_NAME        "origin"
 #define MF_STORE_MODE_NAME          "mode"
 #define MF_STORE_ICONS_NAME         "icons"
+#define MF_STORE_EXPORTS_NAME       "exports"
 #define MF_STORE_CATALOG_SUFFIX     ".xml"
 
 #define MF_STORE_REVOKED_NAME "revoked"

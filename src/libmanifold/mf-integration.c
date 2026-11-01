@@ -50,7 +50,7 @@ static const struct {
     [MF_INTEGRATION_KIND_DESKTOP_ENTRY] = {"desktop-entry",
                                      "share/applications", (const char *const[]){".desktop", NULL}},
     [MF_INTEGRATION_KIND_ICON] = {"icons",
-                                     "share/icons/hicolor", (const char *const[]){".png", ".svg", ".svz", ".jxl", NULL}},
+                                     "share/icons/hicolor", (const char *const[]){".png", ".svg", ".svgz", ".jxl", NULL}},
     [MF_INTEGRATION_KIND_MIME_PACKAGE] = {"mime-package",
                                      "share/mime/packages", (const char *const[]){".xml", NULL}},
     [MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM] = {"systemd-unit-system", "lib/systemd/system", UNIT_SUFFIXES},
@@ -229,6 +229,20 @@ mf_integration_file_get_path(MfIntegrationFile *file)
 {
     g_return_val_if_fail(MF_IS_INTEGRATION_FILE(file), NULL);
     return file->path;
+}
+
+/**
+ * mf_integration_file_get_export_path:
+ * @file: an #MfIntegrationFile
+ *
+ * Retrieve the export path of the file, relative to the directory of exports.
+ */
+const char *
+mf_integration_file_get_export_path(MfIntegrationFile *file)
+{
+    g_return_val_if_fail(MF_IS_INTEGRATION_FILE(file), NULL);
+    g_return_val_if_fail(g_str_has_prefix(file->path, APP_DIR), NULL);
+    return file->path + strlen(APP_DIR);
 }
 
 /**

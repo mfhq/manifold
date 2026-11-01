@@ -39,6 +39,9 @@ from mftest import (  # noqa: E402
 
 SOCKET = f'{RUNTIME_DIR}/test-manifoldd.sock'
 
+DESKTOP_ENTRY_PATH = f'/app/share/applications/{APP_ID}.desktop'
+DESKTOP_ENTRY = b'[Desktop Entry]\nType=Application\nName=App\nExec=app\n'
+
 ARGS = None
 
 
@@ -617,6 +620,92 @@ class InstallerTest(unittest.TestCase):
         out = self.manifold('install', self.bundle('sdk-without-base', [sdk]), expect=1)
         self.assertIn('Not a valid bundle', out)
         self.assertIn('an SDK must name the component it extends', out)
+
+    # integrating with the host
+
+    def test_integration_files_are_kept_with_their_version(self):
+        service = f'{APP_ID}-report.service'
+        system_path = f'/app/lib/systemd/system/{service}'
+        user_path = f'/app/lib/systemd/user/{service}'
+        app = Image(
+            APP_ID,
+            'app',
+            '0.1.0',
+            base=self.kit,
+            integration={
+                'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY},
+                'systemd-unit-system': {system_path: b'[Service]\nExecStart=app --system\n'},
+                'systemd-unit-user': {user_path: b'[Service]\nExecStart=app --user\n'},
+            },
+        )
+        self.manifold('install', self.core_bundle)
+        self.manifold('install', self.bundle('integrated', [self.kit, app]))
+
+        exports = f'{STORE}/apps/{APP_ID}/0.1.0-{app.revision}/exports'
+        for path, content in (
+            (DESKTOP_ENTRY_PATH, DESKTOP_ENTRY),
+            (system_path, b'[Service]\nExecStart=app --system\n'),
+            (user_path, b'[Service]\nExecStart=app --user\n'),
+        ):
+            with open(exports + path[len('/app') :], 'rb') as f:
+                self.assertEqual(f.read(), content)
+
+    def test_integration_rules_are_checked_before_the_image_is_stored(self):
+        self.manifold('install', self.core_bundle)
+        images = self.stored_images()
+        path = '/app/share/applications/org.example.Other.desktop'
+        app = Image(
+            APP_ID,
+            'app',
+            '0.1.0',
+            base=self.kit,
+            integration={'desktop-entry': {path: DESKTOP_ENTRY}},
+        )
+        out = self.manifold('install', self.bundle('foreign-entry', [self.kit, app]), expect=1)
+        self.assertIn('Not a valid bundle', out)
+        self.assertIn(f'is not named like {APP_ID}', out)
+        self.assertEqual(self.stored_images(), images)
+
+    def test_integration_file_has_to_match_its_manifest(self):
+        self.manifold('install', self.core_bundle)
+        app = Image(
+            APP_ID,
+            'app',
+            '0.1.0',
+            base=self.kit,
+            integration={'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY}},
+            image_files={DESKTOP_ENTRY_PATH: DESKTOP_ENTRY + b'Comment=Another file\n'},
+        )
+        out = self.manifold('install', self.bundle('wrong-entry', [self.kit, app]), expect=1)
+        self.assertIn('does not match what its manifest records', out)
+        self.assertNotIn(app.verity_hash, self.stored_images())
+        self.assertNotIn(APP_ID, [component for component, _, _ in self.installed()])
+
+    def test_integration_file_has_to_be_installable(self):
+        self.manifold('install', self.core_bundle)
+        entry = b'[Desktop Entry]\nType=Application\nName=App\nExec=/bin/evil\n'
+        app = Image(
+            APP_ID,
+            'app',
+            '0.1.0',
+            base=self.kit,
+            integration={'desktop-entry': {DESKTOP_ENTRY_PATH: entry}},
+        )
+        out = self.manifold('install', self.bundle('bad-entry', [self.kit, app]), expect=1)
+        self.assertIn('has to start with a program of the image', out)
+        self.assertNotIn(app.verity_hash, self.stored_images())
+
+    def test_only_applications_can_integrate(self):
+        self.manifold('install', self.core_bundle)
+        kit = Image(
+            self.kit.component,
+            'kit',
+            '20260114T0238',
+            base=self.core,
+            integration={'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY}},
+        )
+        out = self.manifold('install', self.bundle('integrated-kit', [kit]), expect=1)
+        self.assertIn('only applications can use this', out)
 
     # removing
 

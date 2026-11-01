@@ -251,8 +251,8 @@ mfd_reader_read_file(const char *tool,
  * Read the files an image wants to install, and check that they are what its
  * manifest says they are. The image has to be in @store.
  *
- * Returns: (transfer full) (element-type utf8 GBytes): the files by their path
- *   in the image, or %NULL
+ * Returns: (transfer full) (element-type utf8 GBytes): the files by their
+ *   export path, or %NULL
  */
 GHashTable *
 mfd_image_read_integration(MfStore *store, MfManifest *manifest, GError **error)
@@ -327,7 +327,9 @@ mfd_image_read_integration(MfStore *store, MfManifest *manifest, GError **error)
                                 "The files the image wants to install are too large");
             return NULL;
         }
-        g_hash_table_insert(contents, g_strdup(path), g_steal_pointer(&content));
+        g_hash_table_insert(contents,
+                            g_strdup(mf_integration_file_get_export_path(file)),
+                            g_steal_pointer(&content));
     }
 
     return g_steal_pointer(&contents);

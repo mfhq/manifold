@@ -323,21 +323,23 @@ mfd_store_writer_update_current(MfdStoreWriter *writer,
 }
 
 /**
- * mfd_store_writer_write_icons:
- * @icons: (element-type utf8 GBytes): the icons by their size directory and file name
+ * mfd_store_writer_write_files:
+ * @subdir: the directory of the version to write to
+ * @files: (element-type utf8 GBytes): the files by their path relative to @subdir
  *
- * Write the icons of a component into the `icons` directory of a version.
+ * Write the files of a component into a directory of a version. The paths
+ * have to be safe to use, which the caller has checked.
  */
 static gboolean
-mfd_store_writer_write_icons(const char *version_dir, GHashTable *icons, GError **error)
+mfd_store_writer_write_files(const char *version_dir, const char *subdir, GHashTable *files, GError **error)
 {
     GHashTableIter iter;
     gpointer key;
     gpointer value;
 
-    g_hash_table_iter_init(&iter, icons);
+    g_hash_table_iter_init(&iter, files);
     while (g_hash_table_iter_next(&iter, &key, &value)) {
-        g_autofree char *path = g_build_filename(version_dir, MF_STORE_ICONS_NAME, key, NULL);
+        g_autofree char *path = g_build_filename(version_dir, subdir, key, NULL);
         g_autofree char *dir = g_path_get_dirname(path);
         g_autofree char *name = g_path_get_basename(path);
 
@@ -361,11 +363,13 @@ mfd_store_writer_write_icons(const char *version_dir, GHashTable *icons, GError 
  * @base: (nullable): what the component builds on, or %NULL for a core
  * @catalog: the AppStream catalog data of the component, for the local origin
  * @icons: (element-type utf8 GBytes): the icons of the component by their size directory and file name
+ * @exports: (nullable) (element-type utf8 GBytes): the files the component installs on the host,
+ *   by their export path
  * @mode: whether the component is a potential target for automatic removal
  *
  * Record an installed version of a component: a directory with links to its
- * image and its base, its manifest, catalog data and icons, where it came
- * from, and its install mode. We write the directory under a temporary name,
+ * image and its base, its manifest, catalog data, icons and exports, where it
+ * came from, and its install mode. We write the directory under a temporary name,
  * and rename it once it is complete, so it appears as a whole.
  *
  * Then we point the `current` link of the component at its newest version.
@@ -383,6 +387,7 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
                                    const MfBaseLink *base,
                                    GBytes *catalog,
                                    GHashTable *icons,
+                                   GHashTable *exports,
                                    MfInstallMode mode,
                                    GError **error)
 {
@@ -448,7 +453,9 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
                           (gssize) g_bytes_get_size(catalog),
                           error))
         goto out;
-    if (!mfd_store_writer_write_icons(tmp_dir, icons, error))
+    if (!mfd_store_writer_write_files(tmp_dir, MF_STORE_ICONS_NAME, icons, error))
+        goto out;
+    if (exports != NULL && !mfd_store_writer_write_files(tmp_dir, MF_STORE_EXPORTS_NAME, exports, error))
         goto out;
 
     /* TODO: every installation is local until repository support is ported from Intrafold */
