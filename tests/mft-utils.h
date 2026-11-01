@@ -72,6 +72,8 @@ typedef struct {
     const char *base_version;  /* default: "1" */
     guint64     base_revision; /* default: 1 */
 
+    const char *integration; /* the integration section as JSON, default: none */
+
     const char *image_file;       /* default: "i.raw" */
     gsize       image_size;       /* default: 1 */
     const char *sha256;           /* default: the identity */

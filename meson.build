@@ -139,7 +139,7 @@ mf_capsule_bin_dir = mf_prefix / mf_libdir / 'capsule'
 # where manifoldd exports the host integration files of apps to
 mf_integration_prefix = get_option('integration-prefix')
 if not mf_integration_prefix.startswith('/')
-    error('integration_prefix must be an absolute path')
+    error('integration-prefix must be an absolute path')
 endif
 
 systemd_system_unit_dir = systemd_dep.get_variable(
