@@ -15,9 +15,6 @@
 #include "mf-utils.h"
 #include "mf-utils-private.h"
 
-/* the longest an identifier may be, as it is a directory name */
-constexpr size_t COMPONENT_ID_LENGTH_MAX = 255;
-
 /**
  * MfComponent:
  *
@@ -229,21 +226,6 @@ mf_install_mode_from_string(const char *mode_str)
     if (g_strcmp0(mode_str, "auto") == 0)
         return MF_INSTALL_MODE_AUTO;
     return MF_INSTALL_MODE_UNKNOWN;
-}
-
-/**
- * mf_component_id_is_valid:
- * @component_id: (nullable): a component identifier
- *
- * Validate a component-ID: It has to have 1 to 255 characters of `[A-Za-z0-9._-]`,
- * not starting with `.` or `-`.
- *
- * Returns: %TRUE if the identifier is valid
- */
-gboolean
-mf_component_id_is_valid(const char *component_id)
-{
-    return mf_name_is_valid(component_id, "._-", COMPONENT_ID_LENGTH_MAX);
 }
 
 /**

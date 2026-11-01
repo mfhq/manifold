@@ -542,26 +542,6 @@ mf_integration_set_error(GError **error, const char *format, ...)
 }
 
 /**
- * mf_integration_component_id_is_valid:
- *
- * The names of integration files start with the component ID, and they share
- * their directories with the host. So the ID has to be a reverse-DNS name of
- * at least three labels, or an ID like `ssh` could claim `ssh.service`.
- */
-static gboolean
-mf_integration_component_id_is_valid(const char *component_id)
-{
-    g_auto(GStrv) labels = g_strsplit(component_id, ".", -1);
-
-    for (guint i = 0; labels[i] != NULL; i++) {
-        if (labels[i][0] == '\0')
-            return FALSE;
-    }
-
-    return g_strv_length(labels) >= 3;
-}
-
-/**
  * mf_integration_name_is_owned:
  * @stem: the file name without its suffix, and without what comes before the ID
  * @stem_len: the length of @stem, which is not NUL terminated
@@ -597,7 +577,7 @@ mf_integration_name_is_valid(MfIntegrationKind kind, const char *name, const cha
     const char *suffix = NULL;
     gsize stem_len;
 
-    if (!mf_name_is_valid(name, unit ? "._-@" : "._-", MF_FILE_NAME_LENGTH_MAX))
+    if (unit ? !mf_unit_file_name_is_valid(name) : !mf_file_name_is_valid(name))
         return FALSE;
     for (guint i = 0; suffixes[i] != NULL && suffix == NULL; i++) {
         if (g_str_has_suffix(name, suffixes[i]))
@@ -701,17 +681,7 @@ mf_integration_check_file(MfIntegrationFile *file, const char *component_id, GEr
 static gboolean
 mf_integration_program_is_valid(const char *path)
 {
-    g_auto(GStrv) parts = NULL;
-
-    if (!g_str_has_prefix(path, APP_DIR))
-        return FALSE;
-    parts = g_strsplit(path + strlen(APP_DIR), "/", -1);
-    for (guint i = 0; parts[i] != NULL; i++) {
-        if (!mf_program_name_is_valid(parts[i]))
-            return FALSE;
-    }
-
-    return parts[0] != NULL;
+    return g_str_has_prefix(path, APP_DIR) && mf_program_path_is_valid(path + strlen(APP_DIR));
 }
 
 /**
@@ -759,7 +729,9 @@ mf_integration_check(MfIntegration *integration, const char *component_id, GErro
 {
     g_autoptr(GHashTable) seen = g_hash_table_new(g_str_hash, g_str_equal);
 
-    if (!mf_integration_component_id_is_valid(component_id)) {
+    /* the names of the files start with the ID, and they share directories with the host, so
+     * an ID like `ssh` must not be able to claim `ssh.service` */
+    if (!mf_reverse_dns_name_is_valid(component_id)) {
         mf_integration_set_error(error,
                                  _("%s is not a reverse-DNS name of at least three parts"),
                                  component_id);
@@ -1021,7 +993,7 @@ mf_integration_render_desktop_entry(MfIntegrationFile *file,
                 continue; /* it checks for a program on the host, which we do not install */
             else if (g_str_equal(key, "DBusActivatable") && !g_str_equal(value, "false"))
                 problem = _("activating applications over D-Bus is not supported");
-            else if (g_str_equal(key, "Icon") && !mf_icon_name_is_valid(value))
+            else if (g_str_equal(key, "Icon") && !mf_file_name_is_valid(value))
                 problem = _("the icon has to be a plain name");
             else if (g_str_equal(key, "MimeType") && !mf_integration_mime_types_are_valid(value))
                 problem = _("this kind of link can not be handled by an application");
@@ -1236,7 +1208,7 @@ mf_integration_mime_attribute_is_valid(const char *element, const char *name, co
         (g_str_equal(element, "magic") && g_str_equal(name, "priority")))
         return mf_mime_weight_is_valid(value);
     if ((g_str_equal(element, "icon") || g_str_equal(element, "generic-icon")) && g_str_equal(name, "name"))
-        return mf_icon_name_is_valid(value);
+        return mf_file_name_is_valid(value);
 
     return TRUE;
 }

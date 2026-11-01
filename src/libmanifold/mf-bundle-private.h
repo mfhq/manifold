@@ -42,7 +42,6 @@ constexpr char MF_BUNDLE_CATALOG_MEDIA_PREFIX[] = MF_BUNDLE_CATALOG_DIR "/media/
 
 constexpr int  MF_BUNDLE_FORMAT = 1;
 
-gboolean       mf_bundle_file_name_is_valid(const char *name);
 char          *mf_bundle_build_image_ref(MfManifest *manifest);
 GBytes        *mf_bundle_get_index_data(MfBundle *bundle);
 

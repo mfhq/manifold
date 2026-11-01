@@ -42,8 +42,6 @@ typedef enum {
 const char     *mf_component_kind_to_string(MfComponentKind kind);
 MfComponentKind mf_component_kind_from_string(const char *kind_str);
 
-gboolean        mf_component_id_is_valid(const char *component_id);
-
 /**
  * MfInstallMode:
  * @MF_INSTALL_MODE_UNKNOWN: Not a known mode.
