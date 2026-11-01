@@ -375,6 +375,32 @@ test_check_component(void)
 }
 
 static void
+test_manifest_messages(void)
+{
+    MftTestManifest manifests[] = {
+        test_app(NULL),
+        test_app(NULL),
+        test_app(NULL),
+    };
+
+    manifests[0].kind = "\\u001b[2J";
+    manifests[1].command = "\\u001b[2J";
+    manifests[2].architecture = "\\u001b[2J";
+
+    /* a manifest must not be able to control the terminal of the admin */
+    for (gsize i = 0; i < G_N_ELEMENTS(manifests); i++) {
+        g_autofree char *json = mft_manifest_json(&manifests[i]);
+        g_autoptr(GError) error = NULL;
+        g_autoptr(MfManifest) manifest = mf_manifest_new_from_data(json, -1, &error);
+
+        g_assert_null(manifest);
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+        g_test_message("%s", error->message);
+        g_assert_null(strchr(error->message, '\033'));
+    }
+}
+
+static void
 test_check_messages(void)
 {
     static const char *const sections[] = {
@@ -1078,6 +1104,7 @@ main(int argc, char **argv)
     g_test_add_func("/integration/check-section", test_check_section);
     g_test_add_func("/integration/check-component", test_check_component);
     g_test_add_func("/integration/check-messages", test_check_messages);
+    g_test_add_func("/integration/manifest-messages", test_manifest_messages);
     g_test_add_func("/integration/desktop-entries", test_desktop_entries);
     g_test_add_func("/integration/desktop-entries-refused", test_desktop_entries_refused);
     g_test_add_func("/integration/text-size-limit", test_text_size_limit);

@@ -17,4 +17,7 @@ MF_BEGIN_PRIVATE_DECLS
  */
 #define MF_SIGNING_KEY_ENV "MANIFOLD_SIGNING_KEY"
 
+/* the suffix of the public key next to a private key file */
+#define MF_PUBLIC_KEY_SUFFIX ".pub"
+
 MF_END_PRIVATE_DECLS

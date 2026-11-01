@@ -39,7 +39,6 @@ G_DEFINE_TYPE_WITH_PRIVATE(MfSigner, mf_signer, G_TYPE_OBJECT)
 
 #define GET_PRIVATE(o) ((MfSignerPrivate *) mf_signer_get_instance_private(o))
 
-#define MF_PUBLIC_KEY_SUFFIX  ".pub"
 #define MF_FINGERPRINT_PREFIX "SHA256:"
 
 /**
