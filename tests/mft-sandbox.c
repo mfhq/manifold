@@ -23,18 +23,28 @@
  * The sandbox that tests of privileged components run in.
  *
  * Manifold's daemons use paths that are fixed at build time, and write to
- * directories only root can write to. Instead of teaching them to behave
- * differently when tested, the tests change what these paths refer to: They
- * run in a private mount namespace, in which the directories Manifold keeps
- * its state in are empty tmpfs mounts. Nothing of this is visible outside
- * of the sandbox, and nothing is left behind when its last process exits.
+ * directories that only root can write to. The tests therefore run in a
+ * private mount namespace, in which every state directory of Manifold is an
+ * empty tmpfs mount.
  *
- * A state directory may not exist on the host, and its parent belongs to the
- * host: such a parent is replaced by a tmpfs holding bind mounts of everything
- * that was in it, so that the state directory can be created in it.
+ * A state directory that does not exist on the host is created after its
+ * parent directory was made writable with mft_make_writable().
+ *
+ * Below the integration prefix, we only list the directories that Manifold
+ * writes to. The rest of the prefix may contain programs and libraries of
+ * the host that the tests need.
  */
 
-static const char *const STATE_DIRS[] = {MF_RUNTIME_DIR, MF_STORAGE_DIR, MF_CACHE_DIR};
+static const char *const STATE_DIRS[] = {
+    MF_RUNTIME_DIR,
+    MF_STORAGE_DIR,
+    MF_CACHE_DIR,
+    MF_INTEGRATION_PREFIX "/share/applications",
+    MF_INTEGRATION_PREFIX "/share/icons",
+    MF_INTEGRATION_PREFIX "/share/mime",
+    MF_INTEGRATION_PREFIX "/lib/systemd",
+    MF_INTEGRATION_PREFIX "/lib/udev",
+};
 
 static void
 mft_skip(const char *what, int err)
@@ -155,6 +165,24 @@ mft_make_writable(const char *dir)
 }
 
 /**
+ * mft_make_dir:
+ *
+ * Create a directory that does not exist on the host, together with its
+ * missing parent directories.
+ */
+static void
+mft_make_dir(const char *path)
+{
+    g_autofree char *parent = g_path_get_dirname(path);
+
+    if (!g_file_test(parent, G_FILE_TEST_IS_DIR))
+        mft_make_dir(parent);
+    mft_make_writable(parent);
+    if (mkdir(path, 0755) != 0)
+        g_error("Unable to create %s: %s", path, g_strerror(errno));
+}
+
+/**
  * mft_mount_state_dir:
  *
  * Replace a state directory by an empty tmpfs, creating it if the host does
@@ -163,13 +191,8 @@ mft_make_writable(const char *dir)
 static void
 mft_mount_state_dir(const char *path)
 {
-    if (!g_file_test(path, G_FILE_TEST_IS_DIR)) {
-        g_autofree char *parent = g_path_get_dirname(path);
-
-        mft_make_writable(parent);
-        if (mkdir(path, 0755) != 0)
-            g_error("Unable to create %s: %s", path, g_strerror(errno));
-    }
+    if (!g_file_test(path, G_FILE_TEST_IS_DIR))
+        mft_make_dir(path);
     mft_mount_tmpfs(path);
 }
 

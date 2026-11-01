@@ -60,6 +60,6 @@ if apparmor_parser_exe.found()
         output: 'mfrun',
         configuration: apparmor_conf,
         install: true,
-        install_dir: get_option('apparmor_dir'),
+        install_dir: get_option('apparmor-dir'),
     )
 endif
