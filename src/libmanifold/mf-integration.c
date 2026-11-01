@@ -92,6 +92,18 @@ static const char *const RESERVED_MIME_TYPES[] = {
     NULL,
 };
 
+/* the namespace of a MIME package, which is the only one we accept */
+#define MIME_NAMESPACE "http://www.freedesktop.org/standards/shared-mime-info"
+
+/* the elements of a MIME package that change the types of the host, instead of adding one */
+static const char *const REFUSED_MIME_ELEMENTS[] = {
+    "alias",
+    "glob-deleteall",
+    "magic-deleteall",
+    "treemagic",
+    NULL,
+};
+
 /* the keys of a systemd unit that run a command */
 static const char *const UNIT_COMMAND_KEYS[] = {
     "ExecCondition",
@@ -1187,6 +1199,192 @@ mf_integration_render_unit(MfIntegrationFile *file, MfManifest *manifest, GBytes
 }
 
 /**
+ * MfIntegrationMimeRender:
+ *
+ * What we keep while parsing a MIME package.
+ */
+typedef struct {
+    GString *output;
+    gboolean has_type;
+} MfIntegrationMimeRender;
+
+/**
+ * mf_integration_mime_attribute_is_valid:
+ * @element: the element the attribute is on
+ *
+ * Returns: %TRUE if we accept the value of the attribute
+ */
+static gboolean
+mf_integration_mime_attribute_is_valid(const char *element, const char *name, const char *value)
+{
+    if (g_str_equal(name, "xmlns"))
+        return g_str_equal(element, "mime-info") && g_str_equal(value, MIME_NAMESPACE);
+    if (strchr(name, ':') != NULL)
+        return g_str_equal(name, "xml:lang");
+
+    if (g_str_equal(name, "type") &&
+        (g_str_equal(element, "mime-type") || g_str_equal(element, "sub-class-of")))
+        return mf_mime_type_is_valid(value);
+    if (g_str_equal(element, "root-XML"))
+        return mf_mime_xml_name_is_valid(value);
+    if (g_str_equal(element, "glob") && g_str_equal(name, "pattern"))
+        return mf_mime_glob_is_valid(value);
+    if ((g_str_equal(element, "glob") && g_str_equal(name, "weight")) ||
+        (g_str_equal(element, "magic") && g_str_equal(name, "priority")))
+        return mf_mime_weight_is_valid(value);
+    if ((g_str_equal(element, "icon") || g_str_equal(element, "generic-icon")) && g_str_equal(name, "name"))
+        return mf_icon_name_is_valid(value);
+
+    return TRUE;
+}
+
+/**
+ * mf_integration_mime_element_problem:
+ * @stack: the elements we are in, starting with @element
+ *
+ * Returns: (nullable): what is wrong with the place of an element in the document
+ */
+static const char *
+mf_integration_mime_element_problem(const GSList *stack, const char *element)
+{
+    gboolean is_root = stack->next == NULL;
+    gboolean below_root = !is_root && stack->next->next == NULL;
+
+    if (is_root != g_str_equal(element, "mime-info"))
+        return _("the document has to consist of one mime-info element");
+    if (below_root != g_str_equal(element, "mime-type"))
+        return _("only mime-type elements can be in mime-info");
+    /* a name with a namespace prefix means the element without it to other parsers */
+    if (strchr(element, ':') != NULL)
+        return _("namespace prefixes are not supported");
+    if (g_strv_contains(REFUSED_MIME_ELEMENTS, element))
+        return _("a package can only add types, and not change those of the host");
+
+    return NULL;
+}
+
+/**
+ * mf_integration_mime_on_start_element:
+ */
+static void
+mf_integration_mime_on_start_element(GMarkupParseContext *context,
+                                     const char *element,
+                                     const char **attribute_names,
+                                     const char **attribute_values,
+                                     gpointer user_data,
+                                     GError **error)
+{
+    MfIntegrationMimeRender *render = user_data;
+    const GSList *stack = g_markup_parse_context_get_element_stack(context);
+    const char *problem = mf_integration_mime_element_problem(stack, element);
+
+    if (problem == NULL && stack->next == NULL && !g_strv_contains(attribute_names, "xmlns"))
+        problem = _("mime-info has to have the namespace of MIME packages");
+    if (problem == NULL && g_str_equal(element, "mime-type") && !g_strv_contains(attribute_names, "type"))
+        problem = _("a mime-type element has to have a type");
+
+    g_string_append_printf(render->output, "<%s", element);
+    for (guint i = 0; problem == NULL && attribute_names[i] != NULL; i++) {
+        g_autofree char *value = g_markup_escape_text(attribute_values[i], -1);
+
+        if (!mf_integration_mime_attribute_is_valid(element, attribute_names[i], attribute_values[i]))
+            problem = _("the value of an attribute is not allowed");
+        g_string_append_printf(render->output, " %s=\"%s\"", attribute_names[i], value);
+    }
+    g_string_append_c(render->output, '>');
+
+    if (problem != NULL)
+        g_set_error_literal(error, G_MARKUP_ERROR, G_MARKUP_ERROR_INVALID_CONTENT, problem);
+    render->has_type = render->has_type || g_str_equal(element, "mime-type");
+}
+
+/**
+ * mf_integration_mime_on_end_element:
+ */
+static void
+mf_integration_mime_on_end_element(GMarkupParseContext *context,
+                                   const char *element,
+                                   gpointer user_data,
+                                   GError **error)
+{
+    MfIntegrationMimeRender *render = user_data;
+
+    g_string_append_printf(render->output, "</%s>", element);
+}
+
+/**
+ * mf_integration_mime_on_text:
+ */
+static void
+mf_integration_mime_on_text(GMarkupParseContext *context,
+                            const char *text,
+                            gsize text_len,
+                            gpointer user_data,
+                            GError **error)
+{
+    MfIntegrationMimeRender *render = user_data;
+    g_autofree char *escaped = g_markup_escape_text(text, (gssize) text_len);
+
+    g_string_append(render->output, escaped);
+}
+
+/**
+ * mf_integration_render_mime_package:
+ *
+ * Unlike the other files, we write a MIME package anew from what we parsed.
+ * The tool that reads it later runs as root and uses another XML parser, which
+ * follows the encoding a file declares and DTDs. So a package could hide
+ * elements from us in a way that parser sees them. What we write has none of
+ * that, so it can only hold what we looked at.
+ *
+ * Returns: (transfer full): the package to install, or %NULL
+ */
+static GBytes *
+mf_integration_render_mime_package(MfIntegrationFile *file, GBytes *content, GError **error)
+{
+    static const GMarkupParser parser = {
+        .start_element = mf_integration_mime_on_start_element,
+        .end_element = mf_integration_mime_on_end_element,
+        .text = mf_integration_mime_on_text,
+    };
+    MfIntegrationMimeRender render = {
+        .output = g_string_new("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"),
+    };
+    g_autoptr(GMarkupParseContext) context = NULL;
+    g_autoptr(GError) local_error = NULL;
+    g_auto(GStrv) lines = mf_integration_split_lines(file, content, error);
+    gsize size;
+    const char *data = g_bytes_get_data(content, &size);
+
+    if (lines == NULL) {
+        g_string_free(render.output, TRUE);
+        return NULL;
+    }
+
+    context = g_markup_parse_context_new(&parser,
+                                         G_MARKUP_TREAT_CDATA_AS_TEXT | G_MARKUP_PREFIX_ERROR_POSITION,
+                                         &render,
+                                         NULL);
+    if (!g_markup_parse_context_parse(context, data != NULL ? data : "", (gssize) size, &local_error) ||
+        !g_markup_parse_context_end_parse(context, &local_error)) {
+        /* the message can quote the file */
+        g_autofree char *message = g_strescape(local_error->message, NULL);
+
+        mf_integration_set_error(error, _("%s: %s"), file->path, message);
+        g_string_free(render.output, TRUE);
+        return NULL;
+    }
+    if (!render.has_type) {
+        mf_integration_set_error(error, _("%s: this package has no types"), file->path);
+        g_string_free(render.output, TRUE);
+        return NULL;
+    }
+
+    g_string_append_c(render.output, '\n');
+    return g_string_free_to_bytes(render.output);
+}
+
+/**
  * mf_integration_file_render:
  * @file: an #MfIntegrationFile
  * @manifest: the manifest of @file, which passed mf_manifest_check_integration()
@@ -1212,6 +1410,8 @@ mf_integration_file_render(MfIntegrationFile *file, MfManifest *manifest, GBytes
         return mf_integration_render_desktop_entry(file, manifest, content, error);
     case MF_INTEGRATION_KIND_ICON:
         return g_bytes_ref(content);
+    case MF_INTEGRATION_KIND_MIME_PACKAGE:
+        return mf_integration_render_mime_package(file, content, error);
     case MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM:
     case MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER:
         return mf_integration_render_unit(file, manifest, content, error);

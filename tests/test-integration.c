@@ -771,6 +771,177 @@ test_units_refused(void)
     }
 }
 
+#define MIME_PATH  "/app/share/mime/packages/com.example.app.xml"
+#define MIME_XML   "<?xml version='1.0' encoding='UTF-8'?>\n"
+#define MIME_NS    "http://www.freedesktop.org/standards/shared-mime-info"
+#define MIME_OPEN  "<mime-info xmlns='" MIME_NS "'>"
+#define MIME_CLOSE "</mime-info>"
+#define MIME_TYPE  "<mime-type type='application/x-app'>"
+#define MIME_END   "</mime-type>"
+
+static void
+test_mime_packages(void)
+{
+    /* written with single quotes, as we would have to escape the double ones that we expect */
+    static const struct {
+        const char *content;
+        const char *expected;
+    } packages[] = {
+        /* what the test application ships */
+        {MIME_XML MIME_OPEN "\n  " MIME_TYPE "\n"
+                            "    <comment>App file</comment>\n"
+                            "    <icon name='com.example.app'/>\n"
+                            "    <glob pattern='*.appfile'/>\n"
+                            "  " MIME_END "\n" MIME_CLOSE "\n",
+         MIME_XML MIME_OPEN "\n  " MIME_TYPE "\n"
+                            "    <comment>App file</comment>\n"
+                            "    <icon name='com.example.app'></icon>\n"
+                            "    <glob pattern='*.appfile'></glob>\n"
+                            "  " MIME_END "\n" MIME_CLOSE "\n"                                             },
+
+        /* what is allowed in a type */
+        {MIME_OPEN MIME_TYPE
+         "<comment xml:lang='de'>Datei &amp; so</comment>"
+         "<acronym>APP</acronym>"
+         "<expanded-acronym>App</expanded-acronym>"
+         "<generic-icon name='text-x-generic'/>"
+         "<sub-class-of type='application/zip'/>"
+         "<glob weight='50' pattern='*.appfile' case-sensitive='true'/>"
+         "<glob pattern='*.[1-9]~'/>"
+         "<magic priority='50'>"
+         "<match type='string' offset='0' value='APP'><match type='byte' offset='4' value='1'/></match>"
+         "</magic>"
+         "<root-XML namespaceURI='urn:app' localName='app'/>" MIME_END MIME_CLOSE,
+         MIME_XML MIME_OPEN MIME_TYPE
+         "<comment xml:lang='de'>Datei &amp; so</comment>"
+         "<acronym>APP</acronym>"
+         "<expanded-acronym>App</expanded-acronym>"
+         "<generic-icon name='text-x-generic'></generic-icon>"
+         "<sub-class-of type='application/zip'></sub-class-of>"
+         "<glob weight='50' pattern='*.appfile' case-sensitive='true'></glob>"
+         "<glob pattern='*.[1-9]~'></glob>"
+         "<magic priority='50'>"
+         "<match type='string' offset='0' value='APP'><match type='byte' offset='4' value='1'></match></match>"
+         "</magic>"
+         "<root-XML namespaceURI='urn:app' localName='app'></root-XML>" MIME_END MIME_CLOSE "\n"           },
+
+        /* what another parser could read differently does not reach it */
+        {"<?xml version='1.0' encoding='UTF-7'?>" MIME_OPEN MIME_TYPE
+         "<comment>+ADw-/comment+AD4APA-glob-deleteall/+AD4APA-comment+AD4-</comment>" MIME_END MIME_CLOSE,
+         MIME_XML MIME_OPEN MIME_TYPE
+         "<comment>+ADw-/comment+AD4APA-glob-deleteall/+AD4APA-comment+AD4-</comment>" MIME_END MIME_CLOSE
+         "\n"                                                                                              },
+        {"<?xml version='1.0'?><!DOCTYPE m [<!ENTITY s SYSTEM 'file:///etc/shadow'>]>" MIME_OPEN MIME_TYPE
+             MIME_END MIME_CLOSE,
+         MIME_XML MIME_OPEN MIME_TYPE MIME_END MIME_CLOSE "\n"                                             },
+        {MIME_OPEN "<!-- a -->" MIME_TYPE "<?pi x?>" MIME_END MIME_CLOSE,
+         MIME_XML MIME_OPEN MIME_TYPE MIME_END MIME_CLOSE "\n"                                             },
+        {MIME_OPEN MIME_TYPE "<comment><![CDATA[<glob-deleteall/>]]></comment>" MIME_END MIME_CLOSE,
+         MIME_XML MIME_OPEN MIME_TYPE "<comment>&lt;glob-deleteall/&gt;</comment>" MIME_END MIME_CLOSE "\n"},
+    };
+
+    for (gsize i = 0; i < G_N_ELEMENTS(packages); i++) {
+        g_autoptr(GBytes) content = g_bytes_new_static(packages[i].content, strlen(packages[i].content));
+        g_autofree char *expected = g_strdelimit(g_strdup(packages[i].expected), "'", '"');
+        g_autoptr(GError) error = NULL;
+        g_autoptr(GBytes) rendered = NULL;
+        g_autofree char *text = NULL;
+        gsize size;
+        const char *data;
+
+        g_test_message("%s", packages[i].content);
+        rendered = test_render("mime-package", MIME_PATH, content, &error);
+        g_assert_no_error(error);
+        data = g_bytes_get_data(rendered, &size);
+        text = g_strndup(data, size);
+        g_assert_cmpstr(text, ==, expected);
+    }
+}
+
+static void
+test_mime_packages_refused(void)
+{
+    static const char *const packages[] = {
+        /* changing what the host knows */
+        MIME_OPEN MIME_TYPE "<glob-deleteall/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<magic-deleteall/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<alias type='application/pdf'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<treemagic><treematch path='x'/></treemagic>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<magic><glob-deleteall/></magic>" MIME_END MIME_CLOSE,
+
+        /* namespace prefixes, which other parsers resolve */
+        "<x:mime-info xmlns:x='" MIME_NS "'>" MIME_TYPE MIME_END "</x:mime-info>",
+        MIME_OPEN MIME_TYPE "<x:glob-deleteall xmlns:x='" MIME_NS "'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<x:glob-deleteall/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob x:pattern='*.abc'/>" MIME_END MIME_CLOSE,
+
+        /* the shape of the document */
+        "",
+        "not xml",
+        MIME_TYPE MIME_END,
+        MIME_OPEN MIME_CLOSE,
+        "<mime-info>" MIME_TYPE MIME_END MIME_CLOSE,
+        "<mime-info xmlns='urn:other'>" MIME_TYPE MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE MIME_OPEN MIME_CLOSE MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE MIME_TYPE MIME_END MIME_END MIME_CLOSE,
+        MIME_OPEN "<glob pattern='*.abc'/>" MIME_TYPE MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE,
+        MIME_OPEN MIME_TYPE MIME_END MIME_CLOSE "<x/>",
+        MIME_OPEN MIME_TYPE "&undefined;" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<comment xmlns='urn:other'/>" MIME_END MIME_CLOSE,
+
+        /* types that are not plain, or that do not belong to an application */
+        MIME_OPEN "<mime-type/>" MIME_CLOSE,
+        MIME_OPEN "<mime-type type=''/>" MIME_CLOSE,
+        MIME_OPEN "<mime-type type='application'/>" MIME_CLOSE,
+        MIME_OPEN "<mime-type type='../../../evil'/>" MIME_CLOSE,
+        MIME_OPEN "<mime-type type='application/../../evil'/>" MIME_CLOSE,
+        MIME_OPEN "<mime-type type='application/..'/>" MIME_CLOSE,
+        MIME_OPEN "<mime-type type='application/.x'/>" MIME_CLOSE,
+        MIME_OPEN "<mime-type type='x-scheme-handler/https'/>" MIME_CLOSE,
+        MIME_OPEN "<mime-type type='inode/directory'/>" MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<sub-class-of type='../x'/>" MIME_END MIME_CLOSE,
+
+        /* claiming files of other types */
+        MIME_OPEN MIME_TYPE "<glob pattern='*'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob pattern='*.*'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob pattern='?*'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob pattern='*a'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob pattern='*:xx'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob pattern='*.pdf:cs'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob pattern='*.a b'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob pattern='*.abc&#10;90:text/plain:*'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob pattern='*.abc' weight='51'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob pattern='*.abc' weight='x'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<glob pattern='*.abc' weight='-1'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<magic priority='100'/>" MIME_END MIME_CLOSE,
+
+        /* the database holds these as words on a line */
+        MIME_OPEN MIME_TYPE "<root-XML namespaceURI='a b' localName='c'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<root-XML namespaceURI='a' localName='c&#10;d'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<root-XML namespaceURI='' localName='c'/>" MIME_END MIME_CLOSE,
+
+        /* icons that are not plain names */
+        MIME_OPEN MIME_TYPE "<icon name='/etc/passwd'/>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<generic-icon name='../x'/>" MIME_END MIME_CLOSE,
+
+        /* no plain text */
+        MIME_OPEN MIME_TYPE "<comment>\r</comment>" MIME_END MIME_CLOSE,
+        MIME_OPEN MIME_TYPE "<comment>\xff</comment>" MIME_END MIME_CLOSE,
+    };
+
+    for (gsize i = 0; i < G_N_ELEMENTS(packages); i++) {
+        g_autoptr(GBytes) content = g_bytes_new_static(packages[i], strlen(packages[i]));
+        g_autoptr(GError) error = NULL;
+        g_autoptr(GBytes) rendered = NULL;
+
+        g_test_message("%s", packages[i]);
+        rendered = test_render("mime-package", MIME_PATH, content, &error);
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+        g_assert_null(rendered);
+    }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -790,6 +961,8 @@ main(int argc, char **argv)
     g_test_add_func("/integration/text-size-limit", test_text_size_limit);
     g_test_add_func("/integration/units", test_units);
     g_test_add_func("/integration/units-refused", test_units_refused);
+    g_test_add_func("/integration/mime-packages", test_mime_packages);
+    g_test_add_func("/integration/mime-packages-refused", test_mime_packages_refused);
 
     return g_test_run();
 }
