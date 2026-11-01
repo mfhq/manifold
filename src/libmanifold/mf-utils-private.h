@@ -30,6 +30,8 @@ gboolean mf_write_all(int         fd,
 gboolean mf_name_is_valid(const char *name,
                           const char *extra_chars,
                           size_t      length_max);
+gboolean mf_icon_name_is_valid(const char *name);
+gboolean mf_text_is_valid(GBytes *text);
 
 char    *mf_hash_to_hex(const guint8 *hash,
                         gsize         size);

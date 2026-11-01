@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
+#include "config.h"
+
+#include <string.h>
 #include <manifold.h>
 
 #include "mft-utils.h"
@@ -395,6 +398,213 @@ test_check_messages(void)
     }
 }
 
+/**
+ * test_render_desktop_entry:
+ * @name: the file name of the desktop entry
+ * @content: what the desktop entry holds
+ *
+ * Returns: (transfer full) (nullable): the desktop entry to install
+ */
+static GBytes *
+test_render_desktop_entry(const char *name, GBytes *content, GError **error)
+{
+    g_autofree char *section = g_strdup_printf(
+        "{\"desktop-entry\": [{\"path\": \"/app/share/applications/%s\", " HASHES "}]}",
+        name);
+    g_autoptr(GError) local_error = NULL;
+    g_autoptr(MfManifest) manifest = test_manifest_new(section, &local_error);
+    MfIntegrationFile *file;
+
+    g_assert_no_error(local_error);
+    g_assert_true(mf_manifest_check_integration(manifest, &local_error));
+    file = g_ptr_array_index(mf_integration_get_files(mf_manifest_get_integration(manifest)), 0);
+
+    return mf_integration_file_render(file, manifest, content, error);
+}
+
+#define MAIN_ENTRY  "com.example.app.desktop"
+#define OTHER_ENTRY "com.example.app.open.desktop"
+#define HEADER      "[Desktop Entry]\nType=Application\nName=App\n"
+#define MFRUN       MF_BINDIR "/mfrun"
+
+static void
+test_desktop_entries(void)
+{
+    static const struct {
+        const char *name;
+        const char *content;
+        const char *expected;
+    } entries[] = {
+        /* the main entry runs the command of the application, however it names it */
+        {MAIN_ENTRY,  HEADER "Exec=app\n",                                                                                      HEADER "Exec=" MFRUN " com.example.app\n"                  },
+        {MAIN_ENTRY,  HEADER "Exec=/app/bin/app %U\n",                                                                          HEADER "Exec=" MFRUN " com.example.app %U\n"               },
+        {MAIN_ENTRY,
+         HEADER "Exec=app --flag \"a b\" %f\n",
+         HEADER "Exec=" MFRUN " com.example.app --flag \"a b\" %f\n"                                                                                                                       },
+
+        /* so do the others if they want that, or anything else from the image */
+        {OTHER_ENTRY, HEADER "Exec=app --open %f\n",                                                                            HEADER "Exec=" MFRUN " com.example.app --open %f\n"        },
+        {OTHER_ENTRY,
+         HEADER "Exec=/app/libexec/tool\n",
+         HEADER "Exec=" MFRUN " --command=/app/libexec/tool com.example.app\n"                                                                                                             },
+        {OTHER_ENTRY, HEADER "Exec=tool %u\n",                                                                                  HEADER "Exec=" MFRUN " --command=tool com.example.app %u\n"},
+
+        /* the actions of the main entry are free as well */
+        {MAIN_ENTRY,
+         HEADER "Exec=app\nActions=Tool;\n\n[Desktop Action Tool]\nName=Tool\nExec=tool\n",
+         HEADER "Exec=" MFRUN
+                " com.example.app\nActions=Tool;\n\n[Desktop Action Tool]\nName=Tool\nExec=" MFRUN
+                " --command=tool com.example.app\n"                                                                                                                                        },
+
+        /* everything else stays, except that the file ends in a newline */
+        {MAIN_ENTRY,
+         "# a comment\n\n[Desktop Entry]\nType=Application\nName=App\nName[de_DE.UTF-8@euro]=Äpp\n"
+         "X-KDE-Something=1\nExec=app\nIcon=com.example.app\nMimeType=application/x-app;x-scheme-handler/app;\nTerminal=false",
+         "# a comment\n\n[Desktop Entry]\nType=Application\nName=App\nName[de_DE.UTF-8@euro]=Äpp\n"
+         "X-KDE-Something=1\nExec=" MFRUN
+         " com.example.app\nIcon=com.example.app\nMimeType=application/x-app;x-scheme-handler/app;\nTerminal=false\n"                                                                      },
+
+        /* the program of TryExec is in the image, and not on the host */
+        {MAIN_ENTRY,  HEADER "TryExec=app\nExec=app\n",                                                                         HEADER "Exec=" MFRUN " com.example.app\n"                  },
+        {MAIN_ENTRY,
+         HEADER "DBusActivatable=false\nExec=app\n",
+         HEADER "DBusActivatable=false\nExec=" MFRUN " com.example.app\n"                                                                                                                  },
+    };
+
+    for (gsize i = 0; i < G_N_ELEMENTS(entries); i++) {
+        g_autoptr(GBytes) content = g_bytes_new_static(entries[i].content, strlen(entries[i].content));
+        g_autoptr(GError) error = NULL;
+        g_autoptr(GBytes) rendered = NULL;
+        g_autofree char *text = NULL;
+        gsize size;
+        const char *data;
+
+        g_test_message("%s", entries[i].content);
+        rendered = test_render_desktop_entry(entries[i].name, content, &error);
+        g_assert_no_error(error);
+        data = g_bytes_get_data(rendered, &size);
+        text = g_strndup(data, size);
+        g_assert_cmpstr(text, ==, entries[i].expected);
+    }
+}
+
+static void
+test_desktop_entries_refused(void)
+{
+#define ENTRY(name, text) {name, text, sizeof(text) - 1}
+
+    static const struct {
+        const char *name;
+        const char *content;
+        gsize size;
+    } entries[] = {
+        /* lines that other parsers see differently */
+        ENTRY(MAIN_ENTRY, HEADER "Comment=x\rExec=/bin/evil\nExec=app\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\n\0Exec=/bin/evil\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Comment=\xff\xfe\nExec=app\n"),
+        ENTRY(MAIN_ENTRY, "\xef\xbb\xbf" HEADER "Exec=app\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Comment=x\\\nExec=app\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nExec=/bin/evil\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\n[Desktop Entry]\nExec=/bin/evil\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\n Exec=/bin/evil\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\n\tExec=/bin/evil\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nExec =/bin/evil\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec = app\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\n   \n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nno key\n"),
+
+        /* keys that would slip past us */
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nExec[de]=/bin/evil\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nTryExec[de]=/bin/evil\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nType[de]=Link\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nMimeType[de]=x-scheme-handler/https;\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nName[$e]=$(evil)\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nName[]=x\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nName[de=x\n"),
+
+        /* the shape of the file */
+        ENTRY(MAIN_ENTRY, ""),
+        ENTRY(MAIN_ENTRY, "Exec=app\n" HEADER),
+        ENTRY(MAIN_ENTRY, "[Other]\n" HEADER "Exec=app\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\n[]\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\n[a]b]\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\n[a\n"),
+        ENTRY(MAIN_ENTRY, "[Desktop Entry]\nExec=app\n"),
+        ENTRY(MAIN_ENTRY, HEADER),
+        ENTRY(MAIN_ENTRY, HEADER "[Desktop Action Tool]\nExec=app\n"),
+        ENTRY(MAIN_ENTRY, "[Desktop Entry]\nType=Link\nURL=file:///etc\nExec=app\n"),
+        ENTRY(MAIN_ENTRY, HEADER "DBusActivatable=true\nExec=app\n"),
+        ENTRY(MAIN_ENTRY, HEADER "DBusActivatable=1\nExec=app\n"),
+
+        /* commands that are not programs of the image */
+        ENTRY(OTHER_ENTRY, HEADER "Exec=\n"),
+        ENTRY(OTHER_ENTRY, HEADER "Exec= app\n"),
+        ENTRY(OTHER_ENTRY, HEADER "Exec=/bin/sh -c evil\n"),
+        ENTRY(OTHER_ENTRY, HEADER "Exec=/usr/bin/app\n"),
+        ENTRY(OTHER_ENTRY, HEADER "Exec=../bin/app\n"),
+        ENTRY(OTHER_ENTRY, HEADER "Exec=/app/../bin/sh\n"),
+        ENTRY(OTHER_ENTRY, HEADER "Exec=\"/app/bin/app\"\n"),
+        ENTRY(OTHER_ENTRY, HEADER "Exec=%U\n"),
+        ENTRY(OTHER_ENTRY, HEADER "Exec=a\tb\n"),
+        ENTRY(OTHER_ENTRY, HEADER "Exec=-x\n"),
+
+        /* the main entry has to run the application */
+        ENTRY(MAIN_ENTRY, HEADER "Exec=tool\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=/app/libexec/app\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=/app/bin/tool\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=application\n"),
+
+        /* values with a meaning for the host */
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nIcon=/usr/share/pixmaps/x.png\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nIcon=../x\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nMimeType=x-scheme-handler/https;\n"),
+        ENTRY(MAIN_ENTRY, HEADER "Exec=app\nMimeType=text/plain;X-Scheme-Handler/HTTP;\n"),
+    };
+
+#undef ENTRY
+
+    for (gsize i = 0; i < G_N_ELEMENTS(entries); i++) {
+        g_autoptr(GBytes) content = g_bytes_new_static(entries[i].content, entries[i].size);
+        g_autoptr(GError) error = NULL;
+        g_autoptr(GBytes) rendered = NULL;
+
+        g_test_message("%s", entries[i].content);
+        rendered = test_render_desktop_entry(entries[i].name, content, &error);
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+        g_assert_null(rendered);
+    }
+}
+
+static void
+test_text_size_limit(void)
+{
+    gsize limit = 1024 * 1024;
+    const char *text = HEADER "Exec=app\n#";
+    gsize used = strlen(text);
+    g_autofree char *largest = g_malloc(limit + 1);
+    g_autoptr(GError) error = NULL;
+
+    memcpy(largest, text, used);
+    memset(largest + used, 'x', limit - used);
+    largest[limit - 1] = '\n';
+    largest[limit] = '\n';
+
+    {
+        g_autoptr(GBytes) fits = g_bytes_new_static(largest, limit);
+        g_autoptr(GBytes) rendered = test_render_desktop_entry(MAIN_ENTRY, fits, &error);
+
+        g_assert_no_error(error);
+        g_assert_nonnull(rendered);
+    }
+    {
+        g_autoptr(GBytes) too_large = g_bytes_new_static(largest, limit + 1);
+        g_autoptr(GBytes) rendered = test_render_desktop_entry(MAIN_ENTRY, too_large, &error);
+
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+        g_assert_null(rendered);
+    }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -409,6 +619,9 @@ main(int argc, char **argv)
     g_test_add_func("/integration/check-section", test_check_section);
     g_test_add_func("/integration/check-component", test_check_component);
     g_test_add_func("/integration/check-messages", test_check_messages);
+    g_test_add_func("/integration/desktop-entries", test_desktop_entries);
+    g_test_add_func("/integration/desktop-entries-refused", test_desktop_entries_refused);
+    g_test_add_func("/integration/text-size-limit", test_text_size_limit);
 
     return g_test_run();
 }

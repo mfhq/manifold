@@ -19,6 +19,8 @@
 
 constexpr size_t VERSION_LENGTH_MAX = 128;
 
+constexpr gsize TEXT_FILE_SIZE_MAX = 1024 * 1024;
+
 /* the length of a hex encoded 256 bit hash */
 constexpr size_t HEX_HASH_LENGTH = 64;
 
@@ -88,6 +90,42 @@ gboolean
 mf_program_name_is_valid(const char *name)
 {
     return mf_name_is_valid(name, "._+-", MF_FILE_NAME_LENGTH_MAX);
+}
+
+/**
+ * mf_icon_name_is_valid:
+ * @name: (nullable): the name of an icon, as an icon theme knows it
+ *
+ * Returns: %TRUE if @name is a plain name, and not something like a path
+ */
+gboolean
+mf_icon_name_is_valid(const char *name)
+{
+    return mf_name_is_valid(name, "._-", MF_FILE_NAME_LENGTH_MAX);
+}
+
+/**
+ * mf_text_is_valid:
+ * @text: the contents of a text file
+ *
+ * Check that a file is plain enough for us and the programs that read it later
+ * to see the same lines: programs disagree on whether a carriage return or
+ * NUL ends a line, or even the whole file. Other than that we only accept
+ * UTF-8, and sizes that a file of metadata can reasonably have.
+ *
+ * Returns: %TRUE if the file only has lines ending in a newline
+ */
+gboolean
+mf_text_is_valid(GBytes *text)
+{
+    gsize size;
+    const char *data = g_bytes_get_data(text, &size);
+
+    if (size == 0)
+        return TRUE;
+
+    return size <= TEXT_FILE_SIZE_MAX && memchr(data, '\0', size) == NULL &&
+           memchr(data, '\r', size) == NULL && g_utf8_validate_len(data, size, NULL);
 }
 
 /**
