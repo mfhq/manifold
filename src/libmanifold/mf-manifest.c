@@ -854,7 +854,7 @@ mf_manifest_check_integration(MfManifest *manifest, GError **error)
 
     if (priv->integration == NULL)
         return TRUE;
-    /* nothing else can be launched, and everything that gets installed launches the component */
+    /* only applications can be launched and are allowed to export files to the host */
     if (priv->kind != MF_COMPONENT_KIND_APP || priv->sdk) {
         mf_set_error_invalid_manifest(error, "%s", _("integration: only applications can use this"));
         return FALSE;

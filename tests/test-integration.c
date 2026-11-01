@@ -16,13 +16,13 @@
 #define HASHES   "\"sha256\": \"" SHA256_A "\", \"blake3\": \"" BLAKE3_A "\""
 
 /**
- * test_app:
+ * mft_app_manifest:
  * @integration: (nullable): the integration section as JSON
  *
  * Returns: the manifest of an application
  */
 static MftTestManifest
-test_app(const char *integration)
+mft_app_manifest(const char *integration)
 {
     return (MftTestManifest){
         .component_id = "com.example.app",
@@ -34,28 +34,28 @@ test_app(const char *integration)
 }
 
 /**
- * test_manifest_new:
+ * mft_manifest_new:
  * @integration: (nullable): the integration section as JSON
  *
  * Returns: (transfer full) (nullable): the parsed manifest of an application
  */
 static MfManifest *
-test_manifest_new(const char *integration, GError **error)
+mft_manifest_new(const char *integration, GError **error)
 {
-    MftTestManifest m = test_app(integration);
+    MftTestManifest m = mft_app_manifest(integration);
     g_autofree char *json = mft_manifest_json(&m);
 
     return mf_manifest_new_from_data(json, -1, error);
 }
 
 /**
- * test_passes_check:
+ * mft_passes_check:
  * @m: a manifest that can be parsed
  *
  * Returns: whether mf_manifest_check_integration() accepts the manifest
  */
 static gboolean
-test_passes_check(const MftTestManifest *m)
+mft_passes_check(const MftTestManifest *m)
 {
     g_autofree char *json = mft_manifest_json(m);
     g_autoptr(GError) error = NULL;
@@ -84,7 +84,7 @@ static void
 test_section(void)
 {
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfManifest) manifest = test_manifest_new(
+    g_autoptr(MfManifest) manifest = mft_manifest_new(
         "{\"desktop-entry\": [{\"path\": \"/app/share/applications/com.example.app.desktop\", " HASHES
         "}],"
         " \"systemd-unit-user\": [{\"path\": \"/app/lib/systemd/user/com.example.app.service\", " HASHES
@@ -131,9 +131,9 @@ static void
 test_no_section(void)
 {
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfManifest) without = test_manifest_new(NULL, &error);
-    g_autoptr(MfManifest) null = test_manifest_new("null", &error);
-    g_autoptr(MfManifest) empty = test_manifest_new("{}", &error);
+    g_autoptr(MfManifest) without = mft_manifest_new(NULL, &error);
+    g_autoptr(MfManifest) null = mft_manifest_new("null", &error);
+    g_autoptr(MfManifest) empty = mft_manifest_new("{}", &error);
 
     g_assert_no_error(error);
     g_assert_null(mf_manifest_get_integration(without));
@@ -163,7 +163,7 @@ test_malformed_section(void)
 
     for (gsize i = 0; i < G_N_ELEMENTS(sections); i++) {
         g_autoptr(GError) error = NULL;
-        g_autoptr(MfManifest) manifest = test_manifest_new(sections[i], &error);
+        g_autoptr(MfManifest) manifest = mft_manifest_new(sections[i], &error);
 
         g_test_message("%s", sections[i]);
         g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
@@ -255,10 +255,10 @@ test_check_file_paths(void)
         g_autofree char *section = g_strdup_printf("{\"%s\": [{\"path\": \"%s\", " HASHES "}]}",
                                                    files[i].kind,
                                                    files[i].path);
-        MftTestManifest m = test_app(section);
+        MftTestManifest m = mft_app_manifest(section);
 
         g_test_message("%s %s", files[i].kind, files[i].path);
-        g_assert_cmpint(test_passes_check(&m), ==, files[i].valid);
+        g_assert_cmpint(mft_passes_check(&m), ==, files[i].valid);
     }
 }
 
@@ -270,79 +270,79 @@ test_check_aliases(void)
         const char *command;
         gboolean valid;
     } aliases[] = {
-        {"app",       "/app/bin/app",          TRUE },
-        {"app-cli.1", "/app/bin/app",          TRUE },
-        {"g++",       "/app/libexec/app/g++",  TRUE },
+        {"app",           "/app/bin/app",          TRUE },
+        {"app-cli.1",     "/app/bin/app",          TRUE },
+        {"g++",           "/app/libexec/app/g++",  TRUE },
 
         /* not a safe name */
-        {"",          "/app/bin/app",          FALSE},
-        {".app",      "/app/bin/app",          FALSE},
-        {"-app",      "/app/bin/app",          FALSE},
-        {"a/b",       "/app/bin/app",          FALSE},
-        {"a b",       "/app/bin/app",          FALSE},
-        {"a'b",       "/app/bin/app",          FALSE},
-        {"a;b",       "/app/bin/app",          FALSE},
-        {"a\\nb",     "/app/bin/app",          FALSE},
-        {"$(id)",     "/app/bin/app",          FALSE},
+        {"",              "/app/bin/app",          FALSE},
+        {".app",          "/app/bin/app",          FALSE},
+        {"-app",          "/app/bin/app",          FALSE},
+        {"a/b",           "/app/bin/app",          FALSE},
+        {"a b",           "/app/bin/app",          FALSE},
+        {"a'b",           "/app/bin/app",          FALSE},
+        {"a;b",           "/app/bin/app",          FALSE},
+        {"a\\nb",         "/app/bin/app",          FALSE},
+        {"$(id)",         "/app/bin/app",          FALSE},
 
-        /* a tool a host may not have yet */
-        {"sudo",      "/app/bin/app",          FALSE},
-        {"pkexec",    "/app/bin/app",          FALSE},
-        {"run0",      "/app/bin/app",          FALSE},
-        {"manifold",  "/app/bin/app",          FALSE},
-        {"mfrun",     "/app/bin/app",          FALSE},
+        /* reserved names of tools that a host may lack */
+        {"sudo",          "/app/bin/app",          FALSE},
+        {"pkexec",        "/app/bin/app",          FALSE},
+        {"run0",          "/app/bin/app",          FALSE},
+        {"manifold",      "/app/bin/app",          FALSE},
+        {"MF_MFRUN_PATH", "/app/bin/app",          FALSE},
 
         /* not a program of the image, or not one that is safe to put in a script */
-        {"app",       "",                      FALSE},
-        {"app",       "app",                   FALSE},
-        {"app",       "bin/app",               FALSE},
-        {"app",       "/usr/bin/app",          FALSE},
-        {"app",       "/app",                  FALSE},
-        {"app",       "/app/",                 FALSE},
-        {"app",       "/app/bin/",             FALSE},
-        {"app",       "/app//bin/app",         FALSE},
-        {"app",       "/app/../bin/sh",        FALSE},
-        {"app",       "/app/bin/../../bin/sh", FALSE},
-        {"app",       "/app/bin/.hidden",      FALSE},
-        {"app",       "/app/bin/a b",          FALSE},
-        {"app",       "/app/bin/a'b",          FALSE},
-        {"app",       "/app/bin/a\\nb",        FALSE},
-        {"app",       "/app/bin/$(id)",        FALSE},
+        {"app",           "",                      FALSE},
+        {"app",           "app",                   FALSE},
+        {"app",           "bin/app",               FALSE},
+        {"app",           "/usr/bin/app",          FALSE},
+        {"app",           "/app",                  FALSE},
+        {"app",           "/app/",                 FALSE},
+        {"app",           "/app/bin/",             FALSE},
+        {"app",           "/app//bin/app",         FALSE},
+        {"app",           "/app/../bin/sh",        FALSE},
+        {"app",           "/app/bin/../../bin/sh", FALSE},
+        {"app",           "/app/bin/.hidden",      FALSE},
+        {"app",           "/app/bin/a b",          FALSE},
+        {"app",           "/app/bin/a'b",          FALSE},
+        {"app",           "/app/bin/a\\nb",        FALSE},
+        {"app",           "/app/bin/$(id)",        FALSE},
     };
 
     for (gsize i = 0; i < G_N_ELEMENTS(aliases); i++) {
         g_autofree char *section = g_strdup_printf("{\"alias\": [{\"name\": \"%s\", \"command\": \"%s\"}]}",
                                                    aliases[i].name,
                                                    aliases[i].command);
-        MftTestManifest m = test_app(section);
+        MftTestManifest m = mft_app_manifest(section);
 
         g_test_message("%s %s", aliases[i].name, aliases[i].command);
-        g_assert_cmpint(test_passes_check(&m), ==, aliases[i].valid);
+        g_assert_cmpint(mft_passes_check(&m), ==, aliases[i].valid);
     }
 }
 
 static void
 test_check_section(void)
 {
-    MftTestManifest m = test_app("{\"from-the-future\": []}");
+    MftTestManifest m = mft_app_manifest("{\"from-the-future\": []}");
 
     /* a kind we do not know must not be dropped silently */
-    g_assert_false(test_passes_check(&m));
+    g_assert_false(mft_passes_check(&m));
 
     m.integration =
         "{\"alias\": [{\"name\": \"app\", \"command\": \"/app/bin/a\"},"
         " {\"name\": \"app\", \"command\": \"/app/bin/b\"}]}";
-    g_assert_false(test_passes_check(&m));
+    g_assert_false(mft_passes_check(&m));
 
     m.integration = "{\"mime-package\": [{\"path\": \"/app/share/mime/packages/com.example.app.xml\", " HASHES
                     "},"
                     " {\"path\": \"/app/share/mime/packages/com.example.app.xml\", " HASHES "}]}";
-    g_assert_false(test_passes_check(&m));
+    g_assert_false(mft_passes_check(&m));
 
     m.integration = NULL;
-    g_assert_true(test_passes_check(&m));
+    g_assert_true(mft_passes_check(&m));
     m.integration = "{}";
-    g_assert_true(test_passes_check(&m));
+    g_assert_true(mft_passes_check(&m));
 }
 
 static void
@@ -350,37 +350,37 @@ test_check_component(void)
 {
     static const char *const refused_ids[] = {"ssh", "com.example", "com..example", "com.example."};
     static const char *const refused_kinds[] = {"kit", "platform", "plugin"};
-    MftTestManifest m = test_app("{}");
+    MftTestManifest m = mft_app_manifest("{}");
 
     for (gsize i = 0; i < G_N_ELEMENTS(refused_ids); i++) {
         m.component_id = refused_ids[i];
         g_test_message("%s", refused_ids[i]);
-        g_assert_false(test_passes_check(&m));
+        g_assert_false(mft_passes_check(&m));
     }
 
-    m = test_app("{}");
+    m = mft_app_manifest("{}");
     for (gsize i = 0; i < G_N_ELEMENTS(refused_kinds); i++) {
         m.kind = refused_kinds[i];
         g_test_message("%s", refused_kinds[i]);
-        g_assert_false(test_passes_check(&m));
+        g_assert_false(mft_passes_check(&m));
     }
 
-    m = test_app("{}");
+    m = mft_app_manifest("{}");
     m.sdk = TRUE;
-    g_assert_false(test_passes_check(&m));
+    g_assert_false(mft_passes_check(&m));
 
-    /* what can not use the section passes if it does not */
+    /* an SDK without an integration section is fine */
     m.integration = NULL;
-    g_assert_true(test_passes_check(&m));
+    g_assert_true(mft_passes_check(&m));
 }
 
 static void
 test_manifest_messages(void)
 {
     MftTestManifest manifests[] = {
-        test_app(NULL),
-        test_app(NULL),
-        test_app(NULL),
+        mft_app_manifest(NULL),
+        mft_app_manifest(NULL),
+        mft_app_manifest(NULL),
     };
 
     manifests[0].kind = "\\u001b[2J";
@@ -414,7 +414,7 @@ test_check_messages(void)
     /* a manifest must not be able to control the terminal of the admin */
     for (gsize i = 0; i < G_N_ELEMENTS(sections); i++) {
         g_autoptr(GError) error = NULL;
-        g_autoptr(MfManifest) manifest = test_manifest_new(sections[i], &error);
+        g_autoptr(MfManifest) manifest = mft_manifest_new(sections[i], &error);
 
         g_assert_no_error(error);
         g_assert_false(mf_manifest_check_integration(manifest, &error));
@@ -425,7 +425,7 @@ test_check_messages(void)
 }
 
 /**
- * test_render:
+ * mft_render:
  * @kind: the key of the kind of the file
  * @path: where the file is in the image
  * @content: what the file holds
@@ -433,11 +433,11 @@ test_check_messages(void)
  * Returns: (transfer full) (nullable): the file to install
  */
 static GBytes *
-test_render(const char *kind, const char *path, GBytes *content, GError **error)
+mft_render(const char *kind, const char *path, GBytes *content, GError **error)
 {
     g_autofree char *section = g_strdup_printf("{\"%s\": [{\"path\": \"%s\", " HASHES "}]}", kind, path);
     g_autoptr(GError) local_error = NULL;
-    g_autoptr(MfManifest) manifest = test_manifest_new(section, &local_error);
+    g_autoptr(MfManifest) manifest = mft_manifest_new(section, &local_error);
     MfIntegrationFile *file;
 
     g_assert_no_error(local_error);
@@ -448,24 +448,23 @@ test_render(const char *kind, const char *path, GBytes *content, GError **error)
 }
 
 /**
- * test_render_desktop_entry:
+ * mft_render_desktop_entry:
  * @name: the file name of the desktop entry
  * @content: what the desktop entry holds
  *
  * Returns: (transfer full) (nullable): the desktop entry to install
  */
 static GBytes *
-test_render_desktop_entry(const char *name, GBytes *content, GError **error)
+mft_render_desktop_entry(const char *name, GBytes *content, GError **error)
 {
     g_autofree char *path = g_strconcat("/app/share/applications/", name, NULL);
 
-    return test_render("desktop-entry", path, content, error);
+    return mft_render("desktop-entry", path, content, error);
 }
 
 #define MAIN_ENTRY  "com.example.app.desktop"
 #define OTHER_ENTRY "com.example.app.open.desktop"
 #define HEADER      "[Desktop Entry]\nType=Application\nName=App\n"
-#define MFRUN       MF_BINDIR "/mfrun"
 
 static void
 test_desktop_entries(void)
@@ -476,39 +475,43 @@ test_desktop_entries(void)
         const char *expected;
     } entries[] = {
         /* the main entry runs the command of the application, however it names it */
-        {MAIN_ENTRY,  HEADER "Exec=app\n",                                                                                      HEADER "Exec=" MFRUN " com.example.app\n"                  },
-        {MAIN_ENTRY,  HEADER "Exec=/app/bin/app %U\n",                                                                          HEADER "Exec=" MFRUN " com.example.app %U\n"               },
+        {MAIN_ENTRY,  HEADER "Exec=app\n",                                                                                      HEADER "Exec=" MF_MFRUN_PATH " com.example.app\n"   },
+        {MAIN_ENTRY,  HEADER "Exec=/app/bin/app %U\n",                                                                          HEADER "Exec=" MF_MFRUN_PATH " com.example.app %U\n"},
         {MAIN_ENTRY,
          HEADER "Exec=app --flag \"a b\" %f\n",
-         HEADER "Exec=" MFRUN " com.example.app --flag \"a b\" %f\n"                                                                                                                       },
+         HEADER "Exec=" MF_MFRUN_PATH " com.example.app --flag \"a b\" %f\n"                                                                                                        },
 
-        /* so do the others if they want that, or anything else from the image */
-        {OTHER_ENTRY, HEADER "Exec=app --open %f\n",                                                                            HEADER "Exec=" MFRUN " com.example.app --open %f\n"        },
+        /* other entries can run the command of the application, or any other program of the image */
+        {OTHER_ENTRY,
+         HEADER "Exec=app --open %f\n",
+         HEADER "Exec=" MF_MFRUN_PATH " com.example.app --open %f\n"                                                                                                                },
         {OTHER_ENTRY,
          HEADER "Exec=/app/libexec/tool\n",
-         HEADER "Exec=" MFRUN " --command=/app/libexec/tool com.example.app\n"                                                                                                             },
-        {OTHER_ENTRY, HEADER "Exec=tool %u\n",                                                                                  HEADER "Exec=" MFRUN " --command=tool com.example.app %u\n"},
+         HEADER "Exec=" MF_MFRUN_PATH " --command=/app/libexec/tool com.example.app\n"                                                                                              },
+        {OTHER_ENTRY,
+         HEADER "Exec=tool %u\n",
+         HEADER "Exec=" MF_MFRUN_PATH " --command=tool com.example.app %u\n"                                                                                                        },
 
-        /* the actions of the main entry are free as well */
+        /* the actions of the main entry can run any program of the image */
         {MAIN_ENTRY,
          HEADER "Exec=app\nActions=Tool;\n\n[Desktop Action Tool]\nName=Tool\nExec=tool\n",
-         HEADER "Exec=" MFRUN
-                " com.example.app\nActions=Tool;\n\n[Desktop Action Tool]\nName=Tool\nExec=" MFRUN
-                " --command=tool com.example.app\n"                                                                                                                                        },
+         HEADER "Exec=" MF_MFRUN_PATH
+                " com.example.app\nActions=Tool;\n\n[Desktop Action Tool]\nName=Tool\nExec=" MF_MFRUN_PATH
+                " --command=tool com.example.app\n"                                                                                                                                 },
 
-        /* everything else stays, except that the file ends in a newline */
+        /* all other lines stay as they are, and the rendered file always ends in a newline */
         {MAIN_ENTRY,
          "# a comment\n\n[Desktop Entry]\nType=Application\nName=App\nName[de_DE.UTF-8@euro]=Äpp\n"
          "X-KDE-Something=1\nExec=app\nIcon=com.example.app\nMimeType=application/x-app;x-scheme-handler/app;\nTerminal=false",
          "# a comment\n\n[Desktop Entry]\nType=Application\nName=App\nName[de_DE.UTF-8@euro]=Äpp\n"
-         "X-KDE-Something=1\nExec=" MFRUN
-         " com.example.app\nIcon=com.example.app\nMimeType=application/x-app;x-scheme-handler/app;\nTerminal=false\n"                                                                      },
+         "X-KDE-Something=1\nExec=" MF_MFRUN_PATH
+         " com.example.app\nIcon=com.example.app\nMimeType=application/x-app;x-scheme-handler/app;\nTerminal=false\n"                                                               },
 
         /* the program of TryExec is in the image, and not on the host */
-        {MAIN_ENTRY,  HEADER "TryExec=app\nExec=app\n",                                                                         HEADER "Exec=" MFRUN " com.example.app\n"                  },
+        {MAIN_ENTRY,  HEADER "TryExec=app\nExec=app\n",                                                                         HEADER "Exec=" MF_MFRUN_PATH " com.example.app\n"   },
         {MAIN_ENTRY,
          HEADER "DBusActivatable=false\nExec=app\n",
-         HEADER "DBusActivatable=false\nExec=" MFRUN " com.example.app\n"                                                                                                                  },
+         HEADER "DBusActivatable=false\nExec=" MF_MFRUN_PATH " com.example.app\n"                                                                                                   },
     };
 
     for (gsize i = 0; i < G_N_ELEMENTS(entries); i++) {
@@ -520,7 +523,7 @@ test_desktop_entries(void)
         const char *data;
 
         g_test_message("%s", entries[i].content);
-        rendered = test_render_desktop_entry(entries[i].name, content, &error);
+        rendered = mft_render_desktop_entry(entries[i].name, content, &error);
         g_assert_no_error(error);
         data = g_bytes_get_data(rendered, &size);
         text = g_strndup(data, size);
@@ -553,7 +556,7 @@ test_desktop_entries_refused(void)
         ENTRY(MAIN_ENTRY, HEADER "Exec=app\n   \n"),
         ENTRY(MAIN_ENTRY, HEADER "Exec=app\nno key\n"),
 
-        /* keys that would slip past us */
+        /* keys that would escape our checks */
         ENTRY(MAIN_ENTRY, HEADER "Exec=app\nExec[de]=/bin/evil\n"),
         ENTRY(MAIN_ENTRY, HEADER "Exec=app\nTryExec[de]=/bin/evil\n"),
         ENTRY(MAIN_ENTRY, HEADER "Exec=app\nType[de]=Link\n"),
@@ -609,7 +612,7 @@ test_desktop_entries_refused(void)
         g_autoptr(GBytes) rendered = NULL;
 
         g_test_message("%s", entries[i].content);
-        rendered = test_render_desktop_entry(entries[i].name, content, &error);
+        rendered = mft_render_desktop_entry(entries[i].name, content, &error);
         g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
         g_assert_null(rendered);
     }
@@ -631,14 +634,14 @@ test_text_size_limit(void)
 
     {
         g_autoptr(GBytes) fits = g_bytes_new_static(largest, limit);
-        g_autoptr(GBytes) rendered = test_render_desktop_entry(MAIN_ENTRY, fits, &error);
+        g_autoptr(GBytes) rendered = mft_render_desktop_entry(MAIN_ENTRY, fits, &error);
 
         g_assert_no_error(error);
         g_assert_nonnull(rendered);
     }
     {
         g_autoptr(GBytes) too_large = g_bytes_new_static(largest, limit + 1);
-        g_autoptr(GBytes) rendered = test_render_desktop_entry(MAIN_ENTRY, too_large, &error);
+        g_autoptr(GBytes) rendered = mft_render_desktop_entry(MAIN_ENTRY, too_large, &error);
 
         g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
         g_assert_null(rendered);
@@ -656,46 +659,48 @@ test_units(void)
     } units[] = {
         /* the commands run in the environment of the component, and nothing else changes */
         {"[Unit]\nDescription=App\n\n[Service]\nType=oneshot\nExecStart=/app/bin/app --report\n\n"
-         "[Install]\nWantedBy=multi-user.target\n",                                                                     "[Unit]\nDescription=App\n\n[Service]\nType=oneshot\nExecStart=" MFRUN
+         "[Install]\nWantedBy=multi-user.target\n",                                                                     "[Unit]\nDescription=App\n\n[Service]\nType=oneshot\nExecStart=" MF_MFRUN_PATH
          " com.example.app --report\n\n"
-         "[Install]\nWantedBy=multi-user.target\n"                                                                                    },
-        {"[Service]\nExecStart=app",                                                                                             "[Service]\nExecStart=" MFRUN " com.example.app\n"               },
-        {"[Service]\nExecStart=tool",                                                                                            "[Service]\nExecStart=" MFRUN " --command=tool com.example.app\n"},
+         "[Install]\nWantedBy=multi-user.target\n"                                                                              },
+        {"[Service]\nExecStart=app",                                                                                             "[Service]\nExecStart=" MF_MFRUN_PATH " com.example.app\n" },
+        {"[Service]\nExecStart=tool",
+         "[Service]\nExecStart=" MF_MFRUN_PATH " --command=tool com.example.app\n"                                                                                                          },
 
         /* every key that runs something, however often it is there */
         {"[Service]\nExecCondition=/app/bin/a\nExecStartPre=/app/bin/b\nExecStartPre=/app/bin/c\n"
          "ExecStartPost=/app/bin/d\nExecReload=/app/bin/e\nExecReloadPost=/app/bin/f\n"
-         "ExecStop=/app/bin/g\nExecStopPost=/app/bin/h\n",                                                              "[Service]\nExecCondition=" MFRUN " --command=/app/bin/a com.example.app\n"
-         "ExecStartPre=" MFRUN " --command=/app/bin/b com.example.app\n"
-         "ExecStartPre=" MFRUN " --command=/app/bin/c com.example.app\n"
-         "ExecStartPost=" MFRUN " --command=/app/bin/d com.example.app\n"
-         "ExecReload=" MFRUN " --command=/app/bin/e com.example.app\n"
-         "ExecReloadPost=" MFRUN " --command=/app/bin/f com.example.app\n"
-         "ExecStop=" MFRUN " --command=/app/bin/g com.example.app\n"
-         "ExecStopPost=" MFRUN " --command=/app/bin/h com.example.app\n"                                                       },
+         "ExecStop=/app/bin/g\nExecStopPost=/app/bin/h\n",                                                              "[Service]\nExecCondition=" MF_MFRUN_PATH " --command=/app/bin/a com.example.app\n"
+         "ExecStartPre=" MF_MFRUN_PATH " --command=/app/bin/b com.example.app\n"
+         "ExecStartPre=" MF_MFRUN_PATH " --command=/app/bin/c com.example.app\n"
+         "ExecStartPost=" MF_MFRUN_PATH " --command=/app/bin/d com.example.app\n"
+         "ExecReload=" MF_MFRUN_PATH " --command=/app/bin/e com.example.app\n"
+         "ExecReloadPost=" MF_MFRUN_PATH " --command=/app/bin/f com.example.app\n"
+         "ExecStop=" MF_MFRUN_PATH " --command=/app/bin/g com.example.app\n"
+         "ExecStopPost=" MF_MFRUN_PATH " --command=/app/bin/h com.example.app\n"                                         },
         {"[Socket]\nExecStopPre=/app/bin/a\n",
-         "[Socket]\nExecStopPre=" MFRUN " --command=/app/bin/a com.example.app\n"                                                                                                                 },
+         "[Socket]\nExecStopPre=" MF_MFRUN_PATH " --command=/app/bin/a com.example.app\n"                                                                                                   },
 
         /* a failure may be ignored, and a key can be cleared */
         {"[Service]\nExecStartPre=-/app/bin/a b\n",
-         "[Service]\nExecStartPre=-" MFRUN " --command=/app/bin/a com.example.app b\n"                                                                                                            },
-        {"[Service]\nExecStart=-app\n",                                                                                          "[Service]\nExecStart=-" MFRUN " com.example.app\n"              },
+         "[Service]\nExecStartPre=-" MF_MFRUN_PATH " --command=/app/bin/a com.example.app b\n"                                                                                              },
+        {"[Service]\nExecStart=-app\n",                                                                                          "[Service]\nExecStart=-" MF_MFRUN_PATH " com.example.app\n"},
         {"[Service]\nExecStart=\nExecStart=app\n",
-         "[Service]\nExecStart=\nExecStart=" MFRUN " com.example.app\n"                                                                                                                           },
+         "[Service]\nExecStart=\nExecStart=" MF_MFRUN_PATH " com.example.app\n"                                                                                                             },
 
         /* semicolons that do not separate commands */
-        {"[Service]\nExecStart=app a \\; b\n",                                                                                   "[Service]\nExecStart=" MFRUN " com.example.app a \\; b\n"       },
+        {"[Service]\nExecStart=app a \\; b\n",
+         "[Service]\nExecStart=" MF_MFRUN_PATH " com.example.app a \\; b\n"                                                                                                                 },
         {"[Service]\nExecStart=app --x=a;b c;\n",
-         "[Service]\nExecStart=" MFRUN " com.example.app --x=a;b c;\n"                                                                                                                            },
+         "[Service]\nExecStart=" MF_MFRUN_PATH " com.example.app --x=a;b c;\n"                                                                                                              },
 
         /* what is not a command stays, like comments and groups we do not know */
         {"# a\n; b \\\n[X-Foo]\nBar=1\n[Service]\nExecPaths=/app\nExecSearchPath=/app/bin\nNoExecPaths=/tmp\nEnvironment=A=B\n",
-         "# a\n; b \\\n[X-Foo]\nBar=1\n[Service]\nExecPaths=/app\nExecSearchPath=/app/bin\nNoExecPaths=/tmp\nEnvironment=A=B\n"                                                                   },
+         "# a\n; b \\\n[X-Foo]\nBar=1\n[Service]\nExecPaths=/app\nExecSearchPath=/app/bin\nNoExecPaths=/tmp\nEnvironment=A=B\n"                                                             },
 
-        /* the unit can name itself and its siblings */
+        /* Alias and Also can name units of the component */
         {"[Install]\nAlias=com.example.app-two.service com.example.app.three.service\nAlso=com.example.app.socket\n",
-         "[Install]\nAlias=com.example.app-two.service com.example.app.three.service\nAlso=com.example.app.socket\n"                                                                              },
-        {"[Install]\nAlias=\n",                                                                                                  "[Install]\nAlias=\n"                                            },
+         "[Install]\nAlias=com.example.app-two.service com.example.app.three.service\nAlso=com.example.app.socket\n"                                                                        },
+        {"[Install]\nAlias=\n",                                                                                                  "[Install]\nAlias=\n"                                      },
     };
 
     for (gsize i = 0; i < G_N_ELEMENTS(units); i++) {
@@ -707,7 +712,7 @@ test_units(void)
         const char *data;
 
         g_test_message("%s", units[i].content);
-        rendered = test_render("systemd-unit-system", UNIT_PATH, content, &error);
+        rendered = mft_render("systemd-unit-system", UNIT_PATH, content, &error);
         g_assert_no_error(error);
         data = g_bytes_get_data(rendered, &size);
         text = g_strndup(data, size);
@@ -791,7 +796,7 @@ test_units_refused(void)
         g_autoptr(GBytes) rendered = NULL;
 
         g_test_message("%s", units[i].content);
-        rendered = test_render("systemd-unit-system", UNIT_PATH, content, &error);
+        rendered = mft_render("systemd-unit-system", UNIT_PATH, content, &error);
         g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
         g_assert_null(rendered);
     }
@@ -808,7 +813,7 @@ test_units_refused(void)
 static void
 test_mime_packages(void)
 {
-    /* written with single quotes, as we would have to escape the double ones that we expect */
+    /* the tables use single quotes to avoid escapes, and we convert the expected text to double quotes */
     static const struct {
         const char *content;
         const char *expected;
@@ -876,7 +881,7 @@ test_mime_packages(void)
         const char *data;
 
         g_test_message("%s", packages[i].content);
-        rendered = test_render("mime-package", MIME_PATH, content, &error);
+        rendered = mft_render("mime-package", MIME_PATH, content, &error);
         g_assert_no_error(error);
         data = g_bytes_get_data(rendered, &size);
         text = g_strndup(data, size);
@@ -942,7 +947,7 @@ test_mime_packages_refused(void)
         MIME_OPEN MIME_TYPE "<glob pattern='*.abc' weight='-1'/>" MIME_END MIME_CLOSE,
         MIME_OPEN MIME_TYPE "<magic priority='100'/>" MIME_END MIME_CLOSE,
 
-        /* the database holds these as words on a line */
+        /* the MIME database holds root-XML values as words on one line */
         MIME_OPEN MIME_TYPE "<root-XML namespaceURI='a b' localName='c'/>" MIME_END MIME_CLOSE,
         MIME_OPEN MIME_TYPE "<root-XML namespaceURI='a' localName='c&#10;d'/>" MIME_END MIME_CLOSE,
         MIME_OPEN MIME_TYPE "<root-XML namespaceURI='' localName='c'/>" MIME_END MIME_CLOSE,
@@ -962,7 +967,7 @@ test_mime_packages_refused(void)
         g_autoptr(GBytes) rendered = NULL;
 
         g_test_message("%s", packages[i]);
-        rendered = test_render("mime-package", MIME_PATH, content, &error);
+        rendered = mft_render("mime-package", MIME_PATH, content, &error);
         g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
         g_assert_null(rendered);
     }
@@ -991,7 +996,7 @@ test_udev_rules(void)
         "ENV{SYSTEMD_USER_WANTS}+=\"com.example.app.service\"\n",
         "ENV{SYSTEMD_WANTS}=\"\"\n",
 
-        /* comparing is fine, as that does not change or start anything */
+        /* comparing a value does not change or start anything */
         "ENV{SYSTEMD_WANTS}==\"other.service\"\n",
     };
 
@@ -1001,7 +1006,7 @@ test_udev_rules(void)
         g_autoptr(GBytes) rendered = NULL;
 
         g_test_message("%s", rules[i]);
-        rendered = test_render("udev-rule", RULE_PATH, content, &error);
+        rendered = mft_render("udev-rule", RULE_PATH, content, &error);
         g_assert_no_error(error);
         g_assert_true(g_bytes_equal(rendered, content));
     }
@@ -1033,7 +1038,7 @@ test_udev_rules_refused(void)
         RULE("KERNEL==\"a\"RUN+=\"/bin/evil\"\n"),
         RULE("\tRUN+=\"/bin/evil\"\n"),
 
-        /* the host outside of the device */
+        /* changes outside of the matched device */
         RULE("SYSCTL{kernel/core_pattern}=\"|/bin/evil\"\n"),
         RULE("ATTR{[block/sda]size}=\"1\"\n"),
         RULE("ATTR{$env{X}}=\"1\"\n"),
@@ -1084,7 +1089,7 @@ test_udev_rules_refused(void)
         g_autoptr(GBytes) rendered = NULL;
 
         g_test_message("%s", rules[i].content);
-        rendered = test_render("udev-rule", RULE_PATH, content, &error);
+        rendered = mft_render("udev-rule", RULE_PATH, content, &error);
         g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
         g_assert_null(rendered);
     }

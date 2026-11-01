@@ -136,7 +136,7 @@ mf_run_mount_dir = mf_runtimedir / 'rund'
 mf_run_cache_dir = mf_cache_dir / 'run'
 mf_capsule_bin_dir = mf_prefix / mf_libdir / 'capsule'
 
-# where manifoldd exports the host integration files of apps to
+# where manifoldd installs the systemd units and udev rules of apps to
 mf_integration_prefix = get_option('integration-prefix')
 if not mf_integration_prefix.startswith('/')
     error('integration-prefix must be an absolute path')
@@ -175,7 +175,7 @@ conf.set_quoted('MF_RUN_MOUNT_DIR', mf_run_mount_dir)
 conf.set_quoted('MF_RUN_CACHE_DIR', mf_run_cache_dir)
 conf.set_quoted('MF_CAPSULE_BIN_DIR', mf_capsule_bin_dir)
 conf.set_quoted('MF_INTEGRATION_PREFIX', mf_integration_prefix)
-conf.set_quoted('MF_BINDIR', mf_bindir)
+conf.set_quoted('MF_MFRUN_PATH', mf_bindir / 'mfrun')
 conf.set_quoted('GETTEXT_PACKAGE', 'manifold')
 conf.set_quoted('LOCALEDIR',
                 get_option('prefix') / get_option('localedir'))

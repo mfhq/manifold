@@ -104,6 +104,7 @@ Runtime:
 - Linux kernel ≥ 6.12
 - systemd ≥ 257
 - polkit ≥ 1.0
+- erofs-utils ≥ 1.8.5
 - Kernel compiled with: loop devices, device-mapper verity, EROFS, overlayfs
 
 Optional:

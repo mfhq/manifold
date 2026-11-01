@@ -94,6 +94,15 @@ test('store',
     suite: 'unit',
 )
 
+test('image-reader',
+    executable('test-image-reader',
+        ['test-image-reader.c'],
+        include_directories: [root_inc_dir],
+        dependencies: [manifoldd_static_dep, mft_test_utils_dep, blake3_dep],
+    ),
+    suite: 'unit',
+)
+
 test('compose',
     executable('test-run-compose',
         ['test-compose.c'],

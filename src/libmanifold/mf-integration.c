@@ -24,22 +24,19 @@
 /* the key of the aliases in the integration section, which are not files */
 #define ALIAS_KEY "alias"
 
-/* everything an image exports is in here */
+/* the directory in an image that holds everything the image can export */
 #define APP_DIR "/app/"
 
-/* the program an application runs by default is in here */
+/* the directory of an image that holds the default program of an application */
 #define APP_BIN_DIR APP_DIR "bin/"
-
-/* what everything we install runs a component with */
-#define MFRUN_PATH MF_BINDIR "/mfrun"
 
 /* the first group of a desktop entry, which describes the application */
 #define DESKTOP_MAIN_GROUP "[Desktop Entry]"
 
-/* what the name of a key is made of, in files like desktop entries */
+/* the characters of a key name in desktop entries and systemd units */
 #define KEY_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-"
 
-/* what the language of a key is made of, like de_DE.UTF-8@euro */
+/* the characters of the language of a desktop entry key, like de_DE.UTF-8@euro */
 #define LOCALE_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@-"
 
 static const char *const UNIT_SUFFIXES[] = {".service", ".socket", ".timer", ".path", ".target", NULL};
@@ -53,7 +50,7 @@ static const struct {
     [MF_INTEGRATION_KIND_DESKTOP_ENTRY] = {"desktop-entry",
                                      "share/applications", (const char *const[]){".desktop", NULL}},
     [MF_INTEGRATION_KIND_ICON] = {"icons",
-                                     "share/icons/hicolor", (const char *const[]){".png", ".svg", NULL}},
+                                     "share/icons/hicolor", (const char *const[]){".png", ".svg", ".svz", ".jxl", NULL}},
     [MF_INTEGRATION_KIND_MIME_PACKAGE] = {"mime-package",
                                      "share/mime/packages", (const char *const[]){".xml", NULL}},
     [MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM] = {"systemd-unit-system", "lib/systemd/system", UNIT_SUFFIXES},
@@ -62,8 +59,8 @@ static const struct {
                                      "lib/udev/rules.d", (const char *const[]){".rules", NULL}},
 };
 
-/* Aliases come last in the PATH, so they can not replace these commands on a host that
- * has them, but on any other host, an alias could ask for the passwords they are given.
+/* Aliases come last in the PATH, so an alias can not replace a command the host has. On a
+ * host that lacks a command of this list, an alias of that name could ask for its passwords.
  * This list is just a tiny safeguard to prevent some of the most obvious deception attempts. */
 static const char *const RESERVED_ALIASES[] = {
     "doas",
@@ -82,7 +79,8 @@ static const char *const RESERVED_ALIASES[] = {
     NULL,
 };
 
-/* on a host without a default for these, a new desktop entry would get the links a user opens */
+/* link types no application may handle, as on a host without a default handler, a new
+ * desktop entry would receive all links of that type */
 static const char *const RESERVED_MIME_TYPES[] = {
     "x-scheme-handler/file",
     "x-scheme-handler/ftp",
@@ -92,7 +90,7 @@ static const char *const RESERVED_MIME_TYPES[] = {
     NULL,
 };
 
-/* what the keys of a udev rule are made of */
+/* the characters of a key in a udev rule */
 #define UDEV_KEY_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 /* the namespace of a MIME package, which is the only one we accept */
@@ -121,14 +119,14 @@ static const char *const UNIT_COMMAND_KEYS[] = {
     NULL,
 };
 
-/* the keys of a systemd unit that look like one of those, but do not run anything */
+/* the keys of a systemd unit that start with Exec, but do not run a command */
 static const char *const UNIT_NON_COMMAND_KEYS[] = {
     "ExecPaths",
     "ExecSearchPath",
     NULL,
 };
 
-/* the keys of a desktop entry that mean something to us, in another language they would slip past */
+/* the keys of a desktop entry that we check, which must not have a language, as we would miss `Exec[de]` */
 static const char *const UNLOCALIZED_DESKTOP_KEYS[] = {
     "DBusActivatable",
     "Exec",
@@ -246,6 +244,29 @@ mf_integration_file_get_checksum(MfIntegrationFile *file, MfChecksumKind kind)
     g_return_val_if_fail(MF_IS_INTEGRATION_FILE(file), NULL);
     g_return_val_if_fail(kind > MF_CHECKSUM_KIND_UNKNOWN && kind < MF_CHECKSUM_KIND_LAST, NULL);
     return file->checksums[kind];
+}
+
+/**
+ * mf_integration_file_check_content:
+ * @file: an #MfIntegrationFile
+ * @content: what was read for this file
+ *
+ * Returns: %TRUE if @content is what the manifest records for the file
+ */
+gboolean
+mf_integration_file_check_content(MfIntegrationFile *file, GBytes *content)
+{
+    g_autofree char *sha256 = NULL;
+    g_autofree char *blake3 = NULL;
+
+    g_return_val_if_fail(MF_IS_INTEGRATION_FILE(file), FALSE);
+    g_return_val_if_fail(content != NULL, FALSE);
+
+    sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, content);
+    blake3 = mf_blake3_of_bytes(content);
+
+    return g_str_equal(sha256, file->checksums[MF_CHECKSUM_KIND_SHA256]) &&
+           g_str_equal(blake3, file->checksums[MF_CHECKSUM_KIND_BLAKE3]);
 }
 
 /**
@@ -587,7 +608,7 @@ mf_integration_name_is_valid(MfIntegrationKind kind, const char *name, const cha
         return FALSE;
     stem_len = strlen(name) - strlen(suffix);
 
-    /* udev runs the rules in the order of their names, so they start with a number */
+    /* the name of a rules file starts with a number, as udev orders the files by their names */
     if (kind == MF_INTEGRATION_KIND_UDEV_RULE) {
         if (stem_len < 3 || !g_ascii_isdigit(name[0]) || !g_ascii_isdigit(name[1]) || name[2] != '-')
             return FALSE;
@@ -595,7 +616,7 @@ mf_integration_name_is_valid(MfIntegrationKind kind, const char *name, const cha
         stem_len -= 3;
     }
 
-    /* a template unit ends in `@`, and its instances are not files */
+    /* the name of a template unit ends in `@`, and its instances have no file of their own */
     if (unit) {
         if (stem_len > 0 && stem[stem_len - 1] == '@')
             stem_len--;
@@ -630,7 +651,8 @@ mf_integration_check_file(MfIntegrationFile *file, const char *component_id, GEr
     name = strrchr(rest, '/');
     name = name != NULL ? name + 1 : rest;
 
-    /* only the icon theme has directories, and the other files are found directly in theirs */
+    /* icons are in the size and category directories of the theme, all other files have to be
+     * directly in the directory of their kind */
     if (file->kind == MF_INTEGRATION_KIND_ICON) {
         g_autofree char *icon_dir = g_strndup(rest, (gsize) (name - rest));
 
@@ -729,8 +751,8 @@ mf_integration_check(MfIntegration *integration, const char *component_id, GErro
 {
     g_autoptr(GHashTable) seen = g_hash_table_new(g_str_hash, g_str_equal);
 
-    /* the names of the files start with the ID, and they share directories with the host, so
-     * an ID like `ssh` must not be able to claim `ssh.service` */
+    /* integration files are named after the ID and share directories with the host, so a short
+     * ID like `ssh` must not be able to claim a file like `ssh.service` */
     if (!mf_reverse_dns_name_is_valid(component_id)) {
         mf_integration_set_error(error,
                                  _("%s is not a reverse-DNS name of at least three parts"),
@@ -760,7 +782,7 @@ mf_integration_check(MfIntegration *integration, const char *component_id, GErro
 
         if (!mf_integration_check_alias(alias, error))
             return FALSE;
-        /* paths and the names of aliases can not be the same, so they share the table */
+        /* a file path can not equal the name of an alias, so both can use the same table */
         if (!g_hash_table_add(seen, alias->name)) {
             mf_integration_set_error(error, _("%s is listed twice"), alias->name);
             return FALSE;
@@ -838,7 +860,7 @@ mf_integration_wrap_command(const char *command_line,
         return NULL;
     *ret_runs_app = g_str_equal(program, app_command) || g_str_equal(program, app_path);
 
-    wrapped = g_string_new(MFRUN_PATH);
+    wrapped = g_string_new(MF_MFRUN_PATH);
     if (!*ret_runs_app)
         g_string_append_printf(wrapped, " --command=%s", program);
     g_string_append_printf(wrapped, " %s", component_id);
@@ -924,7 +946,7 @@ mf_integration_mime_types_are_valid(const char *value)
  * mf_integration_render_desktop_entry:
  *
  * We go through the file line by line and only change what we have to. A
- * library for reading these files would give us the keys, but it has its own
+ * library for reading desktop entries would give us the keys, but it has its own
  * idea of what they are, which is not always the one of the program that reads
  * the file later. So we refuse everything that is not plain, and we keep what
  * we do not know, as unknown keys do not run anything.
@@ -961,12 +983,12 @@ mf_integration_render_desktop_entry(MfIntegrationFile *file,
         const char *value;
         gsize key_len;
 
-        /* the file ended in a newline */
+        /* splitting a file that ends in a newline leaves an empty last line */
         if (line[0] == '\0' && lines[i + 1] == NULL)
             break;
 
         if (line[0] == '\0' || line[0] == '#') {
-            /* nothing to look at */
+            /* blank lines and comments need no checks */
         } else if (line[0] == '[') {
             if (!mf_integration_group_is_valid(line))
                 problem = _("this is not a valid group");
@@ -1042,7 +1064,7 @@ mf_integration_render_desktop_entry(MfIntegrationFile *file,
  *
  * systemd runs several commands from one key if a lone semicolon separates
  * them, and only the first one would run in the environment of the component.
- * This also refuses such a semicolon in quotes, as we do not parse those: a
+ * A lone semicolon in quotes gets refused too, as we do not parse quotes: a
  * program that wants one as its argument can have it as `\;`.
  *
  * Returns: %TRUE if @command_line can only be one command
@@ -1087,7 +1109,7 @@ mf_integration_unit_names_are_valid(MfIntegrationKind kind, const char *value, c
  * admin can decide to install one that runs as root. All we do here is to
  * change as few lines as possible, so that its commands run in the
  * environment of the component, and to refuse what would get in the way of
- * that. As for desktop entries, we do not use a library to read the file.
+ * that. We read the lines ourselves, as a library could disagree with systemd.
  *
  * Returns: (transfer full): the unit to install, or %NULL
  */
@@ -1112,12 +1134,12 @@ mf_integration_render_unit(MfIntegrationFile *file, MfManifest *manifest, GBytes
         const char *value;
         gsize key_len;
 
-        /* the file ended in a newline */
+        /* splitting a file that ends in a newline leaves an empty last line */
         if (line[0] == '\0' && lines[i + 1] == NULL)
             break;
 
         if (line[0] == '\0' || line[0] == '#' || line[0] == ';') {
-            /* nothing to look at */
+            /* blank lines and comments need no checks */
         } else if (line[0] == '[') {
             if (!mf_integration_group_is_valid(line))
                 problem = _("this is not a valid group");
@@ -1132,9 +1154,9 @@ mf_integration_render_unit(MfIntegrationFile *file, MfManifest *manifest, GBytes
             key = g_strndup(line, key_len);
 
             if (g_strv_contains(UNIT_COMMAND_KEYS, key)) {
-                /* a key without a value clears the commands of the key */
+                /* an empty value clears the commands of the key, so there is nothing to wrap */
                 if (value[0] != '\0') {
-                    /* the only prefix that does not change how a command runs: its failure is ignored */
+                    /* `-` is the only prefix we allow, as it only ignores a failure of the command */
                     gboolean may_fail = value[0] == '-';
                     const char *command_line = may_fail ? value + 1 : value;
                     gboolean runs_app;
@@ -1229,7 +1251,7 @@ mf_integration_mime_element_problem(const GSList *stack, const char *element)
         return _("the document has to consist of one mime-info element");
     if (below_root != g_str_equal(element, "mime-type"))
         return _("only mime-type elements can be in mime-info");
-    /* a name with a namespace prefix means the element without it to other parsers */
+    /* libxml2 resolves namespace prefixes, so `x:alias` can be an `alias` element for it */
     if (strchr(element, ':') != NULL)
         return _("namespace prefixes are not supported");
     if (g_strv_contains(REFUSED_MIME_ELEMENTS, element))
@@ -1306,11 +1328,11 @@ mf_integration_mime_on_text(GMarkupParseContext *context,
 /**
  * mf_integration_render_mime_package:
  *
- * Unlike the other files, we write a MIME package anew from what we parsed.
+ * We write a MIME package anew from what we parsed.
  * The tool that reads it later runs as root and uses another XML parser, which
  * follows the encoding a file declares and DTDs. So a package could hide
  * elements from us in a way that parser sees them. What we write has none of
- * that, so it can only hold what we looked at.
+ * that, so the package can only hold what we looked at.
  *
  * Returns: (transfer full): the package to install, or %NULL
  */
@@ -1342,7 +1364,7 @@ mf_integration_render_mime_package(MfIntegrationFile *file, GBytes *content, GEr
                                          NULL);
     if (!g_markup_parse_context_parse(context, data != NULL ? data : "", (gssize) size, &local_error) ||
         !g_markup_parse_context_end_parse(context, &local_error)) {
-        /* the message can quote the file */
+        /* the message of the parser can quote the file, so we have to escape it */
         g_autofree char *message = g_strescape(local_error->message, NULL);
 
         mf_integration_set_error(error, _("%s: %s"), file->path, message);
@@ -1406,9 +1428,8 @@ mf_integration_udev_token_problem(const char *key,
                                   const char *value,
                                   const char *component_id)
 {
-    /* a rule has to run in the sandbox of udev, which mfrun can not work in, and which
-     * has to be left quickly, so there is nothing a rule could usefully run. This
-     * includes PROGRAM, which runs its program to compare the output. */
+    /* mfrun can not work in the sandbox of udev, so a rule has no way to run a program of its
+     * image. We refuse PROGRAM with any operator, as it runs a program even to compare. */
     if (g_str_equal(key, "RUN") || g_str_equal(key, "PROGRAM") ||
         (g_str_equal(key, "IMPORT") && g_strcmp0(attribute, "program") == 0))
         return _("rules can not run programs");
@@ -1417,7 +1438,7 @@ mf_integration_udev_token_problem(const char *key,
 
     if (g_str_equal(key, "SYSCTL"))
         return _("rules can not change kernel parameters");
-    /* brackets name another device, and the others get their meaning when the rule runs */
+    /* brackets name a different device, and `$` or `%` are only expanded when the rule runs */
     if (g_str_equal(key, "ATTR") && attribute != NULL && attribute[strcspn(attribute, "[$%")] != '\0')
         return _("rules can only change the device they matched");
     if (g_str_equal(key, "ENV") && g_strcmp0(attribute, "SYSTEMD_WANTS") == 0 &&
@@ -1509,7 +1530,7 @@ mf_integration_udev_line_problem(const char *line, const char *component_id)
  * everyone is as bad as one that runs something. Only the admin can decide to
  * install rules, and all we do here is to refuse what rules should not need.
  *
- * We do not change the file, so nothing else depends on what udev makes of it.
+ * We install the file as it is.
  *
  * Returns: (transfer full): the rules to install, or %NULL
  */

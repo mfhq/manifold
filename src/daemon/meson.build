@@ -3,6 +3,8 @@
 #
 
 manifoldd_src = [
+    'mfd-image-reader.c',
+    'mfd-image-reader.h',
     'mfd-manager.c',
     'mfd-manager.h',
     'mfd-policy.c',
@@ -24,6 +26,7 @@ manifoldd_lib = static_library('manifoldd',
     dependencies: [
         manifold_dep,
         glib_dep,
+        gio_dep,
         libsystemd_dep,
         libzip_dep,
         appstream_dep,
