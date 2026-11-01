@@ -399,18 +399,17 @@ test_check_messages(void)
 }
 
 /**
- * test_render_desktop_entry:
- * @name: the file name of the desktop entry
- * @content: what the desktop entry holds
+ * test_render:
+ * @kind: the key of the kind of the file
+ * @path: where the file is in the image
+ * @content: what the file holds
  *
- * Returns: (transfer full) (nullable): the desktop entry to install
+ * Returns: (transfer full) (nullable): the file to install
  */
 static GBytes *
-test_render_desktop_entry(const char *name, GBytes *content, GError **error)
+test_render(const char *kind, const char *path, GBytes *content, GError **error)
 {
-    g_autofree char *section = g_strdup_printf(
-        "{\"desktop-entry\": [{\"path\": \"/app/share/applications/%s\", " HASHES "}]}",
-        name);
+    g_autofree char *section = g_strdup_printf("{\"%s\": [{\"path\": \"%s\", " HASHES "}]}", kind, path);
     g_autoptr(GError) local_error = NULL;
     g_autoptr(MfManifest) manifest = test_manifest_new(section, &local_error);
     MfIntegrationFile *file;
@@ -420,6 +419,21 @@ test_render_desktop_entry(const char *name, GBytes *content, GError **error)
     file = g_ptr_array_index(mf_integration_get_files(mf_manifest_get_integration(manifest)), 0);
 
     return mf_integration_file_render(file, manifest, content, error);
+}
+
+/**
+ * test_render_desktop_entry:
+ * @name: the file name of the desktop entry
+ * @content: what the desktop entry holds
+ *
+ * Returns: (transfer full) (nullable): the desktop entry to install
+ */
+static GBytes *
+test_render_desktop_entry(const char *name, GBytes *content, GError **error)
+{
+    g_autofree char *path = g_strconcat("/app/share/applications/", name, NULL);
+
+    return test_render("desktop-entry", path, content, error);
 }
 
 #define MAIN_ENTRY  "com.example.app.desktop"
@@ -605,6 +619,158 @@ test_text_size_limit(void)
     }
 }
 
+#define UNIT_PATH "/app/lib/systemd/system/com.example.app.service"
+
+static void
+test_units(void)
+{
+    static const struct {
+        const char *content;
+        const char *expected;
+    } units[] = {
+        /* the commands run in the environment of the component, and nothing else changes */
+        {"[Unit]\nDescription=App\n\n[Service]\nType=oneshot\nExecStart=/app/bin/app --report\n\n"
+         "[Install]\nWantedBy=multi-user.target\n",                                                                     "[Unit]\nDescription=App\n\n[Service]\nType=oneshot\nExecStart=" MFRUN
+         " com.example.app --report\n\n"
+         "[Install]\nWantedBy=multi-user.target\n"                                                                                    },
+        {"[Service]\nExecStart=app",                                                                                             "[Service]\nExecStart=" MFRUN " com.example.app\n"               },
+        {"[Service]\nExecStart=tool",                                                                                            "[Service]\nExecStart=" MFRUN " --command=tool com.example.app\n"},
+
+        /* every key that runs something, however often it is there */
+        {"[Service]\nExecCondition=/app/bin/a\nExecStartPre=/app/bin/b\nExecStartPre=/app/bin/c\n"
+         "ExecStartPost=/app/bin/d\nExecReload=/app/bin/e\nExecReloadPost=/app/bin/f\n"
+         "ExecStop=/app/bin/g\nExecStopPost=/app/bin/h\n",                                                              "[Service]\nExecCondition=" MFRUN " --command=/app/bin/a com.example.app\n"
+         "ExecStartPre=" MFRUN " --command=/app/bin/b com.example.app\n"
+         "ExecStartPre=" MFRUN " --command=/app/bin/c com.example.app\n"
+         "ExecStartPost=" MFRUN " --command=/app/bin/d com.example.app\n"
+         "ExecReload=" MFRUN " --command=/app/bin/e com.example.app\n"
+         "ExecReloadPost=" MFRUN " --command=/app/bin/f com.example.app\n"
+         "ExecStop=" MFRUN " --command=/app/bin/g com.example.app\n"
+         "ExecStopPost=" MFRUN " --command=/app/bin/h com.example.app\n"                                                       },
+        {"[Socket]\nExecStopPre=/app/bin/a\n",
+         "[Socket]\nExecStopPre=" MFRUN " --command=/app/bin/a com.example.app\n"                                                                                                                 },
+
+        /* a failure may be ignored, and a key can be cleared */
+        {"[Service]\nExecStartPre=-/app/bin/a b\n",
+         "[Service]\nExecStartPre=-" MFRUN " --command=/app/bin/a com.example.app b\n"                                                                                                            },
+        {"[Service]\nExecStart=-app\n",                                                                                          "[Service]\nExecStart=-" MFRUN " com.example.app\n"              },
+        {"[Service]\nExecStart=\nExecStart=app\n",
+         "[Service]\nExecStart=\nExecStart=" MFRUN " com.example.app\n"                                                                                                                           },
+
+        /* semicolons that do not separate commands */
+        {"[Service]\nExecStart=app a \\; b\n",                                                                                   "[Service]\nExecStart=" MFRUN " com.example.app a \\; b\n"       },
+        {"[Service]\nExecStart=app --x=a;b c;\n",
+         "[Service]\nExecStart=" MFRUN " com.example.app --x=a;b c;\n"                                                                                                                            },
+
+        /* what is not a command stays, like comments and groups we do not know */
+        {"# a\n; b \\\n[X-Foo]\nBar=1\n[Service]\nExecPaths=/app\nExecSearchPath=/app/bin\nNoExecPaths=/tmp\nEnvironment=A=B\n",
+         "# a\n; b \\\n[X-Foo]\nBar=1\n[Service]\nExecPaths=/app\nExecSearchPath=/app/bin\nNoExecPaths=/tmp\nEnvironment=A=B\n"                                                                   },
+
+        /* the unit can name itself and its siblings */
+        {"[Install]\nAlias=com.example.app-two.service com.example.app.three.service\nAlso=com.example.app.socket\n",
+         "[Install]\nAlias=com.example.app-two.service com.example.app.three.service\nAlso=com.example.app.socket\n"                                                                              },
+        {"[Install]\nAlias=\n",                                                                                                  "[Install]\nAlias=\n"                                            },
+    };
+
+    for (gsize i = 0; i < G_N_ELEMENTS(units); i++) {
+        g_autoptr(GBytes) content = g_bytes_new_static(units[i].content, strlen(units[i].content));
+        g_autoptr(GError) error = NULL;
+        g_autoptr(GBytes) rendered = NULL;
+        g_autofree char *text = NULL;
+        gsize size;
+        const char *data;
+
+        g_test_message("%s", units[i].content);
+        rendered = test_render("systemd-unit-system", UNIT_PATH, content, &error);
+        g_assert_no_error(error);
+        data = g_bytes_get_data(rendered, &size);
+        text = g_strndup(data, size);
+        g_assert_cmpstr(text, ==, units[i].expected);
+    }
+}
+
+static void
+test_units_refused(void)
+{
+#define UNIT(text) {text, sizeof(text) - 1}
+
+    static const struct {
+        const char *content;
+        gsize size;
+    } units[] = {
+        /* several commands in one key, of which only the first one would run in the image */
+        UNIT("[Service]\nExecStart=/app/bin/app ; /bin/evil\n"),
+        UNIT("[Service]\nExecStart=/app/bin/app\t;\t/bin/evil\n"),
+        UNIT("[Service]\nExecStart=/app/bin/app  ;  /bin/evil\n"),
+        UNIT("[Service]\nExecStart=/app/bin/app a ;\n"),
+        UNIT("[Service]\nExecStart=/app/bin/app \"a\" ; /bin/evil\n"),
+        UNIT("[Service]\nExecStart=-/app/bin/app ; /bin/evil\n"),
+        UNIT("[Service]\nExecStart=; /bin/evil\n"),
+        UNIT("[Service]\nExecStart=;\n"),
+
+        /* prefixes that change how the command runs */
+        UNIT("[Service]\nExecStart=+/app/bin/app\n"),
+        UNIT("[Service]\nExecStart=!/app/bin/app\n"),
+        UNIT("[Service]\nExecStart=!!/app/bin/app\n"),
+        UNIT("[Service]\nExecStart=:/app/bin/app\n"),
+        UNIT("[Service]\nExecStart=@/app/bin/app argv0\n"),
+        UNIT("[Service]\nExecStart=|/app/bin/app\n"),
+        UNIT("[Service]\nExecStart=-+/app/bin/app\n"),
+        UNIT("[Service]\nExecStart=--/app/bin/app\n"),
+        UNIT("[Service]\nExecStart=- /app/bin/app\n"),
+
+        /* commands that are not programs of the image */
+        UNIT("[Service]\nExecStart=/bin/sh -c evil\n"),
+        UNIT("[Service]\nExecStart= /bin/evil\n"),
+        UNIT("[Service]\nExecStart=/usr/bin/app\n"),
+        UNIT("[Service]\nExecStart=%h/evil\n"),
+        UNIT("[Service]\nExecStart=$EVIL\n"),
+        UNIT("[Service]\nExecStart=\"/app/bin/app\"\n"),
+        UNIT("[Service]\nExecStart=/app/bin/a\tb\n"),
+
+        /* keys that may run a command in a version of systemd we do not know */
+        UNIT("[Service]\nExecFuture=/bin/evil\n"),
+        UNIT("[Service]\nExecStartLater=/bin/evil\n"),
+
+        /* lines that we and systemd would see differently */
+        UNIT("[Service]\nExecStart=/app/bin/app \\\n/bin/evil\n"),
+        UNIT("[Service]\nDescription=x \\\nExecStart=/bin/evil\n"),
+        /* each line is fine on its own, but joined the semicolon separates two commands */
+        UNIT("[Service]\nExecStart=/app/bin/app \\\nEnvironment=a ; /bin/evil\n"),
+        UNIT("[Service]\nDescription=x\rExecStartPre=+/bin/sh -c evil\n"),
+        UNIT("[Service]\nDescription=x\n\0ExecStartPre=+/bin/sh -c evil\n"),
+        UNIT("\xef\xbb\xbf[Service]\nExecStart=/bin/evil\n"),
+        UNIT("[Service]\n ExecStart=/bin/evil\n"),
+        UNIT("[Service]\n\tExecStart=/bin/evil\n"),
+        UNIT("[Service]\nExecStart =/bin/evil\n"),
+        UNIT("[Service]\nExecStart = /app/bin/app\n"),
+        UNIT("[Service]\nno key\n"),
+        UNIT("ExecStart=/bin/evil\n"),
+        UNIT("[Service\nExecStart=/bin/evil\n"),
+        UNIT("[]\nExecStart=/bin/evil\n"),
+        UNIT("[Service]x\nExecStart=/bin/evil\n"),
+        UNIT("[Service]\nExec[de]=/bin/evil\n"),
+
+        /* units of others */
+        UNIT("[Install]\nAlias=sshd.service\n"),
+        UNIT("[Install]\nAlias=com.example.app-two.service display-manager.service\n"),
+        UNIT("[Install]\nAlso=other.socket\n"),
+    };
+
+#undef UNIT
+
+    for (gsize i = 0; i < G_N_ELEMENTS(units); i++) {
+        g_autoptr(GBytes) content = g_bytes_new_static(units[i].content, units[i].size);
+        g_autoptr(GError) error = NULL;
+        g_autoptr(GBytes) rendered = NULL;
+
+        g_test_message("%s", units[i].content);
+        rendered = test_render("systemd-unit-system", UNIT_PATH, content, &error);
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+        g_assert_null(rendered);
+    }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -622,6 +788,8 @@ main(int argc, char **argv)
     g_test_add_func("/integration/desktop-entries", test_desktop_entries);
     g_test_add_func("/integration/desktop-entries-refused", test_desktop_entries_refused);
     g_test_add_func("/integration/text-size-limit", test_text_size_limit);
+    g_test_add_func("/integration/units", test_units);
+    g_test_add_func("/integration/units-refused", test_units_refused);
 
     return g_test_run();
 }
