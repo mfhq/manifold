@@ -16,6 +16,7 @@
 #include "mf-json-private.h"
 #include "mf-sdautoptr-private.h"
 #include "mf-utils.h"
+#include "mf-utils-private.h"
 
 /**
  * MfManifest:
@@ -26,6 +27,9 @@
  */
 
 constexpr int MANIFEST_FORMAT = 1;
+
+/* the command is a file name in /app/bin */
+constexpr size_t COMMAND_LENGTH_MAX = 255;
 
 /**
  * mf_checksum_kind_to_string:
@@ -385,7 +389,7 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
         priv->command = g_strdup(FIELD_STRING(app, "app", "command", error));
         if (priv->command == NULL)
             return FALSE;
-        if (strchr(priv->command, '/') != NULL) {
+        if (!mf_name_is_valid(priv->command, "._+-", COMMAND_LENGTH_MAX)) {
             /* TRANSLATORS: "app" and "command" are a section and field of the manifest, not translated */
             mf_set_error_invalid_manifest(error, _("app: command is not a plain name: %s"), priv->command);
             return FALSE;
