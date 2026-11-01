@@ -942,6 +942,128 @@ test_mime_packages_refused(void)
     }
 }
 
+#define RULE_PATH "/app/lib/udev/rules.d/60-com.example.app.rules"
+
+static void
+test_udev_rules(void)
+{
+    static const char *const rules[] = {
+        /* what the test application ships, and what instruments usually need */
+        "# a comment \\\n\nSUBSYSTEM==\"mem\", KERNEL==\"null\", ENV{MFTESTAPP}=\"1\"\n",
+        "SUBSYSTEM==\"usb\", ATTR{idVendor}==\"1234\", ATTRS{idProduct}!=\"5678\", MODE=\"0660\", GROUP=\"plugdev\", TAG+=\"uaccess\"\n",
+        "KERNEL==\"ttyUSB[0-9]*\", SYMLINK+=\"app%n\", OWNER=\"root\"\n",
+        "ACTION==\"remove\", GOTO=\"app_end\"\nSUBSYSTEM!=\"usb\", GOTO=\"app_end\"\nLABEL=\"app_end\"\n",
+        "SUBSYSTEM==\"usb\", IMPORT{builtin}=\"usb_id\", IMPORT{parent}=\"ID_*\", ATTR{power/control}=\"on\"\n",
+        "ATTR{[dmi/id]sys_vendor}==\"Example\", SYSCTL{kernel/hostname}==\"lab\", TEST{0644}==\"x\"\n",
+        "  KERNEL==\"a\" MODE=\"0600\",,TAG+=\"b\"\n",
+
+        /* units of the component */
+        "TAG+=\"systemd\", ENV{SYSTEMD_WANTS}+=\"com.example.app.service\"\n",
+        "ENV{SYSTEMD_WANTS}=\"com.example.app-a.service com.example.app-b.target\"\n",
+        "ENV{SYSTEMD_WANTS}+=\"com.example.app@%k.service\"\n",
+        "ENV{SYSTEMD_WANTS}+=\"com.example.app-worker@$kernel.service\"\n",
+        "ENV{SYSTEMD_USER_WANTS}+=\"com.example.app.service\"\n",
+        "ENV{SYSTEMD_WANTS}=\"\"\n",
+
+        /* comparing is fine, as that does not change or start anything */
+        "ENV{SYSTEMD_WANTS}==\"other.service\"\n",
+    };
+
+    for (gsize i = 0; i < G_N_ELEMENTS(rules); i++) {
+        g_autoptr(GBytes) content = g_bytes_new_static(rules[i], strlen(rules[i]));
+        g_autoptr(GError) error = NULL;
+        g_autoptr(GBytes) rendered = NULL;
+
+        g_test_message("%s", rules[i]);
+        rendered = test_render("udev-rule", RULE_PATH, content, &error);
+        g_assert_no_error(error);
+        g_assert_true(g_bytes_equal(rendered, content));
+    }
+}
+
+static void
+test_udev_rules_refused(void)
+{
+#define RULE(text) {text, sizeof(text) - 1}
+
+    static const struct {
+        const char *content;
+        gsize size;
+    } rules[] = {
+        /* running programs */
+        RULE("RUN+=\"/bin/evil\"\n"),
+        RULE("RUN=\"/bin/evil\"\n"),
+        RULE("RUN:=\"/bin/evil\"\n"),
+        RULE("RUN{program}+=\"/bin/evil\"\n"),
+        RULE("RUN{builtin}+=\"kmod load evil\"\n"),
+        RULE("PROGRAM==\"/bin/evil\"\n"),
+        RULE("PROGRAM=\"/bin/evil\"\n"),
+        RULE("PROGRAM!=\"/bin/evil\"\n"),
+        RULE("IMPORT{program}=\"/bin/evil\"\n"),
+        RULE("IMPORT{program}==\"/bin/evil\"\n"),
+        RULE("KERNEL==\"a\", MODE=\"0600\", RUN+=\"/bin/evil\"\n"),
+        RULE("KERNEL==\"a\" RUN+=\"/bin/evil\"\n"),
+        RULE("KERNEL==\"a\",RUN+=\"/bin/evil\"\n"),
+        RULE("KERNEL==\"a\"RUN+=\"/bin/evil\"\n"),
+        RULE("\tRUN+=\"/bin/evil\"\n"),
+
+        /* the host outside of the device */
+        RULE("SYSCTL{kernel/core_pattern}=\"|/bin/evil\"\n"),
+        RULE("ATTR{[block/sda]size}=\"1\"\n"),
+        RULE("ATTR{$env{X}}=\"1\"\n"),
+        RULE("ATTR{%k}=\"1\"\n"),
+
+        /* units of others */
+        RULE("ENV{SYSTEMD_WANTS}+=\"sshd.service\"\n"),
+        RULE("ENV{SYSTEMD_WANTS}=\"com.example.app.service other.service\"\n"),
+        RULE("ENV{SYSTEMD_USER_WANTS}+=\"other.service\"\n"),
+        RULE("ENV{SYSTEMD_WANTS}+=\"$env{X}\"\n"),
+        RULE("ENV{SYSTEMD_WANTS}+=\"%E{X}.service\"\n"),
+        RULE("ENV{SYSTEMD_WANTS}+=\"other@com.example.app.service\"\n"),
+        RULE("ENV{SYSTEMD_WANTS}+=\"com.example.app.mount\"\n"),
+
+        /* values that could end somewhere else for udev */
+        RULE("KERNEL==\"a\\\", RUN+=\"/bin/evil\"\n"),
+        RULE("KERNEL==\"a\\\\\", RUN+=\"/bin/evil\"\n"),
+        RULE("KERNEL==e\"a\\\\\", MODE=\"0666\"\n"),
+        RULE("KERNEL==i\"a\"\n"),
+        RULE("KERNEL==ei\"a\"\n"),
+        RULE("KERNEL==\"a\\\"\n"),
+        RULE("MODE=0666\n"),
+        RULE("MODE=\"0666\n"),
+
+        /* lines that we and udev would see differently */
+        RULE("KERNEL==\"a\", \\\nRUN+=\"/bin/evil\"\n"),
+        RULE("KERNEL==\"a\", \\\n# comment\nMODE=\"0600\"\n"),
+        RULE("KERNEL==\"a\"\rRUN+=\"/bin/evil\"\n"),
+        RULE("KERNEL==\"a\"\n\0RUN+=\"/bin/evil\"\n"),
+        RULE("\xef\xbb\xbfKERNEL==\"a\"\n"),
+
+        /* what is not a plain rule */
+        RULE("KERNEL == \"a\"\n"),
+        RULE("KERNEL= =\"a\"\n"),
+        RULE("KERNEL\n"),
+        RULE("kernel==\"a\"\n"),
+        RULE("ATTR{a==\"b\"\n"),
+        RULE("ATTR{a b}==\"c\"\n"),
+        RULE("ATTR{a\"b}==\"c\"\n"),
+        RULE("ENV{\"SYSTEMD_WANTS\"}+=\"sshd.service\"\n"),
+    };
+
+#undef RULE
+
+    for (gsize i = 0; i < G_N_ELEMENTS(rules); i++) {
+        g_autoptr(GBytes) content = g_bytes_new_static(rules[i].content, rules[i].size);
+        g_autoptr(GError) error = NULL;
+        g_autoptr(GBytes) rendered = NULL;
+
+        g_test_message("%s", rules[i].content);
+        rendered = test_render("udev-rule", RULE_PATH, content, &error);
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+        g_assert_null(rendered);
+    }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -963,6 +1085,8 @@ main(int argc, char **argv)
     g_test_add_func("/integration/units-refused", test_units_refused);
     g_test_add_func("/integration/mime-packages", test_mime_packages);
     g_test_add_func("/integration/mime-packages-refused", test_mime_packages_refused);
+    g_test_add_func("/integration/udev-rules", test_udev_rules);
+    g_test_add_func("/integration/udev-rules-refused", test_udev_rules_refused);
 
     return g_test_run();
 }
