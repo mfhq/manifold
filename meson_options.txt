@@ -23,7 +23,7 @@ option('apparmor-dir',
 option('integration-prefix',
        type : 'string',
        value : '/usr/local',
-       description : 'Prefix to install the integration files of applications to at runtime (desktop entries, systemd units, etc.)'
+       description : 'Prefix to install the systemd units and udev rules of applications to at runtime'
 )
 
 #

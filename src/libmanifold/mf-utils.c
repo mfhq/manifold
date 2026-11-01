@@ -34,17 +34,17 @@ constexpr size_t ARCHITECTURE_LENGTH_MAX = 64;
 
 constexpr gsize TEXT_FILE_SIZE_MAX = 1024 * 1024;
 
-/* the default weight of a glob, and priority of a magic, in a MIME package */
+/* the highest glob weight and magic priority that we accept in a MIME package. 50 is the default of both. */
 constexpr guint64 MIME_WEIGHT_MAX = 50;
 
-/* the shortest a glob can be without its wildcards, so that `*.*` does not match all files */
+/* the fewest characters a glob needs besides wildcards, so that `*.*` can not match all files */
 constexpr gsize MIME_GLOB_LITERAL_MIN = 2;
 
-/* what the globs of MIME packages consist of, which leaves out the separators of the files
- * that the MIME database makes of them */
+/* the characters allowed in a glob of a MIME package, the field separators of the
+ * globs2 file of the MIME database are not among them */
 #define MIME_GLOB_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-*?[]~+,%"
 
-/* the media types an application can add types to, others stand for what the host itself deals with */
+/* the media types that an application can add MIME types to, all other ones are reserved for the host */
 static const char *const MIME_MEDIA_TYPES[] = {
     "application",
     "audio",
@@ -345,7 +345,7 @@ mf_mime_weight_is_valid(const char *weight)
  * mf_mime_xml_name_is_valid:
  * @name: (nullable): the namespace or element name that identifies an XML based MIME type
  *
- * The MIME database holds these separated by spaces, one type per line.
+ * The MIME database holds namespaces and element names separated by spaces, one type per line.
  *
  * Returns: %TRUE if @name is one word
  */
