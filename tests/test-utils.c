@@ -68,6 +68,28 @@ test_component_id_is_valid(void)
 }
 
 static void
+test_program_name_is_valid(void)
+{
+    g_autofree char *longest = g_strnfill(255, 'a');
+    g_autofree char *too_long = g_strnfill(256, 'a');
+
+    g_assert_true(mf_program_name_is_valid("mftestapp"));
+    g_assert_true(mf_program_name_is_valid("g++"));
+    g_assert_true(mf_program_name_is_valid("foo_bar-1.2"));
+    g_assert_true(mf_program_name_is_valid(longest));
+    g_assert_false(mf_program_name_is_valid(NULL));
+    g_assert_false(mf_program_name_is_valid(""));
+    g_assert_false(mf_program_name_is_valid(".hidden"));
+    g_assert_false(mf_program_name_is_valid("-dash"));
+    g_assert_false(mf_program_name_is_valid("a/b"));
+    g_assert_false(mf_program_name_is_valid("a b"));
+    g_assert_false(mf_program_name_is_valid("a\nb"));
+    g_assert_false(mf_program_name_is_valid("a'b"));
+    g_assert_false(mf_program_name_is_valid("$(id)"));
+    g_assert_false(mf_program_name_is_valid(too_long));
+}
+
+static void
 test_component_kind_strings(void)
 {
     for (MfComponentKind kind = MF_COMPONENT_KIND_CORE; kind < MF_COMPONENT_KIND_LAST; kind++)
@@ -94,6 +116,7 @@ main(int argc, char **argv)
     g_test_add_func("/utils/version-compare", test_version_compare);
     g_test_add_func("/utils/hex-hash-is-valid", test_hex_hash_is_valid);
     g_test_add_func("/utils/component-id-is-valid", test_component_id_is_valid);
+    g_test_add_func("/utils/program-name-is-valid", test_program_name_is_valid);
     g_test_add_func("/utils/component-kind-strings", test_component_kind_strings);
     g_test_add_func("/utils/action-strings", test_action_strings);
 

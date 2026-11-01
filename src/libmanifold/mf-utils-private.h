@@ -19,6 +19,9 @@ MF_BEGIN_PRIVATE_DECLS
 /* the suffix of the cached icons in AppStream catalogs (JXL images) */
 #define MF_ICON_SUFFIX ".jxl"
 
+/* the longest name of a file or directory */
+#define MF_FILE_NAME_LENGTH_MAX 255
+
 gboolean mf_write_all(int         fd,
                       const char *buffer,
                       gsize       size,

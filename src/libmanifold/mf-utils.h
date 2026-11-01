@@ -23,6 +23,7 @@ int         mf_version_compare_with_rev(const char *version_a,
                                         guint64     revision_b);
 
 gboolean    mf_hex_hash_is_valid(const char *hash);
+gboolean    mf_program_name_is_valid(const char *name);
 
 const char *mf_get_host_architecture(void);
 
