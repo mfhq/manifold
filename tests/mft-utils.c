@@ -217,6 +217,7 @@ mft_manifest_json(const MftTestManifest *m)
     g_autofree char *identity = mft_fake_hash(m->component_id);
     g_autofree char *base = NULL;
     g_autofree char *app = NULL;
+    g_autofree char *integration = NULL;
 
     if (m->base_id != NULL) {
         g_autofree char *base_identity = mft_fake_hash(m->base_id);
@@ -240,6 +241,8 @@ mft_manifest_json(const MftTestManifest *m)
     }
     if (g_strcmp0(m->kind, "app") == 0 && !m->sdk)
         app = g_strdup(",\n   \"app\": {\n      \"command\": \"app\"\n   }");
+    if (m->integration != NULL)
+        integration = g_strdup_printf(",\n   \"integration\": %s", m->integration);
 
     /* clang-format off */
     return g_strdup_printf(
@@ -252,7 +255,7 @@ mft_manifest_json(const MftTestManifest *m)
         "   \"architecture\": \"%s\",\n"
         "   \"sdk\": %s,\n"
         "   \"identity\": \"%s\",\n"
-        "   \"content-hash\": \"%s\"%s%s,\n"
+        "   \"content-hash\": \"%s\"%s%s%s,\n"
         "   \"image\": {\n"
         "      \"file\": \"%s\",\n"
         "      \"size\": %" G_GSIZE_FORMAT ",\n"
@@ -273,6 +276,7 @@ mft_manifest_json(const MftTestManifest *m)
         m->content_hash != NULL ? m->content_hash : identity,
         base != NULL ? base : "",
         app != NULL ? app : "",
+        integration != NULL ? integration : "",
         m->image_file != NULL ? m->image_file : "i.raw",
         m->image_size != 0 ? m->image_size : 1,
         m->sha256 != NULL ? m->sha256 : identity,

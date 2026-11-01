@@ -16,6 +16,8 @@
 
 G_BEGIN_DECLS
 
+typedef struct _MfIntegration MfIntegration;
+
 /**
  * MfChecksumKind:
  * @MF_CHECKSUM_KIND_UNKNOWN: Unknown checksum kind.
@@ -80,5 +82,7 @@ guint64         mf_manifest_get_hash_offset(MfManifest *manifest);
 guint64         mf_manifest_get_hash_size(MfManifest *manifest);
 
 const char     *mf_manifest_get_command(MfManifest *manifest);
+
+MfIntegration  *mf_manifest_get_integration(MfManifest *manifest);
 
 G_END_DECLS

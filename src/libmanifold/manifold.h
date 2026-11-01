@@ -14,6 +14,7 @@
 #include <mf-utils.h>
 #include <mf-component.h>
 #include <mf-manifest.h>
+#include <mf-integration.h>
 #include <mf-bundle.h>
 #include <mf-signer.h>
 #include <mf-bundle-writer.h>
