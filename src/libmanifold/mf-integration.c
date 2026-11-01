@@ -92,6 +92,9 @@ static const char *const RESERVED_MIME_TYPES[] = {
     NULL,
 };
 
+/* what the keys of a udev rule are made of */
+#define UDEV_KEY_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
 /* the namespace of a MIME package, which is the only one we accept */
 #define MIME_NAMESPACE "http://www.freedesktop.org/standards/shared-mime-info"
 
@@ -1385,6 +1388,192 @@ mf_integration_render_mime_package(MfIntegrationFile *file, GBytes *content, GEr
 }
 
 /**
+ * mf_integration_wanted_units_are_valid:
+ * @kind: the kind of the units, for their names
+ * @value: the units, separated by spaces, which a rule wants started
+ *
+ * A device often starts an instance of a template, named after the device,
+ * which is the only part of the name that is not known here.
+ *
+ * Returns: %TRUE if all the units belong to the component
+ */
+static gboolean
+mf_integration_wanted_units_are_valid(MfIntegrationKind kind, const char *value, const char *component_id)
+{
+    g_auto(GStrv) names = g_strsplit_set(value, " \t", -1);
+
+    for (guint i = 0; names[i] != NULL; i++) {
+        const char *at = strchr(names[i], '@');
+        const char *suffix = strrchr(names[i], '.');
+        g_autofree char *name = NULL;
+
+        if (names[i][0] == '\0')
+            continue;
+        if (at != NULL && suffix != NULL && suffix > at)
+            name = g_strdup_printf("%.*s@%s", (int) (at - names[i]), names[i], suffix);
+        else
+            name = g_strdup(names[i]);
+        if (!mf_integration_name_is_valid(kind, name, component_id))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * mf_integration_udev_token_problem:
+ * @attribute: (nullable): what is in the braces after the key
+ * @is_match: whether the token compares, instead of assigning
+ *
+ * Returns: (nullable): why a token of a rule is not allowed
+ */
+static const char *
+mf_integration_udev_token_problem(const char *key,
+                                  const char *attribute,
+                                  gboolean is_match,
+                                  const char *value,
+                                  const char *component_id)
+{
+    /* a rule has to run in the sandbox of udev, which mfrun can not work in, and which
+     * has to be left quickly, so there is nothing a rule could usefully run. This
+     * includes PROGRAM, which runs its program to compare the output. */
+    if (g_str_equal(key, "RUN") || g_str_equal(key, "PROGRAM") ||
+        (g_str_equal(key, "IMPORT") && g_strcmp0(attribute, "program") == 0))
+        return _("rules can not run programs");
+    if (is_match)
+        return NULL;
+
+    if (g_str_equal(key, "SYSCTL"))
+        return _("rules can not change kernel parameters");
+    /* brackets name another device, and the others get their meaning when the rule runs */
+    if (g_str_equal(key, "ATTR") && attribute != NULL && attribute[strcspn(attribute, "[$%")] != '\0')
+        return _("rules can only change the device they matched");
+    if (g_str_equal(key, "ENV") && g_strcmp0(attribute, "SYSTEMD_WANTS") == 0 &&
+        !mf_integration_wanted_units_are_valid(MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM, value, component_id))
+        return _("rules can only start units of the component");
+    if (g_str_equal(key, "ENV") && g_strcmp0(attribute, "SYSTEMD_USER_WANTS") == 0 &&
+        !mf_integration_wanted_units_are_valid(MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER, value, component_id))
+        return _("rules can only start units of the component");
+
+    return NULL;
+}
+
+/**
+ * mf_integration_udev_line_problem:
+ * @line: a line of a rules file
+ *
+ * Split a rule into its tokens the way udev does, which are `KEY="value"` or
+ * `KEY{attribute}="value"` with a separator of spaces and commas between them.
+ *
+ * udev allows more than that: a backslash can keep a quote from ending a value,
+ * and a letter before the quote changes what backslashes do. Whether a value
+ * has ended decides what we take for the next key, so we do not accept any of
+ * that, and real rules hardly use it.
+ *
+ * Returns: (nullable): why the line is not allowed
+ */
+static const char *
+mf_integration_udev_line_problem(const char *line, const char *component_id)
+{
+    const char *p = line;
+
+    for (;;) {
+        g_autofree char *key = NULL;
+        g_autofree char *attribute = NULL;
+        g_autofree char *value = NULL;
+        gboolean is_match;
+        const char *problem;
+        const char *end;
+        gsize key_len;
+
+        p += strspn(p, " \t,");
+        if (*p == '\0')
+            return NULL;
+
+        key_len = strspn(p, UDEV_KEY_CHARS);
+        if (key_len == 0)
+            return _("this is not a plain rule");
+        key = g_strndup(p, key_len);
+        p += key_len;
+
+        if (*p == '{') {
+            end = strchr(p, '}');
+            if (end == NULL)
+                return _("this is not a plain rule");
+            attribute = g_strndup(p + 1, (gsize) (end - p - 1));
+            if (attribute[strcspn(attribute, " \t\",")] != '\0')
+                return _("this is not a plain rule");
+            p = end + 1;
+        }
+
+        is_match = g_str_has_prefix(p, "==") || g_str_has_prefix(p, "!=");
+        if (is_match || g_str_has_prefix(p, "+=") || g_str_has_prefix(p, "-=") || g_str_has_prefix(p, ":="))
+            p += 2;
+        else if (*p == '=')
+            p += 1;
+        else
+            return _("this is not a plain rule");
+
+        if (*p != '"')
+            return _("a value has to be in quotes, without a prefix");
+        end = strchr(p + 1, '"');
+        if (end == NULL)
+            return _("a value has to be in quotes, without a prefix");
+        value = g_strndup(p + 1, (gsize) (end - p - 1));
+        if (strchr(value, '\\') != NULL)
+            return _("a value can not have backslashes");
+        p = end + 1;
+
+        problem = mf_integration_udev_token_problem(key, attribute, is_match, value, component_id);
+        if (problem != NULL)
+            return problem;
+    }
+}
+
+/**
+ * mf_integration_render_udev_rule:
+ *
+ * No check can make a udev rule safe, as a rule that makes a disk writable for
+ * everyone is as bad as one that runs something. Only the admin can decide to
+ * install rules, and all we do here is to refuse what rules should not need.
+ *
+ * We do not change the file, so nothing else depends on what udev makes of it.
+ *
+ * Returns: (transfer full): the rules to install, or %NULL
+ */
+static GBytes *
+mf_integration_render_udev_rule(MfIntegrationFile *file,
+                                MfManifest *manifest,
+                                GBytes *content,
+                                GError **error)
+{
+    const char *component_id = mf_manifest_get_component_id(manifest);
+    g_auto(GStrv) lines = mf_integration_split_lines(file, content, error);
+
+    if (lines == NULL)
+        return NULL;
+
+    for (guint i = 0; lines[i] != NULL; i++) {
+        const char *line = lines[i] + strspn(lines[i], " \t");
+        const char *problem = NULL;
+
+        if (line[0] == '\0' || line[0] == '#')
+            continue;
+        if (g_str_has_suffix(line, "\\"))
+            problem = _("lines can not be continued");
+        else
+            problem = mf_integration_udev_line_problem(line, component_id);
+
+        if (problem != NULL) {
+            mf_integration_set_line_error(error, file, i + 1, problem);
+            return NULL;
+        }
+    }
+
+    return g_bytes_ref(content);
+}
+
+/**
  * mf_integration_file_render:
  * @file: an #MfIntegrationFile
  * @manifest: the manifest of @file, which passed mf_manifest_check_integration()
@@ -1415,12 +1604,9 @@ mf_integration_file_render(MfIntegrationFile *file, MfManifest *manifest, GBytes
     case MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM:
     case MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER:
         return mf_integration_render_unit(file, manifest, content, error);
+    case MF_INTEGRATION_KIND_UDEV_RULE:
+        return mf_integration_render_udev_rule(file, manifest, content, error);
     default:
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_NOT_IMPLEMENTED,
-                    _("%s: this kind of file can not be installed yet"),
-                    file->path);
-        return NULL;
+        g_return_val_if_reached(NULL);
     }
 }
