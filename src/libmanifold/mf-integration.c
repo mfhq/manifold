@@ -93,6 +93,27 @@ static const char *const RESERVED_MIME_TYPES[] = {
     NULL,
 };
 
+/* the keys of a systemd unit that run a command */
+static const char *const UNIT_COMMAND_KEYS[] = {
+    "ExecCondition",
+    "ExecReload",
+    "ExecReloadPost",
+    "ExecStart",
+    "ExecStartPost",
+    "ExecStartPre",
+    "ExecStop",
+    "ExecStopPost",
+    "ExecStopPre",
+    NULL,
+};
+
+/* the keys of a systemd unit that look like one of those, but do not run anything */
+static const char *const UNIT_NON_COMMAND_KEYS[] = {
+    "ExecPaths",
+    "ExecSearchPath",
+    NULL,
+};
+
 /* the keys of a desktop entry that mean something to us, in another language they would slip past */
 static const char *const UNLOCALIZED_DESKTOP_KEYS[] = {
     "DBusActivatable",
@@ -846,8 +867,22 @@ mf_integration_wrap_command(const char *command_line,
 }
 
 /**
- * mf_integration_split_desktop_key:
- * @line: a line of a desktop entry
+ * mf_integration_group_is_valid:
+ * @line: a line of a desktop entry or systemd unit that starts with `[`
+ *
+ * Returns: %TRUE if @line is a group name in brackets, and nothing else
+ */
+static gboolean
+mf_integration_group_is_valid(const char *line)
+{
+    gsize len = strlen(line);
+
+    return len >= 3 && line[len - 1] == ']' && strcspn(line + 1, "[]") == len - 2;
+}
+
+/**
+ * mf_integration_split_key:
+ * @line: a line of a desktop entry or systemd unit
  * @ret_key_len: (out): the length of the name of the key
  * @ret_value: (out): the value in @line
  *
@@ -860,7 +895,7 @@ mf_integration_wrap_command(const char *command_line,
  * Returns: %TRUE if the line has one of the two forms
  */
 static gboolean
-mf_integration_split_desktop_key(const char *line, gsize *ret_key_len, const char **ret_value)
+mf_integration_split_key(const char *line, gsize *ret_key_len, const char **ret_value)
 {
     gsize key_len = strspn(line, KEY_CHARS);
     const char *after_key = line + key_len;
@@ -952,9 +987,7 @@ mf_integration_render_desktop_entry(MfIntegrationFile *file,
         if (line[0] == '\0' || line[0] == '#') {
             /* nothing to look at */
         } else if (line[0] == '[') {
-            gsize len = strlen(line);
-
-            if (len < 3 || line[len - 1] != ']' || strcspn(line + 1, "[]") != len - 2)
+            if (!mf_integration_group_is_valid(line))
                 problem = _("this is not a valid group");
             else if (!g_hash_table_add(groups, g_strdup(line)))
                 problem = _("this group is there already");
@@ -966,7 +999,7 @@ mf_integration_render_desktop_entry(MfIntegrationFile *file,
             problem = _("the first group has to be [Desktop Entry]");
         } else if (g_str_has_suffix(line, "\\")) {
             problem = _("lines can not be continued");
-        } else if (!mf_integration_split_desktop_key(line, &key_len, &value)) {
+        } else if (!mf_integration_split_key(line, &key_len, &value)) {
             problem = _("this is not a plain key and value");
         } else {
             key = g_strndup(line, key_len);
@@ -1023,6 +1056,144 @@ mf_integration_render_desktop_entry(MfIntegrationFile *file,
 }
 
 /**
+ * mf_integration_unit_command_is_single:
+ * @command_line: the value of a key that runs a command
+ *
+ * systemd runs several commands from one key if a lone semicolon separates
+ * them, and only the first one would run in the environment of the component.
+ * This also refuses such a semicolon in quotes, as we do not parse those: a
+ * program that wants one as its argument can have it as `\;`.
+ *
+ * Returns: %TRUE if @command_line can only be one command
+ */
+static gboolean
+mf_integration_unit_command_is_single(const char *command_line)
+{
+    for (const char *p = strchr(command_line, ';'); p != NULL; p = strchr(p + 1, ';')) {
+        gboolean starts_word = p == command_line || p[-1] == ' ' || p[-1] == '\t';
+        gboolean ends_word = p[1] == '\0' || p[1] == ' ' || p[1] == '\t';
+
+        if (starts_word && ends_word)
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * mf_integration_unit_names_are_valid:
+ * @value: a list of unit names, separated by whitespace
+ *
+ * Returns: %TRUE if all units in @value belong to the component
+ */
+static gboolean
+mf_integration_unit_names_are_valid(MfIntegrationKind kind, const char *value, const char *component_id)
+{
+    g_auto(GStrv) names = g_strsplit_set(value, " \t", -1);
+
+    for (guint i = 0; names[i] != NULL; i++) {
+        if (names[i][0] != '\0' && !mf_integration_name_is_valid(kind, names[i], component_id))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * mf_integration_render_unit:
+ *
+ * Check a systemd unit, and rewrite its commands so that they run in the
+ * environment of the component.
+ *
+ * We only refuse lines that would keep a command from running in the
+ * environment of the component. Whether a unit is safe to install is for the
+ * admin to decide.
+ *
+ * Returns: (transfer full): the unit to install, or %NULL
+ */
+static GBytes *
+mf_integration_render_unit(MfIntegrationFile *file, MfManifest *manifest, GBytes *content, GError **error)
+{
+    const char *component_id = mf_manifest_get_component_id(manifest);
+    const char *app_command = mf_manifest_get_command(manifest);
+    g_auto(GStrv) lines = mf_integration_split_lines(file, content, error);
+    GString *output;
+    gboolean in_group = FALSE;
+
+    if (lines == NULL)
+        return NULL;
+
+    output = g_string_new(NULL);
+    for (guint i = 0; lines[i] != NULL; i++) {
+        const char *line = lines[i];
+        const char *problem = NULL;
+        g_autofree char *wrapped = NULL;
+        g_autofree char *key = NULL;
+        const char *value;
+        gsize key_len;
+
+        /* the file ended in a newline */
+        if (line[0] == '\0' && lines[i + 1] == NULL)
+            break;
+
+        if (line[0] == '\0' || line[0] == '#' || line[0] == ';') {
+            /* nothing to look at */
+        } else if (line[0] == '[') {
+            if (!mf_integration_group_is_valid(line))
+                problem = _("this is not a valid group");
+            in_group = TRUE;
+        } else if (!in_group) {
+            problem = _("this line is not in a group");
+        } else if (g_str_has_suffix(line, "\\")) {
+            problem = _("lines can not be continued");
+        } else if (!mf_integration_split_key(line, &key_len, &value) || value != line + key_len + 1) {
+            problem = _("this is not a plain key and value");
+        } else {
+            key = g_strndup(line, key_len);
+
+            if (g_strv_contains(UNIT_COMMAND_KEYS, key)) {
+                /* a key without a value clears the commands of the key */
+                if (value[0] != '\0') {
+                    /* the only prefix that does not change how a command runs: its failure is ignored */
+                    gboolean may_fail = value[0] == '-';
+                    const char *command_line = may_fail ? value + 1 : value;
+                    gboolean runs_app;
+                    g_autofree char *command = NULL;
+
+                    if (!mf_integration_unit_command_is_single(command_line))
+                        problem = _("a key can only run one command");
+                    else
+                        command = mf_integration_wrap_command(command_line,
+                                                              component_id,
+                                                              app_command,
+                                                              &runs_app);
+
+                    if (command != NULL)
+                        wrapped = g_strdup_printf("%s=%s%s", key, may_fail ? "-" : "", command);
+                    else if (problem == NULL)
+                        problem = _("the command has to start with a program of the image");
+                }
+            } else if (g_str_has_prefix(key, "Exec") && !g_strv_contains(UNIT_NON_COMMAND_KEYS, key)) {
+                problem = _("unknown Exec keys are not supported");
+            } else if ((g_str_equal(key, "Alias") || g_str_equal(key, "Also")) &&
+                       !mf_integration_unit_names_are_valid(file->kind, value, component_id)) {
+                problem = _("this key refers to a unit that does not belong to the component");
+            }
+        }
+
+        if (problem != NULL) {
+            mf_integration_set_line_error(error, file, i + 1, problem);
+            g_string_free(output, TRUE);
+            return NULL;
+        }
+
+        g_string_append_printf(output, "%s\n", wrapped != NULL ? wrapped : line);
+    }
+
+    return g_string_free_to_bytes(output);
+}
+
+/**
  * mf_integration_file_render:
  * @file: an #MfIntegrationFile
  * @manifest: the manifest of @file, which passed mf_manifest_check_integration()
@@ -1048,6 +1219,9 @@ mf_integration_file_render(MfIntegrationFile *file, MfManifest *manifest, GBytes
         return mf_integration_render_desktop_entry(file, manifest, content, error);
     case MF_INTEGRATION_KIND_ICON:
         return g_bytes_ref(content);
+    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM:
+    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER:
+        return mf_integration_render_unit(file, manifest, content, error);
     default:
         g_set_error(error,
                     MF_ERROR,
