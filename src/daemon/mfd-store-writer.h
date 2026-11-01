@@ -37,6 +37,7 @@ gboolean        mfd_store_writer_install_component(MfdStoreWriter   *writer,
                                                    const MfBaseLink *base,
                                                    GBytes           *catalog,
                                                    GHashTable       *icons,
+                                                   GHashTable       *exports,
                                                    MfInstallMode     mode,
                                                    GError          **error);
 gboolean        mfd_store_writer_remove_component(MfdStoreWriter *writer,

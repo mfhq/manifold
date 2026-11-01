@@ -16,6 +16,7 @@
 #include "mf-progress-private.h"
 #include "mf-utils-private.h"
 
+#include "mfd-image-reader.h"
 #include "mfd-store-writer.h"
 
 /**
@@ -720,6 +721,8 @@ mfd_manager_plan_image_install(MfdManager *manager,
         mfd_set_error_id_conflict(error, ret_detail, other_kind);
         return FALSE;
     }
+    if (!mf_manifest_check_integration(manifest, error))
+        return FALSE;
 
     iplan->image = image;
     iplan->add_image = !mf_store_has_image(manager->store, verity_hash);
@@ -1343,6 +1346,41 @@ mfd_make_local_appstream_catalog(GBytes *catalog, GError **error)
 }
 
 /**
+ * mfd_manager_read_exports:
+ * @manifest: the manifest of an image in the store
+ *
+ * Read the integration files of an image, and check that they can be
+ * installed on the host.
+ *
+ * Returns: (transfer full) (element-type utf8 GBytes): the contents of the
+ *   files by their export path, or %NULL on error
+ */
+static GHashTable *
+mfd_manager_read_exports(MfdManager *manager, MfManifest *manifest, GError **error)
+{
+    MfIntegration *integration = mf_manifest_get_integration(manifest);
+    g_autoptr(GHashTable) exports = mfd_image_read_integration(manager->store, manifest, error);
+    GPtrArray *files;
+
+    if (exports == NULL)
+        return NULL;
+    if (integration == NULL)
+        return g_steal_pointer(&exports);
+
+    files = mf_integration_get_files(integration);
+    for (guint i = 0; i < files->len; i++) {
+        MfIntegrationFile *file = g_ptr_array_index(files, i);
+        GBytes *content = g_hash_table_lookup(exports, mf_integration_file_get_export_path(file));
+        g_autoptr(GBytes) rendered = mf_integration_file_render(file, manifest, content, error);
+
+        if (rendered == NULL)
+            return NULL;
+    }
+
+    return g_steal_pointer(&exports);
+}
+
+/**
  * mfd_manager_execute_install_plan:
  * @bundle: the bundle the component is in
  * @iplan: the plan of the component
@@ -1374,6 +1412,7 @@ mfd_manager_execute_install_plan(MfdManager *manager,
     g_autofree char *full_version = mf_build_full_version(version, mf_manifest_get_revision(manifest));
     guint64 image_size = mf_manifest_get_image_size(manifest);
     g_autoptr(GBytes) catalog = NULL;
+    g_autoptr(GHashTable) exports = NULL;
     g_autoptr(GError) local_error = NULL;
     gboolean added = FALSE;
 
@@ -1404,13 +1443,16 @@ mfd_manager_execute_install_plan(MfdManager *manager,
         g_info("Image %s of %s %s is in the store already", verity_hash, component_id, version);
     }
 
-    if (!mfd_store_writer_install_component(manager->writer,
-                                            manifest,
-                                            iplan->base,
-                                            catalog,
-                                            mf_bundle_image_get_icons(iplan->image),
-                                            iplan->mode,
-                                            &local_error)) {
+    /* we can only read files from an image once it is in the store, as it is not verified before */
+    exports = mfd_manager_read_exports(manager, manifest, &local_error);
+    if (exports == NULL || !mfd_store_writer_install_component(manager->writer,
+                                                               manifest,
+                                                               iplan->base,
+                                                               catalog,
+                                                               mf_bundle_image_get_icons(iplan->image),
+                                                               exports,
+                                                               iplan->mode,
+                                                               &local_error)) {
         g_autoptr(GError) remove_error = NULL;
 
         /* the same version was installed in the meantime, and it uses the image, so we keep it */

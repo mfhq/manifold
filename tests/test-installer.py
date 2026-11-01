@@ -40,6 +40,9 @@ from mftest import (  # noqa: E402
 
 SOCKET = f'{RUNTIME_DIR}/test-manifoldd.sock'
 
+DESKTOP_ENTRY_PATH = f'/app/share/applications/{APP_ID}.desktop'
+DESKTOP_ENTRY = b'[Desktop Entry]\nType=Application\nName=App\nExec=app\n'
+
 ARGS = None
 
 
@@ -162,6 +165,11 @@ class InstallerTestCase(unittest.TestCase):
             (r['progress']['item']['action'], r['progress']['item']['subject'])
             for r in replies[:-1]
         ]
+
+    def app_with(self, integration, version='0.1.0', **kwargs):
+        """Make a version of the app with an integration section. The keyword arguments
+        are passed on to Image."""
+        return Image(APP_ID, 'app', version, base=self.kit, integration=integration, **kwargs)
 
     def use_own_signing_keys(self):
         """Give the test an empty directory for signing keys, so it never uses the keys
@@ -599,6 +607,55 @@ class InstallTest(InstallerTestCase):
         )
         self.assertIn('describes org.example.Other, not', out)
         self.assertEqual(self.installed(), [])
+
+
+class HostIntegrationTest(InstallerTestCase):
+    """Installing the files of an application on the host: desktop entries, icons, MIME
+    packages, aliases, systemd units and udev rules."""
+
+    def test_integration_files_are_kept_with_their_version(self):
+        service = f'{APP_ID}-report.service'
+        system_path = f'/app/lib/systemd/system/{service}'
+        user_path = f'/app/lib/systemd/user/{service}'
+        app = self.app_with(
+            {
+                'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY},
+                'systemd-unit-system': {system_path: b'[Service]\nExecStart=app --system\n'},
+                'systemd-unit-user': {user_path: b'[Service]\nExecStart=app --user\n'},
+            }
+        )
+        self.install_core()
+        self.install(self.kit, app)
+
+        exports = f'{STORE}/apps/{APP_ID}/0.1.0-{app.revision}/exports'
+        for path, content in (
+            (DESKTOP_ENTRY_PATH, DESKTOP_ENTRY),
+            (system_path, b'[Service]\nExecStart=app --system\n'),
+            (user_path, b'[Service]\nExecStart=app --user\n'),
+        ):
+            with open(exports + path[len('/app') :], 'rb') as f:
+                self.assertEqual(f.read(), content)
+
+    def test_integration_rules_are_checked_before_the_image_is_stored(self):
+        self.install_core()
+        images = self.stored_images()
+        path = '/app/share/applications/org.example.Other.desktop'
+        app = self.app_with({'desktop-entry': {path: DESKTOP_ENTRY}})
+        out = self.install(self.kit, app, expect=1)
+        self.assertIn('Not a valid bundle', out)
+        self.assertIn(f'has to start with {APP_ID}', out)
+        self.assertEqual(self.stored_images(), images)
+
+    def test_integration_file_has_to_match_its_manifest(self):
+        self.install_core()
+        app = self.app_with(
+            {'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY}},
+            image_files={DESKTOP_ENTRY_PATH: DESKTOP_ENTRY + b'Comment=Another file\n'},
+        )
+        out = self.install(self.kit, app, expect=1)
+        self.assertIn('does not match its hashes in the manifest', out)
+        self.assertNotIn(app.verity_hash, self.stored_images())
+        self.assertNotIn(APP_ID, [component for component, _, _ in self.installed()])
 
 
 class RemovalTest(InstallerTestCase):

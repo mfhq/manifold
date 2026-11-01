@@ -19,6 +19,9 @@
 #define MAIN_ENTRY   APP_DIR "com.example.app.desktop"
 #define MAIN_CONTENT "[Desktop Entry]\nType=Application\nExec=app\n"
 
+/* the directory of desktop entries, relative to the exports directory */
+#define EXPORT_DIR "share/applications/"
+
 /* the name of the image in the store */
 #define VERITY_HASH "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
@@ -263,13 +266,13 @@ test_read_files(void)
     g_assert_no_error(error);
     g_assert_cmpuint(g_hash_table_size(contents), ==, 2);
 
-    content = g_hash_table_lookup(contents, MAIN_ENTRY);
+    content = g_hash_table_lookup(contents, EXPORT_DIR "com.example.app.desktop");
     g_assert_nonnull(content);
     g_assert_cmpmem(g_bytes_get_data(content, NULL),
                     g_bytes_get_size(content),
                     MAIN_CONTENT,
                     strlen(MAIN_CONTENT));
-    content = g_hash_table_lookup(contents, APP_DIR "com.example.app.large.desktop");
+    content = g_hash_table_lookup(contents, EXPORT_DIR "com.example.app.large.desktop");
     g_assert_nonnull(content);
     g_assert_cmpuint(g_bytes_get_size(content), ==, LARGE_FILE_SIZE);
 }
