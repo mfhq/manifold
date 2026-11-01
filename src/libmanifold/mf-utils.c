@@ -75,6 +75,22 @@ mf_version_is_valid(const char *version)
 }
 
 /**
+ * mf_program_name_is_valid:
+ * @name: (nullable): the name of a program
+ *
+ * The names of programs end up in generated scripts and in the lines of
+ * systemd units and desktop entries, so they are restricted to what does not
+ * need quoting anywhere: `[A-Za-z0-9._+-]`, not starting with `.` or `-`.
+ *
+ * Returns: %TRUE if the name is valid
+ */
+gboolean
+mf_program_name_is_valid(const char *name)
+{
+    return mf_name_is_valid(name, "._+-", MF_FILE_NAME_LENGTH_MAX);
+}
+
+/**
  * mf_version_compare:
  * @a: a version
  * @b: another version

@@ -84,5 +84,7 @@ guint64         mf_manifest_get_hash_size(MfManifest *manifest);
 const char     *mf_manifest_get_command(MfManifest *manifest);
 
 MfIntegration  *mf_manifest_get_integration(MfManifest *manifest);
+gboolean        mf_manifest_check_integration(MfManifest *manifest,
+                                              GError    **error);
 
 G_END_DECLS

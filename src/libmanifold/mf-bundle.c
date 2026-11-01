@@ -47,7 +47,6 @@ constexpr guint64 METADATA_TOTAL_SIZE_MAX = 64 * 1024 * 1024;
 
 constexpr size_t COPY_BUFFER_SIZE = 1024 * 1024;
 
-constexpr size_t FILE_NAME_LENGTH_MAX = 255;
 constexpr size_t PATH_LENGTH_MAX = 1024;
 
 /**
@@ -59,7 +58,7 @@ constexpr size_t PATH_LENGTH_MAX = 1024;
 static gboolean
 mf_plain_name_is_valid(const char *name, size_t len)
 {
-    if (len == 0 || len > FILE_NAME_LENGTH_MAX || name[0] == '.')
+    if (len == 0 || len > MF_FILE_NAME_LENGTH_MAX || name[0] == '.')
         return FALSE;
     for (size_t i = 0; i < len; i++) {
         if (name[i] == '/' || name[i] == '\\' || g_ascii_iscntrl(name[i]))

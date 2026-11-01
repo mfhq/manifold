@@ -15,5 +15,8 @@ MF_BEGIN_PRIVATE_DECLS
 
 MfIntegration *mf_integration_new_from_json(sd_json_variant *section,
                                             GError         **error);
+gboolean       mf_integration_check(MfIntegration *integration,
+                                    const char    *component_id,
+                                    GError       **error);
 
 MF_END_PRIVATE_DECLS
