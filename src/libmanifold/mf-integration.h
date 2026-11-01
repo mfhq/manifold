@@ -48,6 +48,7 @@ G_DECLARE_FINAL_TYPE(MfIntegrationFile, mf_integration_file, MF, INTEGRATION_FIL
 
 MfIntegrationKind mf_integration_file_get_kind(MfIntegrationFile *file);
 const char       *mf_integration_file_get_path(MfIntegrationFile *file);
+const char       *mf_integration_file_get_export_path(MfIntegrationFile *file);
 const char       *mf_integration_file_get_checksum(MfIntegrationFile *file,
                                                    MfChecksumKind     kind);
 gboolean          mf_integration_file_check_content(MfIntegrationFile *file,

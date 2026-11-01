@@ -65,7 +65,8 @@ mft_install(const MftTestManifest *manifest, const char *base_version_dir, MfIns
     g_assert_no_error(error);
     if (manifest->base_id != NULL)
         base = mf_base_link_new(MF_STORE_RUNTIMES_SUBDIR, manifest->base_id, base_version_dir);
-    g_assert_true(mfd_store_writer_install_component(writer, parsed, base, catalog, icons, mode, &error));
+    g_assert_true(
+        mfd_store_writer_install_component(writer, parsed, base, catalog, icons, NULL, mode, &error));
     g_assert_no_error(error);
 }
 
