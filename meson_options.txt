@@ -11,10 +11,19 @@ option('apparmor',
        value : 'auto',
        description : 'Install the AppArmor profile permitting manifold-run to use user namespaces (needs AppArmor >= 4.0)'
 )
-option('apparmor_dir',
+option('apparmor-dir',
        type : 'string',
        value : '/etc/apparmor.d',
        description : 'Directory to install AppArmor profiles to'
+)
+
+#
+# Defaults
+#
+option('integration-prefix',
+       type : 'string',
+       value : '/usr/local',
+       description : 'Prefix to install the integration files of applications to at runtime (desktop entries, systemd units, etc.)'
 )
 
 #
