@@ -7,10 +7,13 @@
 #include "config.h"
 #include "mf-integration-private.h"
 
+#include <string.h>
 #include <glib/gi18n-lib.h>
 
 #include "mf-error.h"
 #include "mf-json-private.h"
+#include "mf-utils.h"
+#include "mf-utils-private.h"
 
 /**
  * MfIntegration:
@@ -22,14 +25,47 @@
 /* the key of the alias list in the integration section of a manifest */
 #define ALIAS_KEY "alias"
 
-static const char *const KIND_NAMES[MF_INTEGRATION_KIND_LAST] = {
-    [MF_INTEGRATION_KIND_UNKNOWN] = "unknown",
-    [MF_INTEGRATION_KIND_DESKTOP_ENTRY] = "desktop-entry",
-    [MF_INTEGRATION_KIND_ICON] = "icons",
-    [MF_INTEGRATION_KIND_MIME_PACKAGE] = "mime-package",
-    [MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM] = "systemd-unit-system",
-    [MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER] = "systemd-unit-user",
-    [MF_INTEGRATION_KIND_UDEV_RULE] = "udev-rule",
+/* everything an image exports is in here */
+#define APP_DIR "/app/"
+
+static const char *const UNIT_SUFFIXES[] = {".service", ".socket", ".timer", ".path", ".target", NULL};
+
+static const struct {
+    const char *name;            /* the key in the manifest */
+    const char *dir;             /* the directory of the files, relative to /app and to the exports */
+    const char *const *suffixes; /* the allowed file name suffixes, %NULL terminated */
+} KINDS[MF_INTEGRATION_KIND_LAST] = {
+    [MF_INTEGRATION_KIND_UNKNOWN] = {.name = "unknown"},
+    [MF_INTEGRATION_KIND_DESKTOP_ENTRY] = {"desktop-entry",
+                                     "share/applications", (const char *const[]){".desktop", NULL}},
+    [MF_INTEGRATION_KIND_ICON] = {"icons",
+                                     "share/icons/hicolor", (const char *const[]){".png", ".svg", NULL}},
+    [MF_INTEGRATION_KIND_MIME_PACKAGE] = {"mime-package",
+                                     "share/mime/packages", (const char *const[]){".xml", NULL}},
+    [MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM] = {"systemd-unit-system", "lib/systemd/system", UNIT_SUFFIXES},
+    [MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER] = {"systemd-unit-user", "lib/systemd/user", UNIT_SUFFIXES},
+    [MF_INTEGRATION_KIND_UDEV_RULE] = {"udev-rule",
+                                     "lib/udev/rules.d", (const char *const[]){".rules", NULL}},
+};
+
+/* Aliases come last in the PATH, so they can not replace these commands on a host that
+ * has them, but on any other host, an alias could ask for the passwords they are given.
+ * This list is just a tiny safeguard to prevent some of the most obvious deception attempts. */
+static const char *const RESERVED_ALIASES[] = {
+    "doas",
+    "login",
+    "manifold",
+    "mfrun",
+    "passwd",
+    "pkexec",
+    "run0",
+    "scp",
+    "sftp",
+    "ssh",
+    "su",
+    "sudo",
+    "sudoedit",
+    NULL,
 };
 
 /**
@@ -42,8 +78,8 @@ const char *
 mf_integration_kind_to_string(MfIntegrationKind kind)
 {
     if (kind <= MF_INTEGRATION_KIND_UNKNOWN || kind >= MF_INTEGRATION_KIND_LAST)
-        return KIND_NAMES[MF_INTEGRATION_KIND_UNKNOWN];
-    return KIND_NAMES[kind];
+        return KINDS[MF_INTEGRATION_KIND_UNKNOWN].name;
+    return KINDS[kind].name;
 }
 
 /**
@@ -56,7 +92,7 @@ MfIntegrationKind
 mf_integration_kind_from_string(const char *kind_str)
 {
     for (MfIntegrationKind kind = MF_INTEGRATION_KIND_UNKNOWN + 1; kind < MF_INTEGRATION_KIND_LAST; kind++) {
-        if (g_strcmp0(kind_str, KIND_NAMES[kind]) == 0)
+        if (g_strcmp0(kind_str, KINDS[kind].name) == 0)
             return kind;
     }
 
@@ -375,11 +411,12 @@ mf_integration_parse_aliases(MfIntegration *integration, sd_json_variant *entrie
  * @section: the integration section of a manifest
  * @error: a #GError
  *
- * Read the integration section of a manifest. We only check its structure
- * here, and not what it asks for: a manifest we can not parse hides the
- * version it belongs to from the store, so the rules for what may be installed
- * are checked when installing. That is also where kinds we do not know are
- * refused, so we keep their names and do not look at their values.
+ * Read the integration section of a manifest.
+ *
+ * We only check the structure of the section here, as the store has to be
+ * able to read the manifest of every installed version. The rules for files
+ * and aliases are checked by mf_integration_check() when an image is installed.
+ * The names of unknown integration kinds are kept, but their values are ignored.
  *
  * Returns: (transfer full): the section, or %NULL with %MF_ERROR_INVALID_MANIFEST
  */
@@ -412,4 +449,283 @@ mf_integration_new_from_json(sd_json_variant *section, GError **error)
     }
 
     return g_steal_pointer(&integration);
+}
+
+static void mf_integration_set_error(GError **error, const char *format, ...) G_GNUC_PRINTF(2, 3);
+
+/**
+ * mf_integration_set_error:
+ *
+ * Set an %MF_ERROR_INVALID_MANIFEST error about the integration section.
+ * Callers have to escape strings from the manifest, as the message is printed
+ * to the terminal of the user who installs the image.
+ */
+static void
+mf_integration_set_error(GError **error, const char *format, ...)
+{
+    g_autofree char *message = NULL;
+    va_list args;
+
+    va_start(args, format);
+    message = g_strdup_vprintf(format, args);
+    va_end(args);
+    g_set_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST, "integration: %s", message);
+}
+
+/**
+ * mf_integration_component_id_is_valid:
+ *
+ * The names of integration files start with the component ID, and they share
+ * their directories with the host. So the ID has to be a reverse-DNS name of
+ * at least three labels, or an ID like `ssh` could claim `ssh.service`.
+ */
+static gboolean
+mf_integration_component_id_is_valid(const char *component_id)
+{
+    g_auto(GStrv) labels = g_strsplit(component_id, ".", -1);
+
+    for (guint i = 0; labels[i] != NULL; i++) {
+        if (labels[i][0] == '\0')
+            return FALSE;
+    }
+
+    return g_strv_length(labels) >= 3;
+}
+
+/**
+ * mf_integration_name_is_owned:
+ * @stem: the file name without its suffix, and without the number prefix of a udev rule
+ * @stem_len: the length of @stem, which is not NUL terminated
+ *
+ * Returns: %TRUE if @stem is the component ID, or the ID followed by `.` or `-` and more
+ */
+static gboolean
+mf_integration_name_is_owned(const char *stem, gsize stem_len, const char *component_id)
+{
+    gsize id_len = strlen(component_id);
+
+    if (stem_len < id_len || strncmp(stem, component_id, id_len) != 0)
+        return FALSE;
+    if (stem_len == id_len)
+        return TRUE;
+
+    return (stem[id_len] == '.' || stem[id_len] == '-') && stem_len > id_len + 1;
+}
+
+/**
+ * mf_integration_name_is_valid:
+ * @name: the name of an integration file
+ *
+ * Check that a file name starts with the component ID, and has a suffix that
+ * the host recognizes for files of this kind.
+ */
+static gboolean
+mf_integration_name_is_valid(MfIntegrationKind kind, const char *name, const char *component_id)
+{
+    const char *const *suffixes = KINDS[kind].suffixes;
+    gboolean unit = suffixes == UNIT_SUFFIXES;
+    const char *stem = name;
+    const char *suffix = NULL;
+    gsize stem_len;
+
+    if (!mf_name_is_valid(name, unit ? "._-@" : "._-", MF_FILE_NAME_LENGTH_MAX))
+        return FALSE;
+    for (guint i = 0; suffixes[i] != NULL && suffix == NULL; i++) {
+        if (g_str_has_suffix(name, suffixes[i]))
+            suffix = suffixes[i];
+    }
+    if (suffix == NULL)
+        return FALSE;
+    stem_len = strlen(name) - strlen(suffix);
+
+    /* udev runs the rules in the order of their names, so they start with a number */
+    if (kind == MF_INTEGRATION_KIND_UDEV_RULE) {
+        if (stem_len < 3 || !g_ascii_isdigit(name[0]) || !g_ascii_isdigit(name[1]) || name[2] != '-')
+            return FALSE;
+        stem += 3;
+        stem_len -= 3;
+    }
+
+    /* a template unit ends in `@`, and its instances are not files */
+    if (unit) {
+        if (stem_len > 0 && stem[stem_len - 1] == '@')
+            stem_len--;
+        if (memchr(stem, '@', stem_len) != NULL)
+            return FALSE;
+    }
+
+    return mf_integration_name_is_owned(stem, stem_len, component_id);
+}
+
+/**
+ * mf_integration_check_file:
+ *
+ * Check the path and the name of a file in the image.
+ */
+static gboolean
+mf_integration_check_file(MfIntegrationFile *file, const char *component_id, GError **error)
+{
+    const char *kind_name = KINDS[file->kind].name;
+    g_autofree char *shown = g_strescape(file->path, NULL);
+    g_autofree char *dir = g_strconcat(APP_DIR, KINDS[file->kind].dir, "/", NULL);
+    const char *rest;
+    const char *name;
+
+    if (!g_str_has_prefix(file->path, dir)) {
+        /* TRANSLATORS: the kind of the file, its path, and the directory it has to be in */
+        mf_integration_set_error(error, _("%s: %s is not in %s"), kind_name, shown, dir);
+        return FALSE;
+    }
+    rest = file->path + strlen(dir);
+    name = strrchr(rest, '/');
+    name = name != NULL ? name + 1 : rest;
+
+    /* only the icon theme has directories, and the other files are found directly in theirs */
+    if (file->kind == MF_INTEGRATION_KIND_ICON) {
+        g_autofree char *icon_dir = g_strndup(rest, (gsize) (name - rest));
+
+        if (!g_regex_match_simple("^([0-9]+x[0-9]+(@[0-9]+x)?|scalable|symbolic)/(apps|mimetypes)/\\z",
+                                  icon_dir,
+                                  0,
+                                  0)) {
+            /* TRANSLATORS: the kind of the file, its path, and an example of a valid directory */
+            mf_integration_set_error(error,
+                                     _("%s: %s is not in a directory like %s"),
+                                     kind_name,
+                                     shown,
+                                     "48x48/apps");
+            return FALSE;
+        }
+    } else if (name != rest) {
+        /* TRANSLATORS: the kind of the file, its path, and the directory it has to be in */
+        mf_integration_set_error(error, _("%s: %s is not directly in %s"), kind_name, shown, dir);
+        return FALSE;
+    }
+
+    if (!mf_integration_name_is_valid(file->kind, name, component_id)) {
+        g_autofree char *suffixes = g_strjoinv(", ", (char **) KINDS[file->kind].suffixes);
+        g_autofree char *prefix = g_strconcat(file->kind == MF_INTEGRATION_KIND_UDEV_RULE ? "NN-" : "",
+                                              component_id,
+                                              NULL);
+
+        /* TRANSLATORS: the kind of the file, its path, the required start of its name (NN is a
+         * two-digit number), and the allowed file endings */
+        mf_integration_set_error(error,
+                                 _("%s: the name of %s has to start with %s and end with one of: %s"),
+                                 kind_name,
+                                 shown,
+                                 prefix,
+                                 suffixes);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * mf_integration_program_is_valid:
+ * @path: the path of a program in the image
+ *
+ * We write the paths of programs into shell scripts, desktop entries and
+ * systemd units, so we only allow paths that need no quoting in any of them.
+ *
+ * Returns: %TRUE if @path is an absolute path below /app, with plain names only
+ */
+static gboolean
+mf_integration_program_is_valid(const char *path)
+{
+    g_auto(GStrv) parts = NULL;
+
+    if (!g_str_has_prefix(path, APP_DIR))
+        return FALSE;
+    parts = g_strsplit(path + strlen(APP_DIR), "/", -1);
+    for (guint i = 0; parts[i] != NULL; i++) {
+        if (!mf_program_name_is_valid(parts[i]))
+            return FALSE;
+    }
+
+    return parts[0] != NULL;
+}
+
+/**
+ * mf_integration_check_alias:
+ *
+ * Check the name and the command of an alias.
+ */
+static gboolean
+mf_integration_check_alias(MfIntegrationAlias *alias, GError **error)
+{
+    g_autofree char *name = g_strescape(alias->name, NULL);
+    g_autofree char *command = g_strescape(alias->command, NULL);
+
+    if (!mf_program_name_is_valid(alias->name)) {
+        /* TRANSLATORS: "alias" is a key of the manifest, and not translated */
+        mf_integration_set_error(error, _("alias: %s is not a plain name"), name);
+        return FALSE;
+    }
+    if (g_strv_contains(RESERVED_ALIASES, alias->name)) {
+        /* TRANSLATORS: "alias" is a key of the manifest, and not translated */
+        mf_integration_set_error(error, _("alias: %s is reserved"), name);
+        return FALSE;
+    }
+    if (!mf_integration_program_is_valid(alias->command)) {
+        /* TRANSLATORS: "alias" is a key of the manifest, and not translated, the second %s is the program */
+        mf_integration_set_error(error, _("alias: %s: %s is not a path below /app"), name, command);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * mf_integration_check:
+ * @component_id: the component the section belongs to
+ *
+ * Check all rules for an integration section that do not depend on the
+ * host or on the contents of the files.
+ *
+ * Returns: %TRUE if the section is valid for the component, or %FALSE with %MF_ERROR_INVALID_MANIFEST
+ */
+gboolean
+mf_integration_check(MfIntegration *integration, const char *component_id, GError **error)
+{
+    g_autoptr(GHashTable) seen = g_hash_table_new(g_str_hash, g_str_equal);
+
+    if (!mf_integration_component_id_is_valid(component_id)) {
+        mf_integration_set_error(error,
+                                 _("%s is not a reverse-DNS name of at least three parts"),
+                                 component_id);
+        return FALSE;
+    }
+    if (integration->unknown_kinds->len > 0) {
+        g_autofree char *kind = g_strescape(g_ptr_array_index(integration->unknown_kinds, 0), NULL);
+
+        /* TRANSLATORS: %s is a key of the manifest, and not translated */
+        mf_integration_set_error(error, _("%s is not supported"), kind);
+        return FALSE;
+    }
+
+    for (guint i = 0; i < integration->files->len; i++) {
+        MfIntegrationFile *file = g_ptr_array_index(integration->files, i);
+
+        if (!mf_integration_check_file(file, component_id, error))
+            return FALSE;
+        if (!g_hash_table_add(seen, file->path)) {
+            mf_integration_set_error(error, _("%s is listed twice"), file->path);
+            return FALSE;
+        }
+    }
+    for (guint i = 0; i < integration->aliases->len; i++) {
+        MfIntegrationAlias *alias = g_ptr_array_index(integration->aliases, i);
+
+        if (!mf_integration_check_alias(alias, error))
+            return FALSE;
+        /* paths and the names of aliases can not be the same, so they share the table */
+        if (!g_hash_table_add(seen, alias->name)) {
+            mf_integration_set_error(error, _("%s is listed twice"), alias->name);
+            return FALSE;
+        }
+    }
+
+    return TRUE;
 }

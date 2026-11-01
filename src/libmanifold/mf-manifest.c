@@ -17,7 +17,6 @@
 #include "mf-json-private.h"
 #include "mf-sdautoptr-private.h"
 #include "mf-utils.h"
-#include "mf-utils-private.h"
 
 /**
  * MfManifest:
@@ -28,9 +27,6 @@
  */
 
 constexpr int MANIFEST_FORMAT = 1;
-
-/* the command is a file name in /app/bin */
-constexpr size_t COMMAND_LENGTH_MAX = 255;
 
 /**
  * mf_checksum_kind_to_string:
@@ -394,7 +390,7 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
         priv->command = g_strdup(FIELD_STRING(app, "app", "command", error));
         if (priv->command == NULL)
             return FALSE;
-        if (!mf_name_is_valid(priv->command, "._+-", COMMAND_LENGTH_MAX)) {
+        if (!mf_program_name_is_valid(priv->command)) {
             /* TRANSLATORS: "app" and "command" are a section and field of the manifest, not translated */
             mf_set_error_invalid_manifest(error, _("app: command is not a plain name: %s"), priv->command);
             return FALSE;
@@ -826,4 +822,35 @@ mf_manifest_get_integration(MfManifest *manifest)
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
     auto priv = GET_PRIVATE(manifest);
     return priv->integration;
+}
+
+/**
+ * mf_manifest_check_integration:
+ * @manifest: an #MfManifest
+ * @error: a #GError
+ *
+ * Check that the image is allowed to install the files that its integration
+ * section lists. A manifest without an integration section always passes.
+ *
+ * We do not run this check when a manifest is parsed, so the manifests of
+ * installed versions can still be read if the rules change. Code that builds
+ * or installs an image has to call this function instead.
+ *
+ * Returns: %TRUE if the section is fine, or %FALSE with %MF_ERROR_INVALID_MANIFEST
+ */
+gboolean
+mf_manifest_check_integration(MfManifest *manifest, GError **error)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), FALSE);
+    auto priv = GET_PRIVATE(manifest);
+
+    if (priv->integration == NULL)
+        return TRUE;
+    /* nothing else can be launched, and everything that gets installed launches the component */
+    if (priv->kind != MF_COMPONENT_KIND_APP || priv->sdk) {
+        mf_set_error_invalid_manifest(error, "%s", _("integration: only applications can use this"));
+        return FALSE;
+    }
+
+    return mf_integration_check(priv->integration, priv->component_id, error);
 }
