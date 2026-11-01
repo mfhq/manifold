@@ -47,25 +47,6 @@ static const GOptionEntry bundle_sign_options[] = {
 };
 
 /**
- * mfc_key_name_is_valid:
- *
- * Check that a key name can not be mistaken for a path, for a fingerprint
- * or for a public key.
- */
-static gboolean
-mfc_key_name_is_valid(const char *name)
-{
-    if (!g_ascii_isalnum(name[0]) || g_str_has_suffix(name, ".pub"))
-        return FALSE;
-    for (const char *c = name; *c != '\0'; c++) {
-        if (!g_ascii_isalnum(*c) && strchr("._-", *c) == NULL)
-            return FALSE;
-    }
-
-    return TRUE;
-}
-
-/**
  * mfc_generate_key:
  *
  * Create a key pair at @path. Unless the user chose not to have a passphrase,
@@ -119,7 +100,7 @@ mfc_run_key_new_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
     }
     if (argc == 2)
         name = argv[1];
-    if (!mfc_key_name_is_valid(name)) {
+    if (!mf_signing_key_name_is_valid(name)) {
         g_printerr(_("'%s' is not a valid key name: it has to start with a letter or digit, contain only "
                      "those and '.', '_' or '-', and can not end in '.pub'.\n"),
                    name);

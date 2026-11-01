@@ -90,6 +90,41 @@ test_program_name_is_valid(void)
 }
 
 static void
+test_signing_key_name_is_valid(void)
+{
+    g_assert_true(mf_signing_key_name_is_valid("default"));
+    g_assert_true(mf_signing_key_name_is_valid("release-2026.1_a"));
+    g_assert_true(mf_signing_key_name_is_valid("1"));
+    g_assert_false(mf_signing_key_name_is_valid(NULL));
+    g_assert_false(mf_signing_key_name_is_valid(""));
+    g_assert_false(mf_signing_key_name_is_valid("_key"));
+    g_assert_false(mf_signing_key_name_is_valid(".key"));
+    g_assert_false(mf_signing_key_name_is_valid("-key"));
+    g_assert_false(mf_signing_key_name_is_valid("./key"));
+    g_assert_false(mf_signing_key_name_is_valid("a/b"));
+    g_assert_false(mf_signing_key_name_is_valid("a b"));
+    g_assert_false(mf_signing_key_name_is_valid("SHA256:abc"));
+    g_assert_false(mf_signing_key_name_is_valid("key.pub"));
+}
+
+static void
+test_architecture_is_valid(void)
+{
+    g_autofree char *too_long = g_strnfill(65, 'a');
+
+    g_assert_true(mf_architecture_is_valid(mf_get_host_architecture()));
+    g_assert_true(mf_architecture_is_valid("x86_64"));
+    g_assert_true(mf_architecture_is_valid("aarch64"));
+    g_assert_true(mf_architecture_is_valid("ppc64le"));
+    g_assert_false(mf_architecture_is_valid(NULL));
+    g_assert_false(mf_architecture_is_valid(""));
+    g_assert_false(mf_architecture_is_valid("a b"));
+    g_assert_false(mf_architecture_is_valid("a/b"));
+    g_assert_false(mf_architecture_is_valid("\033[2J"));
+    g_assert_false(mf_architecture_is_valid(too_long));
+}
+
+static void
 test_component_kind_strings(void)
 {
     for (MfComponentKind kind = MF_COMPONENT_KIND_CORE; kind < MF_COMPONENT_KIND_LAST; kind++)
@@ -117,6 +152,8 @@ main(int argc, char **argv)
     g_test_add_func("/utils/hex-hash-is-valid", test_hex_hash_is_valid);
     g_test_add_func("/utils/component-id-is-valid", test_component_id_is_valid);
     g_test_add_func("/utils/program-name-is-valid", test_program_name_is_valid);
+    g_test_add_func("/utils/architecture-is-valid", test_architecture_is_valid);
+    g_test_add_func("/utils/signing-key-name-is-valid", test_signing_key_name_is_valid);
     g_test_add_func("/utils/component-kind-strings", test_component_kind_strings);
     g_test_add_func("/utils/action-strings", test_action_strings);
 

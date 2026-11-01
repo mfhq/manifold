@@ -14,10 +14,23 @@
 #include <appstream.h>
 #include <blake3.h>
 
+#include "mf-bundle-private.h"
 #include "mf-error.h"
+#include "mf-signer-private.h"
 #include "mf-store-private.h"
 
 constexpr size_t VERSION_LENGTH_MAX = 128;
+
+/* the longest name of a file or directory */
+constexpr size_t FILE_NAME_LENGTH_MAX = 255;
+
+/* the longest an identifier may be, as it is a directory name */
+constexpr size_t COMPONENT_ID_LENGTH_MAX = 255;
+
+/* the longest path in a bundle */
+constexpr size_t BUNDLE_PATH_LENGTH_MAX = 1024;
+
+constexpr size_t ARCHITECTURE_LENGTH_MAX = 64;
 
 constexpr gsize TEXT_FILE_SIZE_MAX = 1024 * 1024;
 
@@ -59,7 +72,7 @@ constexpr size_t HEX_HASH_LENGTH = 64;
  *
  * Returns: %TRUE if @name conforms
  */
-gboolean
+static gboolean
 mf_name_is_valid(const char *name, const char *extra_chars, size_t length_max)
 {
     if (name == NULL)
@@ -77,6 +90,40 @@ mf_name_is_valid(const char *name, const char *extra_chars, size_t length_max)
     }
 
     return TRUE;
+}
+
+/**
+ * mf_component_id_is_valid:
+ * @component_id: (nullable): a component identifier
+ *
+ * Validate a component-ID: It has to have 1 to 255 characters of `[A-Za-z0-9._-]`,
+ * not starting with `.` or `-`.
+ *
+ * Returns: %TRUE if the identifier is valid
+ */
+gboolean
+mf_component_id_is_valid(const char *component_id)
+{
+    return mf_name_is_valid(component_id, "._-", COMPONENT_ID_LENGTH_MAX);
+}
+
+/**
+ * mf_reverse_dns_name_is_valid:
+ * @name: a valid component identifier
+ *
+ * Returns: %TRUE if @name has at least three labels, none of them empty
+ */
+gboolean
+mf_reverse_dns_name_is_valid(const char *name)
+{
+    g_auto(GStrv) labels = g_strsplit(name, ".", -1);
+
+    for (guint i = 0; labels[i] != NULL; i++) {
+        if (labels[i][0] == '\0')
+            return FALSE;
+    }
+
+    return g_strv_length(labels) >= 3;
 }
 
 /**
@@ -111,19 +158,132 @@ mf_version_is_valid(const char *version)
 gboolean
 mf_program_name_is_valid(const char *name)
 {
-    return mf_name_is_valid(name, "._+-", MF_FILE_NAME_LENGTH_MAX);
+    return mf_name_is_valid(name, "._+-", FILE_NAME_LENGTH_MAX);
 }
 
 /**
- * mf_icon_name_is_valid:
- * @name: (nullable): the name of an icon, as an icon theme knows it
+ * mf_program_path_is_valid:
+ * @path: (nullable): a relative path
+ *
+ * Returns: %TRUE if @path only consists of names that pass mf_program_name_is_valid()
+ */
+gboolean
+mf_program_path_is_valid(const char *path)
+{
+    g_auto(GStrv) parts = NULL;
+
+    if (path == NULL)
+        return FALSE;
+    parts = g_strsplit(path, "/", -1);
+    for (guint i = 0; parts[i] != NULL; i++) {
+        if (!mf_program_name_is_valid(parts[i]))
+            return FALSE;
+    }
+
+    return parts[0] != NULL;
+}
+
+/**
+ * mf_architecture_is_valid:
+ * @architecture: (nullable): the name of an architecture
+ *
+ * Returns: %TRUE if @architecture is a plain name, like the one of mf_get_host_architecture()
+ */
+gboolean
+mf_architecture_is_valid(const char *architecture)
+{
+    return mf_name_is_valid(architecture, "_-", ARCHITECTURE_LENGTH_MAX);
+}
+
+/**
+ * mf_file_name_is_valid:
+ * @name: (nullable): the name of a file, or of an icon as an icon theme knows it
  *
  * Returns: %TRUE if @name is a plain name, and not something like a path
  */
 gboolean
-mf_icon_name_is_valid(const char *name)
+mf_file_name_is_valid(const char *name)
 {
-    return mf_name_is_valid(name, "._-", MF_FILE_NAME_LENGTH_MAX);
+    return mf_name_is_valid(name, "._-", FILE_NAME_LENGTH_MAX);
+}
+
+/**
+ * mf_signing_key_name_is_valid:
+ * @name: (nullable): the name of a signing key
+ *
+ * Returns: %TRUE if @name can not be mistaken for a path, a fingerprint or a public key
+ */
+gboolean
+mf_signing_key_name_is_valid(const char *name)
+{
+    return mf_file_name_is_valid(name) && g_ascii_isalnum(name[0]) &&
+           !g_str_has_suffix(name, MF_PUBLIC_KEY_SUFFIX);
+}
+
+/**
+ * mf_unit_file_name_is_valid:
+ * @name: (nullable): the name of a systemd unit file, which can be a template
+ *
+ * Returns: %TRUE if @name is a plain name that may hold an `@`
+ */
+gboolean
+mf_unit_file_name_is_valid(const char *name)
+{
+    return mf_name_is_valid(name, "._-@", FILE_NAME_LENGTH_MAX);
+}
+
+/**
+ * mf_plain_name_is_valid:
+ *
+ * Check the first @len bytes of a name for a plain file name: not empty, not
+ * hidden, without directories or control characters.
+ */
+static gboolean
+mf_plain_name_is_valid(const char *name, size_t len)
+{
+    if (len == 0 || len > FILE_NAME_LENGTH_MAX || name[0] == '.')
+        return FALSE;
+    for (size_t i = 0; i < len; i++) {
+        if (name[i] == '/' || name[i] == '\\' || g_ascii_iscntrl(name[i]))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * mf_bundle_file_name_is_valid:
+ *
+ * The names of the files in a bundle are only used to look entries up and in messages,
+ * nothing is ever written to disk under them. We still require plain names (nothing
+ * hidden, no control characters), so names are safe to print. Only the catalog has
+ * directories: its files have a path of plain names below %MF_BUNDLE_CATALOG_DIR.
+ */
+gboolean
+mf_bundle_file_name_is_valid(const char *name)
+{
+    const char *part;
+    size_t len;
+
+    if (name == NULL)
+        return FALSE;
+    len = strnlen(name, BUNDLE_PATH_LENGTH_MAX + 1);
+    if (len > BUNDLE_PATH_LENGTH_MAX)
+        return FALSE;
+    if (!g_str_has_prefix(name, MF_BUNDLE_CATALOG_PREFIX))
+        return mf_plain_name_is_valid(name, len);
+
+    part = name + strlen(MF_BUNDLE_CATALOG_PREFIX);
+    for (;;) {
+        const char *slash = strchr(part, '/');
+        size_t part_len = slash != NULL ? (size_t) (slash - part) : strlen(part);
+
+        if (!mf_plain_name_is_valid(part, part_len))
+            return FALSE;
+        if (slash == NULL)
+            return TRUE;
+        part = slash + 1;
+    }
 }
 
 /**
@@ -144,7 +304,7 @@ mf_mime_type_is_valid(const char *type)
     parts = g_strsplit(type, "/", 3);
 
     return g_strv_length(parts) == 2 && g_strv_contains(MIME_MEDIA_TYPES, parts[0]) &&
-           mf_name_is_valid(parts[1], "._+-", MF_FILE_NAME_LENGTH_MAX);
+           mf_program_name_is_valid(parts[1]);
 }
 
 /**

@@ -240,7 +240,8 @@ mft_manifest_json(const MftTestManifest *m)
         /* clang-format on */
     }
     if (g_strcmp0(m->kind, "app") == 0 && !m->sdk)
-        app = g_strdup(",\n   \"app\": {\n      \"command\": \"app\"\n   }");
+        app = g_strdup_printf(",\n   \"app\": {\n      \"command\": \"%s\"\n   }",
+                              m->command != NULL ? m->command : "app");
     if (m->integration != NULL)
         integration = g_strdup_printf(",\n   \"integration\": %s", m->integration);
 

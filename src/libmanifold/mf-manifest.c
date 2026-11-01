@@ -340,8 +340,10 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
         return FALSE;
     priv->kind = mf_component_kind_from_string(value);
     if (priv->kind == MF_COMPONENT_KIND_UNKNOWN) {
+        g_autofree char *shown = g_strescape(value, NULL);
+
         /* TRANSLATORS: "kind" is a field of the manifest, and not translated, %s is its value */
-        mf_set_error_invalid_manifest(error, _("kind %s is not known"), value);
+        mf_set_error_invalid_manifest(error, _("kind %s is not known"), shown);
         return FALSE;
     }
 
@@ -353,6 +355,10 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
     priv->architecture = g_strdup(FIELD_STRING(jo, NULL, "architecture", error));
     if (priv->architecture == NULL)
         return FALSE;
+    if (!mf_architecture_is_valid(priv->architecture)) {
+        mf_set_error_invalid_manifest(error, "%s", _("architecture is not valid"));
+        return FALSE;
+    }
     if (!FIELD_BOOLEAN(jo, NULL, "sdk", &priv->sdk, error))
         return FALSE;
     priv->identity = g_strdup(FIELD_HASH(jo, NULL, "identity", error));
@@ -391,8 +397,10 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
         if (priv->command == NULL)
             return FALSE;
         if (!mf_program_name_is_valid(priv->command)) {
+            g_autofree char *shown = g_strescape(priv->command, NULL);
+
             /* TRANSLATORS: "app" and "command" are a section and field of the manifest, not translated */
-            mf_set_error_invalid_manifest(error, _("app: command is not a plain name: %s"), priv->command);
+            mf_set_error_invalid_manifest(error, _("app: command is not a plain name: %s"), shown);
             return FALSE;
         }
     } else if (priv->kind == MF_COMPONENT_KIND_APP && !priv->sdk) {

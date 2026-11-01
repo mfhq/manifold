@@ -47,62 +47,6 @@ constexpr guint64 METADATA_TOTAL_SIZE_MAX = 64 * 1024 * 1024;
 
 constexpr size_t COPY_BUFFER_SIZE = 1024 * 1024;
 
-constexpr size_t PATH_LENGTH_MAX = 1024;
-
-/**
- * mf_plain_name_is_valid:
- *
- * Check the first @len bytes of a name for a plain file name: not empty, not
- * hidden, without directories or control characters.
- */
-static gboolean
-mf_plain_name_is_valid(const char *name, size_t len)
-{
-    if (len == 0 || len > MF_FILE_NAME_LENGTH_MAX || name[0] == '.')
-        return FALSE;
-    for (size_t i = 0; i < len; i++) {
-        if (name[i] == '/' || name[i] == '\\' || g_ascii_iscntrl(name[i]))
-            return FALSE;
-    }
-
-    return TRUE;
-}
-
-/**
- * mf_bundle_file_name_is_valid:
- *
- * The names of the files in a bundle are only used to look entries up and in messages,
- * nothing is ever written to disk under them. We still require plain names (nothing
- * hidden, no control characters), so names are safe to print. Only the catalog has
- * directories: its files have a path of plain names below %MF_BUNDLE_CATALOG_DIR.
- */
-gboolean
-mf_bundle_file_name_is_valid(const char *name)
-{
-    const char *part;
-    size_t len;
-
-    if (name == NULL)
-        return FALSE;
-    len = strnlen(name, PATH_LENGTH_MAX + 1);
-    if (len > PATH_LENGTH_MAX)
-        return FALSE;
-    if (!g_str_has_prefix(name, MF_BUNDLE_CATALOG_PREFIX))
-        return mf_plain_name_is_valid(name, len);
-
-    part = name + strlen(MF_BUNDLE_CATALOG_PREFIX);
-    for (;;) {
-        const char *slash = strchr(part, '/');
-        size_t part_len = slash != NULL ? (size_t) (slash - part) : strlen(part);
-
-        if (!mf_plain_name_is_valid(part, part_len))
-            return FALSE;
-        if (slash == NULL)
-            return TRUE;
-        part = slash + 1;
-    }
-}
-
 /**
  * MfBundleImage:
  *
