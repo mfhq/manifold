@@ -50,6 +50,10 @@ MfIntegrationKind mf_integration_file_get_kind(MfIntegrationFile *file);
 const char       *mf_integration_file_get_path(MfIntegrationFile *file);
 const char       *mf_integration_file_get_checksum(MfIntegrationFile *file,
                                                    MfChecksumKind     kind);
+GBytes           *mf_integration_file_render(MfIntegrationFile *file,
+                                             MfManifest        *manifest,
+                                             GBytes            *content,
+                                             GError           **error);
 
 #define MF_TYPE_INTEGRATION_ALIAS (mf_integration_alias_get_type())
 G_DECLARE_FINAL_TYPE(MfIntegrationAlias, mf_integration_alias, MF, INTEGRATION_ALIAS, GObject)
