@@ -27,6 +27,21 @@
 /* everything an image exports is in here */
 #define APP_DIR "/app/"
 
+/* the program an application runs by default is in here */
+#define APP_BIN_DIR APP_DIR "bin/"
+
+/* what everything we install runs a component with */
+#define MFRUN_PATH MF_BINDIR "/mfrun"
+
+/* the first group of a desktop entry, which describes the application */
+#define DESKTOP_MAIN_GROUP "[Desktop Entry]"
+
+/* what the name of a key is made of, in files like desktop entries */
+#define KEY_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-"
+
+/* what the language of a key is made of, like de_DE.UTF-8@euro */
+#define LOCALE_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.@-"
+
 static const char *const UNIT_SUFFIXES[] = {".service", ".socket", ".timer", ".path", ".target", NULL};
 
 static const struct {
@@ -64,6 +79,26 @@ static const char *const RESERVED_ALIASES[] = {
     "su",
     "sudo",
     "sudoedit",
+    NULL,
+};
+
+/* on a host without a default for these, a new desktop entry would get the links a user opens */
+static const char *const RESERVED_MIME_TYPES[] = {
+    "x-scheme-handler/file",
+    "x-scheme-handler/ftp",
+    "x-scheme-handler/http",
+    "x-scheme-handler/https",
+    "x-scheme-handler/mailto",
+    NULL,
+};
+
+/* the keys of a desktop entry that mean something to us, in another language they would slip past */
+static const char *const UNLOCALIZED_DESKTOP_KEYS[] = {
+    "DBusActivatable",
+    "Exec",
+    "MimeType",
+    "TryExec",
+    "Type",
     NULL,
 };
 
@@ -725,4 +760,294 @@ mf_integration_check(MfIntegration *integration, const char *component_id, GErro
     }
 
     return TRUE;
+}
+
+/**
+ * mf_integration_set_line_error:
+ * @number: the number of the line, starting at 1
+ * @problem: what is wrong with the line
+ *
+ * Set an error about a line of a file. We do not quote the line, it comes from the image.
+ */
+static void
+mf_integration_set_line_error(GError **error, MfIntegrationFile *file, guint number, const char *problem)
+{
+    /* TRANSLATORS: the path of a file, the number of a line in it, and what is wrong with that line */
+    mf_integration_set_error(error, _("%s: line %u: %s"), file->path, number, problem);
+}
+
+/**
+ * mf_integration_split_lines:
+ *
+ * Returns: (transfer full): the lines of a text file, or %NULL if it is not
+ *   a file that all of its parsers read the same way, see mf_text_is_valid()
+ */
+static char **
+mf_integration_split_lines(MfIntegrationFile *file, GBytes *content, GError **error)
+{
+    gsize size;
+    const char *data = g_bytes_get_data(content, &size);
+    g_autofree char *text = g_strndup(data != NULL ? data : "", size);
+
+    if (!mf_text_is_valid(content)) {
+        mf_integration_set_error(error,
+                                 _("%s: this is not a short UTF-8 text file with Unix line endings"),
+                                 file->path);
+        return NULL;
+    }
+
+    return g_strsplit(text, "\n", -1);
+}
+
+/**
+ * mf_integration_wrap_command:
+ * @command_line: a command line of a program of the image
+ * @component_id: the component the program is in
+ * @app_command: the program the component runs by default
+ * @ret_runs_app: (out): whether the command line runs @app_command
+ *
+ * Make a command line run in the environment of the component. Its first word
+ * has to be a program, and whatever follows goes to that program unchanged, as
+ * mfrun stops looking for options at the component ID.
+ *
+ * mfrun finds a program by its name in the image, and never on the host.
+ *
+ * Returns: (transfer full): the new command line, or %NULL if the first word is not a program
+ */
+static char *
+mf_integration_wrap_command(const char *command_line,
+                            const char *component_id,
+                            const char *app_command,
+                            gboolean *ret_runs_app)
+{
+    const char *space = strchr(command_line, ' ');
+    g_autofree char *program = space != NULL ? g_strndup(command_line, (gsize) (space - command_line))
+                                             : g_strdup(command_line);
+    g_autofree char *app_path = g_strconcat(APP_BIN_DIR, app_command, NULL);
+    GString *wrapped;
+
+    if (!mf_program_name_is_valid(program) && !mf_integration_program_is_valid(program))
+        return NULL;
+    *ret_runs_app = g_str_equal(program, app_command) || g_str_equal(program, app_path);
+
+    wrapped = g_string_new(MFRUN_PATH);
+    if (!*ret_runs_app)
+        g_string_append_printf(wrapped, " --command=%s", program);
+    g_string_append_printf(wrapped, " %s", component_id);
+    if (space != NULL)
+        g_string_append(wrapped, space);
+
+    return g_string_free(wrapped, FALSE);
+}
+
+/**
+ * mf_integration_split_desktop_key:
+ * @line: a line of a desktop entry
+ * @ret_key_len: (out): the length of the name of the key
+ * @ret_value: (out): the value in @line
+ *
+ * Find the parts of a line that has to be `Key=value` or `Key[locale]=value`.
+ * Parsers differ in how they read anything else, like spaces around the key,
+ * and KDE gives a meaning to what is in the brackets if it is not a locale, so
+ * we do not accept any of that.
+ *
+ * Returns: %TRUE if the line is of that form
+ */
+static gboolean
+mf_integration_split_desktop_key(const char *line, gsize *ret_key_len, const char **ret_value)
+{
+    gsize key_len = strspn(line, KEY_CHARS);
+    const char *after_key = line + key_len;
+
+    if (key_len == 0)
+        return FALSE;
+    if (*after_key == '[') {
+        gsize locale_len = strspn(after_key + 1, LOCALE_CHARS);
+
+        if (locale_len == 0 || after_key[locale_len + 1] != ']')
+            return FALSE;
+        after_key += locale_len + 2;
+    }
+    if (*after_key != '=')
+        return FALSE;
+
+    *ret_key_len = key_len;
+    *ret_value = after_key + 1;
+
+    return TRUE;
+}
+
+/**
+ * mf_integration_mime_types_are_valid:
+ * @value: the value of the MimeType key
+ *
+ * Returns: %FALSE if the desktop entry wants to handle a common kind of link
+ */
+static gboolean
+mf_integration_mime_types_are_valid(const char *value)
+{
+    g_auto(GStrv) types = g_strsplit(value, ";", -1);
+
+    for (guint i = 0; types[i] != NULL; i++) {
+        g_autofree char *type = g_ascii_strdown(types[i], -1);
+
+        if (g_strv_contains(RESERVED_MIME_TYPES, type))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * mf_integration_render_desktop_entry:
+ *
+ * We go through the file line by line and only change what we have to. A
+ * library for reading these files would give us the keys, but it has its own
+ * idea of what they are, which is not always the one of the program that reads
+ * the file later. So we refuse everything that is not plain, and we keep what
+ * we do not know, as unknown keys do not run anything.
+ *
+ * Returns: (transfer full): the desktop entry to install, or %NULL
+ */
+static GBytes *
+mf_integration_render_desktop_entry(MfIntegrationFile *file,
+                                    MfManifest *manifest,
+                                    GBytes *content,
+                                    GError **error)
+{
+    const char *component_id = mf_manifest_get_component_id(manifest);
+    const char *app_command = mf_manifest_get_command(manifest);
+    g_autofree char *name = g_path_get_basename(file->path);
+    g_autofree char *main_name = g_strconcat(component_id, ".desktop", NULL);
+    g_auto(GStrv) lines = mf_integration_split_lines(file, content, error);
+    g_autoptr(GHashTable) groups = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    g_autoptr(GHashTable) keys = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+    GString *output;
+    gboolean in_main_group = FALSE;
+    gboolean has_type = FALSE;
+    gboolean has_exec = FALSE;
+
+    if (lines == NULL)
+        return NULL;
+
+    output = g_string_new(NULL);
+    for (guint i = 0; lines[i] != NULL; i++) {
+        const char *line = lines[i];
+        const char *problem = NULL;
+        g_autofree char *wrapped = NULL;
+        g_autofree char *key = NULL;
+        const char *value;
+        gsize key_len;
+
+        /* the file ended in a newline */
+        if (line[0] == '\0' && lines[i + 1] == NULL)
+            break;
+
+        if (line[0] == '\0' || line[0] == '#') {
+            /* nothing to look at */
+        } else if (line[0] == '[') {
+            gsize len = strlen(line);
+
+            if (len < 3 || line[len - 1] != ']' || strcspn(line + 1, "[]") != len - 2)
+                problem = _("this is not a valid group");
+            else if (!g_hash_table_add(groups, g_strdup(line)))
+                problem = _("this group is there already");
+            else if (g_hash_table_size(groups) == 1 && !g_str_equal(line, DESKTOP_MAIN_GROUP))
+                problem = _("the first group has to be [Desktop Entry]");
+            in_main_group = g_str_equal(line, DESKTOP_MAIN_GROUP);
+            g_hash_table_remove_all(keys);
+        } else if (g_hash_table_size(groups) == 0) {
+            problem = _("the first group has to be [Desktop Entry]");
+        } else if (g_str_has_suffix(line, "\\")) {
+            problem = _("lines can not be continued");
+        } else if (!mf_integration_split_desktop_key(line, &key_len, &value)) {
+            problem = _("this is not a plain key and value");
+        } else {
+            key = g_strndup(line, key_len);
+
+            if (!g_hash_table_add(keys, g_strndup(line, (gsize) (value - line))))
+                problem = _("this key is there already");
+            else if (line[key_len] == '[' && g_strv_contains(UNLOCALIZED_DESKTOP_KEYS, key))
+                problem = _("this key can not depend on the language");
+            else if (g_str_equal(key, "TryExec"))
+                continue; /* it checks for a program on the host, which we do not install */
+            else if (g_str_equal(key, "DBusActivatable") && !g_str_equal(value, "false"))
+                problem = _("activating applications over D-Bus is not supported");
+            else if (g_str_equal(key, "Icon") && !mf_icon_name_is_valid(value))
+                problem = _("the icon has to be a plain name");
+            else if (g_str_equal(key, "MimeType") && !mf_integration_mime_types_are_valid(value))
+                problem = _("this kind of link can not be handled by an application");
+            else if (g_str_equal(key, "Type") && in_main_group && !g_str_equal(value, "Application"))
+                problem = _("only the type Application is supported");
+            else if (g_str_equal(key, "Exec")) {
+                gboolean runs_app = FALSE;
+
+                wrapped = mf_integration_wrap_command(value, component_id, app_command, &runs_app);
+                if (wrapped == NULL)
+                    problem = _("the command has to start with a program of the image");
+                else if (in_main_group && g_str_equal(name, main_name) && !runs_app)
+                    problem = _("the main desktop entry has to run the command of the application");
+            }
+
+            has_type = has_type || (in_main_group && g_str_equal(key, "Type"));
+            has_exec = has_exec || (in_main_group && g_str_equal(key, "Exec"));
+        }
+
+        if (problem != NULL) {
+            mf_integration_set_line_error(error, file, i + 1, problem);
+            g_string_free(output, TRUE);
+            return NULL;
+        }
+
+        if (wrapped != NULL)
+            g_string_append_printf(output, "Exec=%s\n", wrapped);
+        else
+            g_string_append_printf(output, "%s\n", line);
+    }
+
+    if (!has_type || !has_exec) {
+        g_string_free(output, TRUE);
+        mf_integration_set_error(error,
+                                 _("%s: the group [Desktop Entry] has to have Type and Exec"),
+                                 file->path);
+        return NULL;
+    }
+
+    return g_string_free_to_bytes(output);
+}
+
+/**
+ * mf_integration_file_render:
+ * @file: an #MfIntegrationFile
+ * @manifest: the manifest of @file, which passed mf_manifest_check_integration()
+ * @content: what the file holds in the image
+ * @error: a #GError
+ *
+ * Check the contents of a file, and make it into what is installed on the
+ * host, where anything it runs has to run in the environment of the component.
+ * This does not depend on the host, so whoever builds an image can use it to
+ * refuse what could not be installed.
+ *
+ * Returns: (transfer full): the file to install, or %NULL with %MF_ERROR_INVALID_MANIFEST
+ */
+GBytes *
+mf_integration_file_render(MfIntegrationFile *file, MfManifest *manifest, GBytes *content, GError **error)
+{
+    g_return_val_if_fail(MF_IS_INTEGRATION_FILE(file), NULL);
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
+    g_return_val_if_fail(content != NULL, NULL);
+
+    switch (file->kind) {
+    case MF_INTEGRATION_KIND_DESKTOP_ENTRY:
+        return mf_integration_render_desktop_entry(file, manifest, content, error);
+    case MF_INTEGRATION_KIND_ICON:
+        return g_bytes_ref(content);
+    default:
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_NOT_IMPLEMENTED,
+                    _("%s: this kind of file can not be installed yet"),
+                    file->path);
+        return NULL;
+    }
 }
