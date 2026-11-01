@@ -31,6 +31,10 @@ gboolean mf_name_is_valid(const char *name,
                           const char *extra_chars,
                           size_t      length_max);
 gboolean mf_icon_name_is_valid(const char *name);
+gboolean mf_mime_type_is_valid(const char *type);
+gboolean mf_mime_glob_is_valid(const char *pattern);
+gboolean mf_mime_weight_is_valid(const char *weight);
+gboolean mf_mime_xml_name_is_valid(const char *name);
 gboolean mf_text_is_valid(GBytes *text);
 
 char    *mf_hash_to_hex(const guint8 *hash,

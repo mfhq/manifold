@@ -21,6 +21,28 @@ constexpr size_t VERSION_LENGTH_MAX = 128;
 
 constexpr gsize TEXT_FILE_SIZE_MAX = 1024 * 1024;
 
+/* the default weight of a glob, and priority of a magic, in a MIME package */
+constexpr guint64 MIME_WEIGHT_MAX = 50;
+
+/* the shortest a glob can be without its wildcards, so that `*.*` does not match all files */
+constexpr gsize MIME_GLOB_LITERAL_MIN = 2;
+
+/* what the globs of MIME packages consist of, which leaves out the separators of the files
+ * that the MIME database makes of them */
+#define MIME_GLOB_CHARS "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-*?[]~+,%"
+
+/* the media types an application can add types to, others stand for what the host itself deals with */
+static const char *const MIME_MEDIA_TYPES[] = {
+    "application",
+    "audio",
+    "font",
+    "image",
+    "model",
+    "text",
+    "video",
+    NULL,
+};
+
 /* the length of a hex encoded 256 bit hash */
 constexpr size_t HEX_HASH_LENGTH = 64;
 
@@ -102,6 +124,83 @@ gboolean
 mf_icon_name_is_valid(const char *name)
 {
     return mf_name_is_valid(name, "._-", MF_FILE_NAME_LENGTH_MAX);
+}
+
+/**
+ * mf_mime_type_is_valid:
+ * @type: (nullable): a MIME type
+ *
+ * The type becomes the name of a file in the MIME database of the host.
+ *
+ * Returns: %TRUE if @type is of a known media type, and has a plain name
+ */
+gboolean
+mf_mime_type_is_valid(const char *type)
+{
+    g_auto(GStrv) parts = NULL;
+
+    if (type == NULL)
+        return FALSE;
+    parts = g_strsplit(type, "/", 3);
+
+    return g_strv_length(parts) == 2 && g_strv_contains(MIME_MEDIA_TYPES, parts[0]) &&
+           mf_name_is_valid(parts[1], "._+-", MF_FILE_NAME_LENGTH_MAX);
+}
+
+/**
+ * mf_mime_glob_is_valid:
+ * @pattern: (nullable): a glob of a MIME type
+ *
+ * Returns: %TRUE if @pattern is plain, and specific enough not to claim files of any type
+ */
+gboolean
+mf_mime_glob_is_valid(const char *pattern)
+{
+    gsize literal = 0;
+
+    if (pattern == NULL || pattern[strspn(pattern, MIME_GLOB_CHARS)] != '\0')
+        return FALSE;
+    for (const char *p = pattern; *p != '\0'; p++) {
+        if (strchr("*?[]", *p) == NULL)
+            literal++;
+    }
+
+    return literal >= MIME_GLOB_LITERAL_MIN;
+}
+
+/**
+ * mf_mime_weight_is_valid:
+ * @weight: (nullable): the weight of a glob, or the priority of a magic
+ *
+ * Returns: %TRUE if @weight does not make a type win over those of the host
+ */
+gboolean
+mf_mime_weight_is_valid(const char *weight)
+{
+    guint64 value;
+
+    return weight != NULL && g_ascii_string_to_unsigned(weight, 10, 0, MIME_WEIGHT_MAX, &value, NULL);
+}
+
+/**
+ * mf_mime_xml_name_is_valid:
+ * @name: (nullable): the namespace or element name an XML based MIME type is known by
+ *
+ * The MIME database holds these separated by spaces, one type per line.
+ *
+ * Returns: %TRUE if @name is one word
+ */
+gboolean
+mf_mime_xml_name_is_valid(const char *name)
+{
+    if (name == NULL || name[0] == '\0')
+        return FALSE;
+    for (const char *p = name; *p != '\0'; p++) {
+        if (g_ascii_isspace(*p) || g_ascii_iscntrl(*p))
+            return FALSE;
+    }
+
+    return TRUE;
 }
 
 /**
