@@ -73,6 +73,8 @@ constexpr char STAMP_NAME[] = "stamp";
 
 constexpr char STALE_PREFIX[] = ".stale-";
 
+constexpr char CLANG_CPP_SONAME_PREFIX[] = "libclang-cpp.so.";
+
 /**
  * MfrDriverKind:
  *
@@ -130,7 +132,19 @@ static const char *const SONAMES[] = {
     "libdrm_tegra.so.0",
 };
 
-/* always taken from the host: these are the entry points into its kernel driver */
+/*
+ * The compiler libraries of the AMD and Intel OpenCL drivers. They are only
+ * captured if the host has a newer version than the image. The drivers load
+ * them with dlopen(), so the capture tool does not find them as dependencies
+ * of the drivers.
+ */
+static const char *const SONAME_GLOBS[] = {
+    "libamd_comgr.so.*",
+    "libigc.so.*",
+    "libigdfcl.so.*",
+};
+
+/* libraries that are always captured from the host, because they have to match its kernel driver */
 static const char *const SONAMES_EVEN_IF_OLDER[] = {
     "libEGL.so.1",
     "libGL.so.1",
@@ -174,14 +188,14 @@ static const char *const SONAMES_EVEN_IF_OLDER[] = {
 };
 
 /*
- * Libraries matching these patterns are taken from the host even if older
- * than the image's: applications look up symbols in all of them with dlsym().
- * libamd_comgr, libigc and libigdfcl are the compilers of the AMD and Intel
- * OpenCL drivers. The drivers dlopen() them, so the capture tool does not find
- * them as dependencies of the drivers.
- * The NVIDIA names are listed one by one, as the vendor also ships
- * libnvidia-gtk*, libnvidia-wayland-client and the like, which would pull
- * toolkits in.
+ * Libraries that match these patterns are captured from the host even if
+ * the image has a newer version, because applications look up symbols in
+ * all of them with dlsym().
+ *
+ * We list the NVIDIA libraries one by one instead of using a single pattern.
+ * NVIDIA also ships libraries like libnvidia-gtk* and
+ * libnvidia-wayland-client, and capturing those would also capture the
+ * toolkits that they depend on.
  */
 static const char *const SONAME_GLOBS_EVEN_IF_OLDER[] = {
     "libEGL.so.*",
@@ -193,9 +207,6 @@ static const char *const SONAME_GLOBS_EVEN_IF_OLDER[] = {
     "libGLdispatch.so.*",
     "libOpenCL.so.*",
     "libOpenGL.so.*",
-    "libamd_comgr.so.*",
-    "libigc.so.*",
-    "libigdfcl.so.*",
     "libEGL_nvidia.so.*",
     "libGLESv1_CM_nvidia.so.*",
     "libGLESv2_nvidia.so.*",
@@ -279,16 +290,27 @@ static const struct {
     {"libxkbcommon.so.0", {"if-exists:soname:libxkbcommon-x11.so.0"}},
 };
 
-/* data directories a library finds by its install prefix, taken from the host with the library */
+/*
+ * Data directories that a library searches for at a path relative to its
+ * install prefix. If the library was captured from the host, we link its
+ * data directory to the host too.
+ *
+ * Rusticl does not work without libclc. Distributions install libclc in
+ * different directories, and Mesa has the path compiled in, so we list all
+ * of them.
+ */
 static const struct {
     const char *soname;
-    const char *dir; /* below usr/share */
+    const char *dir; /* relative to the root */
 } LIBRARY_DATA_DIRS[] = {
-    {"libdrm_amdgpu.so.1", "libdrm" },
-    {"libdrm.so.2",        "libdrm" },
-    {"libGLX_mesa.so.0",   "drirc.d"},
-    {"libEGL_mesa.so.0",   "drirc.d"},
-    {"libGLX_nvidia.so.0", "nvidia" },
+    {"libdrm_amdgpu.so.1",    "usr/share/libdrm" },
+    {"libdrm.so.2",           "usr/share/libdrm" },
+    {"libGLX_mesa.so.0",      "usr/share/drirc.d"},
+    {"libEGL_mesa.so.0",      "usr/share/drirc.d"},
+    {"libGLX_nvidia.so.0",    "usr/share/nvidia" },
+    {"libRusticlOpenCL.so.1", "usr/lib/clc"      },
+    {"libRusticlOpenCL.so.1", "usr/lib64/clc"    },
+    {"libRusticlOpenCL.so.1", "usr/share/clc"    },
 };
 
 /* the programs of glibc, which may fail to run with a libc.so.6 that they were not built with */
@@ -814,6 +836,8 @@ mfr_capture_job_register_patterns(MfrCaptureJob *job, GPtrArray *argv)
     g_ptr_array_add(argv, g_strdup("gl:"));
     for (size_t i = 0; i < G_N_ELEMENTS(SONAMES); i++)
         g_ptr_array_add(argv, g_strdup_printf("if-exists:if-same-abi:soname:%s", SONAMES[i]));
+    for (size_t i = 0; i < G_N_ELEMENTS(SONAME_GLOBS); i++)
+        g_ptr_array_add(argv, g_strdup_printf("if-exists:soname-match:%s", SONAME_GLOBS[i]));
     for (size_t i = 0; i < G_N_ELEMENTS(SONAMES_EVEN_IF_OLDER); i++)
         g_ptr_array_add(
             argv,
@@ -1523,18 +1547,64 @@ mfr_capture_job_link_to_host(MfrCaptureJob *job,
 }
 
 /**
+ * mfr_capture_job_resolve_core_path:
+ * @path: an absolute path in the tree
+ *
+ * Resolve the symbolic links in @path within the core.
+ *
+ * We need the resolved path to create an override. If a directory in @path
+ * is a link in the core, an override at the unresolved path would replace
+ * the link itself, and hide the whole directory that the link points to.
+ *
+ * Returns: (transfer full): the resolved path, relative to the root of the core
+ */
+static char *
+mfr_capture_job_resolve_core_path(MfrCaptureJob *job, const char *path)
+{
+    /* resolve links with the core as root directory, so an absolute link can not point outside of it */
+    struct open_how how = {.flags = O_PATH | O_CLOEXEC, .resolve = RESOLVE_IN_ROOT};
+    glnx_autofd int core_fd = open(job->core_mount, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    glnx_autofd int fd = core_fd >= 0 ? (int) syscall(SYS_openat2, core_fd, path, &how, sizeof(how)) : -1;
+    g_autofree char *fd_path = g_strdup_printf("/proc/self/fd/%d", fd);
+    g_autofree char *resolved = fd >= 0 ? g_file_read_link(fd_path, NULL) : NULL;
+
+    if (resolved != NULL && g_str_has_prefix(resolved, job->core_mount) &&
+        resolved[strlen(job->core_mount)] == '/')
+        return g_strdup(resolved + strlen(job->core_mount) + 1);
+    /* the path does not exist in the core, so we use it unchanged */
+    return g_strdup(g_path_skip_root(path));
+}
+
+/**
  * mfr_capture_job_link_host_path:
  *
- * Link a path of the tree to the host's, if the host has it and it passes @test.
+ * Create a link in the overrides directory that points to the same path of
+ * the host, if the path exists on the host and passes @test.
+ *
+ * A parent directory of the path may be a link in the core, so two different
+ * paths of the host can resolve to the same path in the tree. In that case
+ * we keep the link that was created first.
  */
 static gboolean
 mfr_capture_job_link_host_path(MfrCaptureJob *job, const char *relative_path, GFileTest test, GError **error)
 {
     g_autofree char *host_path = g_build_filename("/", relative_path, NULL);
+    g_autofree char *parent = g_path_get_dirname(host_path);
+    g_autofree char *name = g_path_get_basename(host_path);
+    g_autofree char *parent_in_core = NULL;
+    g_autofree char *path_in_core = NULL;
+    g_autofree char *link = NULL;
 
     if (!g_file_test(host_path, test))
         return TRUE;
-    return mfr_capture_job_link_to_host(job, relative_path, host_path, error);
+
+    parent_in_core = mfr_capture_job_resolve_core_path(job, parent);
+    path_in_core = g_build_filename(parent_in_core, name, NULL);
+    link = g_build_filename(job->overrides_dir, path_in_core, NULL);
+    if (g_file_test(link, G_FILE_TEST_IS_SYMLINK))
+        return TRUE;
+
+    return mfr_capture_job_link_to_host(job, path_in_core, host_path, error);
 }
 
 /**
@@ -1566,35 +1636,6 @@ mfr_capture_job_ask_tool(MfrCaptureJob *job, const char *option, GError **error)
     if (!mfr_capture_run_tool(argv, &output, error))
         return NULL;
     return g_strchomp(output);
-}
-
-/**
- * mfr_capture_job_resolve_core_path:
- * @path: an absolute path in the tree
- *
- * Resolve the symbolic links in @path within the core.
- *
- * We need the resolved path to create an override. If a directory in @path
- * is a link in the core, an override at the unresolved path would replace
- * the link itself, and hide the whole directory that the link points to.
- *
- * Returns: (transfer full): the resolved path, relative to the root of the core
- */
-static char *
-mfr_capture_job_resolve_core_path(MfrCaptureJob *job, const char *path)
-{
-    /* resolve links with the core as root directory, so an absolute link can not point outside of it */
-    struct open_how how = {.flags = O_PATH | O_CLOEXEC, .resolve = RESOLVE_IN_ROOT};
-    glnx_autofd int core_fd = open(job->core_mount, O_PATH | O_DIRECTORY | O_CLOEXEC);
-    glnx_autofd int fd = core_fd >= 0 ? (int) syscall(SYS_openat2, core_fd, path, &how, sizeof(how)) : -1;
-    g_autofree char *fd_path = g_strdup_printf("/proc/self/fd/%d", fd);
-    g_autofree char *resolved = fd >= 0 ? g_file_read_link(fd_path, NULL) : NULL;
-
-    if (resolved != NULL && g_str_has_prefix(resolved, job->core_mount) &&
-        resolved[strlen(job->core_mount)] == '/')
-        return g_strdup(resolved + strlen(job->core_mount) + 1);
-    /* the path does not exist in the core, so we use it unchanged */
-    return g_strdup(g_path_skip_root(path));
 }
 
 /**
@@ -1693,14 +1734,49 @@ mfr_capture_job_link_host_data_dirs(MfrCaptureJob *job, GError **error)
     g_autoptr(GHashTable) linked = g_hash_table_new(g_str_hash, g_str_equal);
 
     for (size_t i = 0; i < G_N_ELEMENTS(LIBRARY_DATA_DIRS); i++) {
-        g_autofree char *dir = g_build_filename("usr/share", LIBRARY_DATA_DIRS[i].dir, NULL);
+        const char *dir = LIBRARY_DATA_DIRS[i].dir;
 
-        if (g_hash_table_contains(linked, LIBRARY_DATA_DIRS[i].dir) ||
+        if (g_hash_table_contains(linked, dir) ||
             !mfr_capture_job_check_captured(job, LIBRARY_DATA_DIRS[i].soname))
             continue;
         if (!mfr_capture_job_link_host_dir(job, dir, error))
             return FALSE;
-        g_hash_table_add(linked, (char *) LIBRARY_DATA_DIRS[i].dir);
+        g_hash_table_add(linked, (char *) dir);
+    }
+
+    return TRUE;
+}
+
+/**
+ * mfr_capture_job_link_clang_resource_dirs:
+ *
+ * Link the resource directory of every libclang-cpp that was captured from
+ * the host. The resource directory contains the headers that Rusticl needs
+ * to compile OpenCL kernels.
+ *
+ * Clang finds the resource directory relative to the real path of its
+ * library, which is below /run/host. Debian does not install the library
+ * below its LLVM prefix, and Rusticl then uses the path in the LLVM prefix
+ * that it was built with. We link that path if the host has it.
+ */
+static gboolean
+mfr_capture_job_link_clang_resource_dirs(MfrCaptureJob *job, GError **error)
+{
+    g_autoptr(GDir) libdir = g_dir_open(job->libdir, 0, error);
+    const char *name;
+
+    if (libdir == NULL)
+        return FALSE;
+    while ((name = g_dir_read_name(libdir)) != NULL) {
+        g_autofree char *resource_dir = NULL;
+        guint major;
+
+        if (!g_str_has_prefix(name, CLANG_CPP_SONAME_PREFIX))
+            continue;
+        major = (guint) g_ascii_strtoull(name + strlen(CLANG_CPP_SONAME_PREFIX), NULL, 10);
+        resource_dir = g_strdup_printf("usr/lib/llvm-%u/lib/clang/%u", major, major);
+        if (!mfr_capture_job_link_host_dir(job, resource_dir, error))
+            return FALSE;
     }
 
     return TRUE;
@@ -1979,6 +2055,8 @@ mfr_capture_build(const char *dir, const char *core_mount, const char *arch_tupl
     if (!mfr_capture_job_link_host_glibc_runtime(&job, error))
         goto out;
     if (!mfr_capture_job_link_host_data_dirs(&job, error))
+        goto out;
+    if (!mfr_capture_job_link_clang_resource_dirs(&job, error))
         goto out;
     mfr_capture_job_add_driver_path_vars(&job);
 
