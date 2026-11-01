@@ -169,6 +169,9 @@ static const char *const SONAMES_EVEN_IF_OLDER[] = {
 /*
  * Libraries matching these patterns are taken from the host even if older
  * than the image's: applications look up symbols in all of them with dlsym().
+ * libamd_comgr, libigc and libigdfcl are the compilers of the AMD and Intel
+ * OpenCL drivers. The drivers dlopen() them, so the capture tool does not find
+ * them as dependencies of the drivers.
  * The NVIDIA names are listed one by one, as the vendor also ships
  * libnvidia-gtk*, libnvidia-wayland-client and the like, which would pull
  * toolkits in.
@@ -183,6 +186,9 @@ static const char *const SONAME_GLOBS_EVEN_IF_OLDER[] = {
     "libGLdispatch.so.*",
     "libOpenCL.so.*",
     "libOpenGL.so.*",
+    "libamd_comgr.so.*",
+    "libigc.so.*",
+    "libigdfcl.so.*",
     "libEGL_nvidia.so.*",
     "libGLESv1_CM_nvidia.so.*",
     "libGLESv2_nvidia.so.*",
