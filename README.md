@@ -26,25 +26,30 @@ consumer desktop app model that Flatpak already serves well.
 
 ## Design principles
 
-**Deployment is not sandboxing.** Manifold splits the reproducible/compatible environment
-problem (consistent libraries across distributions) from the isolation problem
-(restricting what an application can do). Only the first problem is solved by Manifold.
-By default, nothing sits between an application and the system: There is no sandbox,
-no seccomp filter, and no supervising process. The application is executed in place.
-Isolation, if an application wants it, is meant to be added by other tools.
-Manifold will provide sandboxing hooks, but apart from that expects the application to do
-any sandboxing on its own
+### Deployment is not sandboxing
 
-**Built on stable distributions.** Curating a parallel package ecosystem and tracking dependencies
-takes an enormous amount of ongoing work, and Debian, Ubuntu LTS, AlmaLinux, and similar projects
-already do it. Manifold uses them as its runtime substrate instead of duplicating that effort.
-This results in familiar build environments and blazingly fast builds of application images.
-Runtime images consist only of distribution packages, and can be reproduced from their package
-list. Application vendors target a known stable distribution, and Manifold delivers the
-result to whatever distribution the host runs.
+Manifold splits the reproducible/compatible environment problem (consistent libraries
+across distributions) from the isolation problem (restricting what an application can
+do), and only solves the first. By default, nothing sits between an application and the
+system: There is no sandbox, no seccomp filter, and no supervising process. The
+application is executed in place. An application that wants isolation is expected to set
+it up on its own, using other tools. Manifold might provide sandboxing hooks in future
+to make this easier and to allow custom confines to be applied, but if you want a true
+sandbox-by-default, you should use Flatpak instead.
 
-**Reuse the ecosystem.** Manifold uses existing, well-maintained components.
-It contains no new filesystem, image format, or sandbox. It mostly just combines
+### Built on stable distributions
+
+Curating a parallel package ecosystem and tracking dependencies takes an enormous amount
+of ongoing work, and Debian, Ubuntu LTS, AlmaLinux, and similar projects already do this
+for decades. Manifold builds its runtimes from these distributions (Debian by default),
+which keeps build environments familiar and makes application images very quick to build.
+Runtime images consist only of distribution packages, and can be reproduced from their
+package list. Application vendors target a known stable distribution, and Manifold delivers
+the result to whatever distribution the host runs.
+
+### Reuse the ecosystem
+
+Manifold contains no new filesystem, image format, or sandbox. It mostly just combines
 well-established existing technology:
 
 - Disk images laid out like [UAPI Discoverable Disk Images](https://uapi-group.org/specifications/specs/discoverable_disk_image/),
@@ -57,33 +62,34 @@ well-established existing technology:
 - systemd for Varlink and various useful utilities.
 - AppStream MetaInfo for component metadata.
 
-**Integrate with the host.** Manifold applications are first-class citizens on the
-host system. They run in a mount namespace that exists for library consistency, not
-for isolation: the user's home, `/dev`, D-Bus, the user's runtime directory, and the
-host's own filesystem are all visible inside it. A Manifold application launched from
-a systemd unit *is* that unit's main process. Manifold applications may install aliases
-into `PATH`, install udev rules, systemd units, MIME types, etc. in a declarative way.
+### Integrate with the host
 
-**Take the host's drivers.** The graphics and compute drivers come from the
-host, because that is the driver stack the host system is certified for.
-Everything else comes from the images, with a few exceptions where the respective
-newer copy wins.
+Applications run in a mount namespace that only exists for library consistency: the
+user's home, `/dev`, D-Bus, the user's runtime directory, and the host's own filesystem
+are all visible inside it. An application launched from a systemd unit *is* that unit's
+main process. Applications can declare what to install on the host: aliases in `PATH`,
+udev rules, systemd units, MIME types, and so on.
+
+### Take the host's drivers
+
+The graphics and compute drivers come from the host, because that is the driver stack the
+host system is certified for. Everything else comes from the images, with a few exceptions
+where the respective newer copy wins.
 
 
 ## Non-goals
 
-- **Replacing Flatpak for consumer desktop apps.** Flatpak's sandbox model works for
-  that use case. Manifold targets software for which that model doesn't fit.
-- **Portability across architectures.** Images are architecture-specific; x86_64 and
-  aarch64 builds are separate artifacts. Installing an image built for another
-  architecture is refused (for now at least).
-- **A standalone, unprivileged mode.** Manifold requires a privileged installation step,
-  and applications are installed system-wide. The AppImage-like use case is out of scope.
-- **A sandbox.** When a user launches an application, it runs in a user namespace, but
-  only because that is how a process without privileges gets a mount namespace of its
-  own. Nothing is hidden from the application.
-- **Support for non-Glibc hosts.** Manifold does not support hosts that do not use Glibc
-  currently. It targets Linux distributions with a GNU or GNU-compatible userland only.
+- Manifold is not meant to replace Flatpak for consumer desktop apps. Flatpak's sandbox
+  model works for that use case, and Manifold targets software it doesn't fit.
+- Images are architecture-specific. x86_64 and aarch64 builds are separate artifacts, and
+  Manifold refuses to install an image built for another architecture (for now at least).
+- There is no standalone, unprivileged mode. Manifold requires a privileged installation
+  step and installs applications system-wide, so an AppImage-like use case is out of scope.
+- Manifold is not a sandbox. When a user launches an application, it runs in a user
+  namespace, but only because that is how a process without privileges gets a mount
+  namespace of its own. Nothing is hidden from the application.
+- Hosts without Glibc are currently not supported. Manifold only targets Linux
+  distributions with a GNU (or GNU-compatible) userland.
 
 
 ## Building
