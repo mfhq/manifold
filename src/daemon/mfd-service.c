@@ -53,13 +53,18 @@ G_DEFINE_TYPE(MfdService, mfd_service, G_TYPE_OBJECT)
 
 typedef struct _MfdRequest MfdRequest;
 
+/* what a #MfdRequestFunc returns if it handed the request back to polkit */
+#define MFD_REQUEST_DEFERRED 1
+
 /**
  * MfdRequestFunc:
  *
  * Do what a request asks for, and reply to its call. The reply is an error
  * if the request failed.
  *
- * Returns: 0 if we replied, or a negative errno if we were unable to reply.
+ * Returns: 0 if we replied, %MFD_REQUEST_DEFERRED if polkit has to authorize
+ *   the request for another action, or a negative errno if we were unable
+ *   to reply. After %MFD_REQUEST_DEFERRED, the request may not exist anymore.
  */
 typedef int (*MfdRequestFunc)(MfdService *service, MfdRequest *request);
 
@@ -81,9 +86,11 @@ struct _MfdRequest {
     const char *action_id;    /* the polkit action the caller needs */
     uid_t uid;                /* the calling user */
     gboolean report_progress; /* the call was made with the 'more' flag */
+    MfTransactionFlags flags; /* the transaction flags of the call */
     sd_bus_slot *polkit_slot; /* the authorization check in progress, or NULL */
 
     int bundle_fd;      /* the bundle to install, or -1 */
+    MfBundle *bundle;   /* the bundle to install, once we have read it */
     char *component_id; /* the component to remove or mark */
     char *version;      /* the version to remove or mark, or NULL for all of them */
     MfInstallMode mode; /* how to mark the component */
@@ -124,6 +131,7 @@ mfd_request_free(MfdRequest *request)
 {
     sd_bus_slot_unref(request->polkit_slot);
     sd_varlink_unref(request->link);
+    g_clear_object(&request->bundle);
     if (request->bundle_fd >= 0)
         close(request->bundle_fd);
     g_free(request->component_id);
@@ -487,48 +495,6 @@ mfd_service_on_progress(const MfProgress *progress, gpointer user_data)
 }
 
 /**
- * mfd_service_install_bundle:
- *
- * Install everything a bundle contains, and reply to the call.
- */
-static int
-mfd_service_install_bundle(MfdService *service, MfdRequest *request)
-{
-    g_auto(MfdErrorDetail) detail = {};
-    g_autoptr(MfBundle) bundle = NULL;
-    g_autoptr(MfResult) result = NULL;
-    g_autoptr(GError) error = NULL;
-
-    g_message("User %u requested to install a bundle", (unsigned int) request->uid);
-
-    bundle = mf_bundle_new_from_fd(request->bundle_fd, &error);
-    if (bundle == NULL) {
-        mfd_service_reply_error(request->link, error, NULL);
-        return 0;
-    }
-
-    /* TODO: Verify the signature against trusted keys, once a host has some. */
-    if (mf_bundle_is_signed(bundle))
-        g_warning(
-            "The bundle is signed, but the signature was not verified: trusted keys are not supported yet");
-    else
-        g_warning("The bundle is not signed");
-
-    result = mfd_manager_install_bundle(service->manager,
-                                        bundle,
-                                        request->report_progress ? mfd_service_on_progress : NULL,
-                                        request->link,
-                                        &detail,
-                                        &error);
-    if (result == NULL) {
-        mfd_service_reply_error(request->link, error, &detail);
-        return 0;
-    }
-
-    return mfd_service_reply_result(request->link, result);
-}
-
-/**
  * mfd_service_remove:
  *
  * Remove the component of the request, or clean up if the request names
@@ -647,6 +613,8 @@ mfd_service_on_run_queue(sd_event_source *source, void *userdata)
         return 0;
 
     r = request->run(service, request);
+    if (r == MFD_REQUEST_DEFERRED)
+        return 0;
     if (r < 0) {
         g_warning("Unable to reply to the call of %s by user %u: %s",
                   request->method,
@@ -739,27 +707,56 @@ mfd_service_get_bus(MfdService *service, GError **error)
 }
 
 /**
+ * mfd_service_ask_polkit:
+ * @request: A request whose caller is not authorized for its action yet.
+ *
+ * Ask polkit whether the caller of @request is authorized for its action. We
+ * queue the request once polkit has authorized the caller, see
+ * mfd_service_on_polkit_reply(). We do not wait for polkit, as it may ask the
+ * user for a password, and the requests of other callers must not wait for that.
+ *
+ * Returns: 0, or a negative errno if we refused the request right away.
+ */
+static int
+mfd_service_ask_polkit(MfdService *service, MfdRequest *request)
+{
+    g_autoptr(GError) error = NULL;
+    sd_bus *bus;
+
+    bus = mfd_service_get_bus(service, &error);
+    if (bus == NULL ||
+        !mfd_policy_check_async(bus,
+                                request->link,
+                                request->uid,
+                                request->action_id,
+                                mf_flags_contains(request->flags, MF_TRANSACTION_FLAG_INTERACTIVE),
+                                mfd_service_on_polkit_reply,
+                                request,
+                                &request->polkit_slot,
+                                &error))
+        return mfd_service_refuse_request(service, request, error);
+
+    return 0;
+}
+
+/**
  * mfd_service_authorize:
  * @request: (transfer full): A request whose caller is not authorized yet.
  * @flags: The transaction flags of the call.
  *
  * Check whether the caller may make @request. Root and the user we are
  * running as may do everything, so we queue their requests right away.
- * For everyone else we ask polkit, and queue the request once polkit has
- * authorized the caller, see mfd_service_on_polkit_reply(). We do not wait
- * for polkit, as it may ask the user for a password, and the requests of
- * other callers must not wait for that.
+ * For everyone else we ask polkit, see mfd_service_ask_polkit().
  *
  * Returns: 0, or a negative errno to return from the method callback.
  */
 static int
 mfd_service_authorize(MfdService *service, MfdRequest *request, MfTransactionFlags flags)
 {
-    g_autoptr(GError) error = NULL;
-    sd_bus *bus;
     int r;
 
     request->service = service;
+    request->flags = flags;
     g_hash_table_insert(service->requests, request->link, request);
 
     r = mf_varlink_get_peer_uid(request->link, &request->uid);
@@ -773,19 +770,84 @@ mfd_service_authorize(MfdService *service, MfdRequest *request, MfTransactionFla
         return 0;
     }
 
-    bus = mfd_service_get_bus(service, &error);
-    if (bus == NULL || !mfd_policy_check_async(bus,
-                                               request->link,
-                                               request->uid,
-                                               request->action_id,
-                                               mf_flags_contains(flags, MF_TRANSACTION_FLAG_INTERACTIVE),
-                                               mfd_service_on_polkit_reply,
-                                               request,
-                                               &request->polkit_slot,
-                                               &error))
-        return mfd_service_refuse_request(service, request, error);
+    return mfd_service_ask_polkit(service, request);
+}
 
-    return 0;
+/**
+ * mfd_bundle_is_privileged:
+ *
+ * Returns: %TRUE if a component of @bundle can gain root access to the host,
+ *   see mf_integration_is_privileged()
+ */
+static gboolean
+mfd_bundle_is_privileged(MfBundle *bundle)
+{
+    GPtrArray *images = mf_bundle_get_images(bundle);
+
+    for (guint i = 0; i < images->len; i++) {
+        MfManifest *manifest = mf_bundle_image_get_manifest(g_ptr_array_index(images, i));
+        MfIntegration *integration = mf_manifest_get_integration(manifest);
+
+        if (integration != NULL && mf_integration_is_privileged(integration))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+/**
+ * mfd_service_install_bundle:
+ *
+ * Install everything a bundle contains, and reply to the call.
+ *
+ * We can only tell what a bundle needs after reading it, and we only read a
+ * bundle for a caller that is authorized to install bundles. So a bundle that
+ * can gain root access to the host needs a second authorization: we hand the
+ * request back to polkit for the stricter action, and polkit queues it again.
+ * Root and the user we are running as may do everything, as for every request.
+ */
+static int
+mfd_service_install_bundle(MfdService *service, MfdRequest *request)
+{
+    g_auto(MfdErrorDetail) detail = {};
+    g_autoptr(MfResult) result = NULL;
+    g_autoptr(GError) error = NULL;
+
+    if (request->bundle == NULL) {
+        g_message("User %u requested to install a bundle", (unsigned int) request->uid);
+
+        request->bundle = mf_bundle_new_from_fd(request->bundle_fd, &error);
+        if (request->bundle == NULL) {
+            mfd_service_reply_error(request->link, error, NULL);
+            return 0;
+        }
+
+        /* TODO: Verify the signature against trusted keys, once a host has some. */
+        if (mf_bundle_is_signed(request->bundle))
+            g_warning(
+                "The bundle is signed, but the signature was not verified: trusted keys are not supported yet");
+        else
+            g_warning("The bundle is not signed");
+
+        if (!mf_peer_is_privileged(request->uid) && mfd_bundle_is_privileged(request->bundle)) {
+            request->action_id = MFD_POLKIT_ACTION_INSTALL_PRIVILEGED;
+            mfd_service_ask_polkit(service, request);
+            return MFD_REQUEST_DEFERRED;
+        }
+    }
+
+    result = mfd_manager_install_bundle(service->manager,
+                                        request->bundle,
+                                        request->report_progress ? mfd_service_on_progress : NULL,
+                                        request->link,
+                                        &detail,
+                                        &error);
+    if (result == NULL) {
+        mfd_service_reply_error(request->link, error, &detail);
+        return 0;
+    }
+
+    return mfd_service_reply_result(request->link, result);
 }
 
 /**

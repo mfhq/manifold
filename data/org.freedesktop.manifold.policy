@@ -29,6 +29,17 @@
     </defaults>
   </action>
 
+  <!-- System services and udev rules can give a component root access to the host -->
+  <action id="org.freedesktop.manifold.install-privileged">
+    <description>Install components with system services or udev rules</description>
+    <message>Authentication is required to install software that can gain full access to this system</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+  </action>
+
   <!-- Marking removes nothing itself, but decides what later operations remove -->
   <action id="org.freedesktop.manifold.mark">
     <description>Mark software components to be kept or removed automatically</description>
