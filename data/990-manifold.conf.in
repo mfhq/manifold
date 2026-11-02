@@ -1,0 +1,7 @@
+# Make the applications that Manifold installed available to user sessions.
+#
+# Our directories come last, so that everything the host provides takes precedence.
+#
+# The name of this file has to sort after 99-environment.conf
+PATH=${PATH}:@MF_EXPORTS_DIR@/bin
+XDG_DATA_DIRS=${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:@MF_EXPORTS_DIR@/share

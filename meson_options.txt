@@ -25,6 +25,11 @@ option('integration-prefix',
        value : '/usr/local',
        description : 'Prefix to install the systemd units and udev rules of applications to at runtime'
 )
+option('profile-dir',
+       type : 'string',
+       value : '/etc/profile.d',
+       description : 'Directory of the scripts that login shells read'
+)
 
 #
 # For development

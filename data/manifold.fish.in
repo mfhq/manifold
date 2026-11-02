@@ -1,0 +1,18 @@
+#
+# Make the applications that Manifold installed available to fish.
+#
+# Our directories come last, so that everything the host provides takes precedence.
+
+if not contains -- @MF_EXPORTS_DIR@/bin $PATH
+    set --global --export --append PATH @MF_EXPORTS_DIR@/bin
+end
+
+# fish only splits XDG_DATA_DIRS at its colons if we declare it as a list of paths
+set --global --export --path XDG_DATA_DIRS $XDG_DATA_DIRS
+
+# an empty XDG_DATA_DIRS stands for a default, which we have to keep when we add to it
+test -n "$XDG_DATA_DIRS"; or set --global XDG_DATA_DIRS /usr/local/share /usr/share
+
+if not contains -- @MF_EXPORTS_DIR@/share $XDG_DATA_DIRS
+    set --global --append XDG_DATA_DIRS @MF_EXPORTS_DIR@/share
+end
