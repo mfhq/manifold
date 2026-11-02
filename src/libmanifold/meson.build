@@ -18,6 +18,7 @@ mflib_src = [
     'mf-result.c',
     'mf-signer.c',
     'mf-store.c',
+    'mf-trusted-keys.c',
     'mf-utils.c',
     'mf-version.c',
 ]
@@ -35,6 +36,7 @@ mflib_pub_headers = [
     'mf-result.h',
     'mf-signer.h',
     'mf-store.h',
+    'mf-trusted-keys.h',
     'mf-utils.h',
 ]
 

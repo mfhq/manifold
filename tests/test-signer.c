@@ -301,6 +301,159 @@ test_agent(Fixture *fixture, gconstpointer user_data)
     g_subprocess_wait(agent, NULL, NULL);
 }
 
+/**
+ * mft_check_untrusted:
+ *
+ * Check that @keys refuse @signature over @data for @scope.
+ */
+static void
+mft_check_untrusted(MfTrustedKeys *keys, MfSignatureScope scope, GBytes *data, GBytes *signature)
+{
+    g_autoptr(GError) error = NULL;
+
+    g_assert_false(mf_trusted_keys_verify(keys, scope, data, signature, NULL, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
+}
+
+static void
+test_verify(Fixture *fixture, gconstpointer user_data)
+{
+    g_autofree char *key = NULL;
+    g_autofree char *other_key = NULL;
+    g_autofree char *public_key_file = NULL;
+    g_autofree char *public_key = NULL;
+    g_autofree char *fingerprint = NULL;
+    g_autoptr(MfSigner) signer = NULL;
+    g_autoptr(MfSigner) other_signer = NULL;
+    g_autoptr(MfTrustedKeys) keys = NULL;
+    g_autoptr(GBytes) data = g_bytes_new_static("some data\n", 10);
+    g_autoptr(GBytes) changed_data = g_bytes_new_static("some date\n", 10);
+    g_autoptr(GBytes) signature = NULL;
+    g_autoptr(GBytes) other_signature = NULL;
+    g_autoptr(GBytes) repo_signature = NULL;
+    g_autoptr(GError) error = NULL;
+
+    if (fixture->dir == NULL)
+        return;
+    key = mft_make_key(fixture->dir, "key");
+    other_key = mft_make_key(fixture->dir, "other");
+    signer = mf_signer_new_for_key_file(key);
+    other_signer = mf_signer_new_for_key_file(other_key);
+    signature = mf_signer_sign(signer, MF_SIGNATURE_SCOPE_BUNDLE, data, &error);
+    g_assert_no_error(error);
+    other_signature = mf_signer_sign(other_signer, MF_SIGNATURE_SCOPE_BUNDLE, data, &error);
+    g_assert_no_error(error);
+    repo_signature = mf_signer_sign(signer, MF_SIGNATURE_SCOPE_REPO, data, &error);
+    g_assert_no_error(error);
+
+    /* without trusted keys, no signature is valid */
+    keys = mf_trusted_keys_new();
+    g_assert_true(mf_trusted_keys_is_empty(keys));
+    mft_check_untrusted(keys, MF_SIGNATURE_SCOPE_BUNDLE, data, signature);
+
+    g_assert_false(mf_trusted_keys_add_key(keys, "ssh-ed25519 AAAA\nssh-ed25519 AAAA", &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_FAILED);
+    g_clear_error(&error);
+    public_key_file = g_strconcat(key, ".pub", NULL);
+    public_key = mft_read_file(public_key_file);
+    g_assert_true(mf_trusted_keys_add_key(keys, public_key, &error));
+    g_assert_no_error(error);
+    g_assert_false(mf_trusted_keys_is_empty(keys));
+
+    g_assert_true(
+        mf_trusted_keys_verify(keys, MF_SIGNATURE_SCOPE_BUNDLE, data, signature, &fingerprint, &error));
+    g_assert_no_error(error);
+    g_assert_cmpstr(fingerprint, ==, mf_signer_get_fingerprint(signer));
+
+    /* a different key, a different scope or different data make the signature invalid */
+    mft_check_untrusted(keys, MF_SIGNATURE_SCOPE_BUNDLE, data, other_signature);
+    mft_check_untrusted(keys, MF_SIGNATURE_SCOPE_BUNDLE, data, repo_signature);
+    mft_check_untrusted(keys, MF_SIGNATURE_SCOPE_BUNDLE, changed_data, signature);
+}
+
+static void
+test_trusted_key_dirs(Fixture *fixture, gconstpointer user_data)
+{
+    g_autofree char *vendor_dir = NULL;
+    g_autofree char *admin_dir = NULL;
+    g_autofree char *missing_dir = NULL;
+    g_autofree char *key = NULL;
+    g_autofree char *other_key = NULL;
+    g_autofree char *public_key = NULL;
+    g_autofree char *other_public_key = NULL;
+    g_autofree char *path = NULL;
+    g_autofree char *broken = NULL;
+    g_autoptr(MfSigner) signer = NULL;
+    g_autoptr(MfSigner) other_signer = NULL;
+    g_autoptr(MfTrustedKeys) keys = NULL;
+    g_autoptr(GBytes) data = g_bytes_new_static("some data\n", 10);
+    g_autoptr(GBytes) signature = NULL;
+    g_autoptr(GBytes) other_signature = NULL;
+    g_autoptr(GError) error = NULL;
+
+    if (fixture->dir == NULL)
+        return;
+    key = mft_make_key(fixture->dir, "key");
+    other_key = mft_make_key(fixture->dir, "other");
+    signer = mf_signer_new_for_key_file(key);
+    other_signer = mf_signer_new_for_key_file(other_key);
+    signature = mf_signer_sign(signer, MF_SIGNATURE_SCOPE_REPO, data, &error);
+    g_assert_no_error(error);
+    other_signature = mf_signer_sign(other_signer, MF_SIGNATURE_SCOPE_REPO, data, &error);
+    g_assert_no_error(error);
+    public_key = g_strconcat(mf_signer_get_public_key(signer), "\n", NULL);
+    other_public_key = g_strconcat(mf_signer_get_public_key(other_signer), "\n", NULL);
+
+    /* the vendor trusts the first key, and only key files count */
+    vendor_dir = g_build_filename(fixture->dir, "vendor", NULL);
+    mft_make_dirs(vendor_dir);
+    path = g_build_filename(vendor_dir, "release.pub", NULL);
+    mft_write_file(path, public_key);
+    g_clear_pointer(&path, g_free);
+    path = g_build_filename(vendor_dir, "notes.txt", NULL);
+    mft_write_file(path, "not a key");
+    g_clear_pointer(&path, g_free);
+
+    keys = mf_trusted_keys_new();
+    g_assert_true(mf_trusted_keys_add_dir(keys, vendor_dir, &error));
+    g_assert_no_error(error);
+    g_assert_true(mf_trusted_keys_verify(keys, MF_SIGNATURE_SCOPE_REPO, data, signature, NULL, &error));
+    g_assert_no_error(error);
+
+    /* a directory that does not exist adds nothing */
+    missing_dir = g_build_filename(fixture->dir, "missing", NULL);
+    g_assert_true(mf_trusted_keys_add_dir(keys, missing_dir, &error));
+    g_assert_no_error(error);
+
+    /* a broken key file leaves the keys as they were */
+    admin_dir = g_build_filename(fixture->dir, "admin", NULL);
+    mft_make_dirs(admin_dir);
+    path = g_build_filename(admin_dir, "release.pub", NULL);
+    mft_write_file(path, other_public_key);
+    broken = g_build_filename(admin_dir, "broken.pub", NULL);
+    mft_write_file(broken, "not a key\n");
+    g_assert_false(mf_trusted_keys_add_dir(keys, admin_dir, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_FAILED);
+    g_clear_error(&error);
+    g_assert_true(mf_trusted_keys_verify(keys, MF_SIGNATURE_SCOPE_REPO, data, signature, NULL, &error));
+    g_assert_no_error(error);
+
+    /* the administrator replaces the key of the same name */
+    g_assert_cmpint(g_unlink(broken), ==, 0);
+    g_assert_true(mf_trusted_keys_add_dir(keys, admin_dir, &error));
+    g_assert_no_error(error);
+    mft_check_untrusted(keys, MF_SIGNATURE_SCOPE_REPO, data, signature);
+    g_assert_true(mf_trusted_keys_verify(keys, MF_SIGNATURE_SCOPE_REPO, data, other_signature, NULL, &error));
+    g_assert_no_error(error);
+
+    /* and masks it with a link to /dev/null */
+    g_assert_cmpint(g_unlink(path), ==, 0);
+    mft_make_link("/dev/null", path);
+    g_assert_true(mf_trusted_keys_add_dir(keys, admin_dir, &error));
+    g_assert_no_error(error);
+    g_assert_true(mf_trusted_keys_is_empty(keys));
+}
+
 int
 main(int argc, char **argv)
 {
@@ -313,6 +466,8 @@ main(int argc, char **argv)
     add_test("bad-key", test_bad_key);
     add_test("key-selection", test_key_selection);
     add_test("agent", test_agent);
+    add_test("verify", test_verify);
+    add_test("trusted-key-dirs", test_trusted_key_dirs);
 #undef add_test
 
     return g_test_run();

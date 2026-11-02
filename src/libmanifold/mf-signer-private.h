@@ -7,6 +7,7 @@
 #pragma once
 
 #include "mf-macros-private.h"
+#include "mf-signer.h"
 
 MF_BEGIN_PRIVATE_DECLS
 
@@ -19,5 +20,8 @@ MF_BEGIN_PRIVATE_DECLS
 
 /* the suffix of the public key next to a private key file */
 #define MF_PUBLIC_KEY_SUFFIX ".pub"
+
+char       *mf_ssh_key_fingerprint(const char *public_key);
+const char *mf_signature_scope_to_namespace(MfSignatureScope scope);
 
 MF_END_PRIVATE_DECLS

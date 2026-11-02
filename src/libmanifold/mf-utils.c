@@ -631,3 +631,14 @@ mf_split_full_version(const char *name, char **ret_version, guint64 *ret_revisio
     *ret_version = g_steal_pointer(&version);
     return TRUE;
 }
+
+/**
+ * mf_str_consists_of:
+ *
+ * Returns: %TRUE if @str is not empty and only contains characters of @chars
+ */
+gboolean
+mf_str_consists_of(const char *str, const char *chars)
+{
+    return str[0] != '\0' && str[strspn(str, chars)] == '\0';
+}

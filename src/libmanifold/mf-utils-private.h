@@ -50,4 +50,6 @@ gboolean mf_split_full_version(const char *name,
                                char      **ret_version,
                                guint64    *ret_revision);
 
+gboolean mf_str_consists_of(const char *str, const char *chars);
+
 MF_END_PRIVATE_DECLS
