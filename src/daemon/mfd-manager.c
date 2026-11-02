@@ -17,6 +17,7 @@
 #include "mf-utils-private.h"
 
 #include "mfd-image-reader.h"
+#include "mfd-integrator.h"
 #include "mfd-store-writer.h"
 
 /**
@@ -36,6 +37,7 @@ struct _MfdManager {
 
     MfStore *store;
     MfdStoreWriter *writer;
+    MfdIntegrator *integrator;
 };
 
 G_DEFINE_TYPE(MfdManager, mfd_manager, G_TYPE_OBJECT)
@@ -45,6 +47,7 @@ mfd_manager_finalize(GObject *object)
 {
     MfdManager *manager = MFD_MANAGER(object);
 
+    g_clear_object(&manager->integrator);
     g_clear_object(&manager->writer);
     g_clear_object(&manager->store);
 
@@ -77,6 +80,7 @@ mfd_manager_new_for_store(MfStore *store)
 
     manager->store = g_object_ref(store);
     manager->writer = mfd_store_writer_new(store);
+    manager->integrator = mfd_integrator_new(store, manager->writer);
     return manager;
 }
 
@@ -449,6 +453,23 @@ mfd_set_error_wrong_architecture(GError **error,
 }
 
 /**
+ * mfd_manager_becomes_current:
+ *
+ * Returns: %TRUE unless a newer version of the component is already installed
+ */
+static gboolean
+mfd_manager_becomes_current(MfdManager *manager, MfManifest *manifest)
+{
+    g_autoptr(MfComponent)
+        newest = mf_store_get_component(manager->store, mf_manifest_get_component_id(manifest), NULL, NULL);
+
+    return newest == NULL || mf_version_compare_with_rev(mf_manifest_get_version(manifest),
+                                                         mf_manifest_get_revision(manifest),
+                                                         mf_component_get_version(newest),
+                                                         mf_component_get_revision(newest)) >= 0;
+}
+
+/**
  * mfd_check_if_bundle_image_wins:
  * @manifest: the manifest of an image of the bundle that provides an identity
  * @installed: (nullable): what provides the identity in the store
@@ -501,17 +522,12 @@ mfd_manager_resolve_dependency(MfdManager *manager,
     if (image != NULL && mfd_check_if_bundle_image_wins(mf_bundle_image_get_manifest(image), installed)) {
         MfManifest *manifest = mf_bundle_image_get_manifest(image);
         const char *component_id = mf_manifest_get_component_id(manifest);
-        const char *version = mf_manifest_get_version(manifest);
-        guint64 revision = mf_manifest_get_revision(manifest);
-        /* the bundle's image becomes current unless a newer version is already installed */
-        g_autoptr(MfComponent) newest = mf_store_get_component(manager->store, component_id, NULL, NULL);
         g_autofree char *version_name = NULL;
 
-        current = newest == NULL || mf_version_compare_with_rev(version,
-                                                                revision,
-                                                                mf_component_get_version(newest),
-                                                                mf_component_get_revision(newest)) >= 0;
-        version_name = current ? NULL : mf_build_full_version(version, revision);
+        current = mfd_manager_becomes_current(manager, manifest);
+        version_name = current ? NULL
+                               : mf_build_full_version(mf_manifest_get_version(manifest),
+                                                       mf_manifest_get_revision(manifest));
         *ret_kind = mf_manifest_get_kind(manifest);
         *ret_sdk = mf_manifest_is_sdk(manifest);
         iplan->base = mf_base_link_new(mf_store_subdir_for_kind(*ret_kind, *ret_sdk),
@@ -1305,6 +1321,21 @@ mfd_manager_execute_removal(MfdManager *manager,
         mf_result_add_removed(result, item->component);
     }
 
+    /* the current version of a component may have changed, so its host files have to follow.
+     * The components are gone at this point, so if this fails we only warn about it. */
+    for (guint i = 0; i < rmplan->items->len; i++) {
+        MfdRemovalItem *item = g_ptr_array_index(rmplan->items, i);
+        g_autoptr(GError) reconcile_error = NULL;
+
+        if (mf_component_get_kind(item->component) == MF_COMPONENT_KIND_APP &&
+            !mfd_integrator_reconcile(manager->integrator,
+                                      mf_component_get_id(item->component),
+                                      &reconcile_error))
+            g_warning("Unable to update the host files of %s: %s",
+                      mf_component_get_id(item->component),
+                      reconcile_error->message);
+    }
+
     for (guint i = 0; i < rmplan->images->len; i++) {
         const char *hash = g_ptr_array_index(rmplan->images, i);
 
@@ -1475,11 +1506,43 @@ mfd_manager_execute_install_plan(MfdManager *manager,
         return FALSE;
     }
 
+    /* the component is installed at this point, so if updating its host files fails we only
+     * warn about it, and the next operation will try to update them again */
+    if (mf_manifest_get_kind(manifest) == MF_COMPONENT_KIND_APP &&
+        !mfd_integrator_reconcile(manager->integrator, component_id, &local_error))
+        g_warning("Unable to update the host files of %s: %s", component_id, local_error->message);
+
     if (iplan->add_image)
         mfd_progress_end_item(tracker);
     if (added)
         *ret_bytes_added = image_size;
     return TRUE;
+}
+
+/**
+ * mfd_manager_check_file_conflicts:
+ * @plans: (element-type MfdInstallPlan): the plans of the installation
+ *
+ * Check that no file on the host is in the way of the installation. An older
+ * version does not change the host when we install it, so we only look at the
+ * versions that become current.
+ *
+ * Returns: %TRUE if no file is in the way
+ */
+static gboolean
+mfd_manager_check_file_conflicts(MfdManager *manager, GArray *plans, GError **error)
+{
+    g_autoptr(GPtrArray) manifests = g_ptr_array_sized_new(plans->len);
+
+    for (guint i = 0; i < plans->len; i++) {
+        MfdInstallPlan *plan = &g_array_index(plans, MfdInstallPlan, i);
+        MfManifest *manifest = mf_bundle_image_get_manifest(plan->image);
+
+        if (!plan->skip && mfd_manager_becomes_current(manager, manifest))
+            g_ptr_array_add(manifests, manifest);
+    }
+
+    return mfd_integrator_check_conflicts(manager->integrator, manifests, error);
 }
 
 /**
@@ -1511,6 +1574,9 @@ mfd_manager_plan_bundle_install(MfdManager *manager,
                                             error))
             return NULL;
     }
+    if (!mfd_manager_check_file_conflicts(manager, plans, error))
+        return NULL;
+
     /* we install every component after the components it builds on, so if installing a
      * component fails, the components installed before it have what they build on */
     g_array_sort(plans, mfd_install_plan_compare_layer);
@@ -1595,6 +1661,8 @@ mfd_manager_install_bundle(MfdManager *manager,
     /* reload the store, to ensure all our information is up-to-date */
     if (!mf_store_load(manager->store, error))
         return NULL;
+
+    mfd_integrator_reconcile_all(manager->integrator);
 
     /* plan installation */
     plans = mfd_manager_plan_bundle_install(manager, bundle, ret_detail, error);
@@ -1682,6 +1750,7 @@ mfd_manager_remove(MfdManager *manager,
     /* what is removed is planned against what is installed now */
     if (!mf_store_load(manager->store, error))
         return NULL;
+    mfd_integrator_reconcile_all(manager->integrator);
     rmplan = mfd_manager_plan_removal(manager, component_id, version, ret_detail, error);
     if (rmplan == NULL)
         return NULL;

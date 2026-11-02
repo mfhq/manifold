@@ -21,6 +21,9 @@ MF_BEGIN_PRIVATE_DECLS
 #define MF_STORE_PLUGINS_SUBDIR  "plugins"
 #define MF_STORE_RUNTIMES_SUBDIR "runtimes"
 
+/* holds one file per component, which lists the files we installed for it on the host */
+#define MF_STORE_INTEGRATIONS_SUBDIR "integrations"
+
 #define MF_STORE_IMAGES_DIR   MF_STORAGE_DIR "/" MF_STORE_IMAGES_SUBDIR
 #define MF_STORE_APPS_DIR     MF_STORAGE_DIR "/" MF_STORE_APPS_SUBDIR
 #define MF_STORE_RUNTIMES_DIR MF_STORAGE_DIR "/" MF_STORE_RUNTIMES_SUBDIR

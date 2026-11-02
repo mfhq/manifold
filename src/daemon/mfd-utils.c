@@ -95,12 +95,12 @@ mfd_replace_link(const char *target, const char *dir, const char *name, GError *
 }
 
 /**
- * mfd_write_marker:
+ * mfd_write_contents_safe:
  *
- * Write a small file of a component directory, replacing what is there.
+ * Write a small file, replacing what is there.
  */
 gboolean
-mfd_write_marker(const char *dir, const char *name, const char *content, gssize length, GError **error)
+mfd_write_contents_safe(const char *dir, const char *name, const char *content, gssize length, GError **error)
 {
     g_autofree char *path = g_build_filename(dir, name, NULL);
 
@@ -108,14 +108,14 @@ mfd_write_marker(const char *dir, const char *name, const char *content, gssize 
 }
 
 /**
- * mfd_write_word:
+ * mfd_write_word_safe:
  *
  * Write a marker file that holds one word.
  */
 gboolean
-mfd_write_word(const char *dir, const char *name, const char *word, GError **error)
+mfd_write_word_safe(const char *dir, const char *name, const char *word, GError **error)
 {
     g_autofree char *line = g_strconcat(word, "\n", NULL);
 
-    return mfd_write_marker(dir, name, line, -1, error);
+    return mfd_write_contents_safe(dir, name, line, -1, error);
 }

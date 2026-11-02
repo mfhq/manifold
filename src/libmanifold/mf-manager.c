@@ -334,6 +334,8 @@ mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant
                         _("Component %s is installed already as another kind of component (%s)"),
                         component_id,
                         kind);
+    } else if (g_strcmp0(error_id, MF_VARLINK_ERROR_FILE_CONFLICT) == 0) {
+        g_set_error(error, MF_ERROR, MF_ERROR_FILE_CONFLICT, _("File conflict: %s"), message);
     } else if (g_strcmp0(error_id, SD_VARLINK_ERROR_DISCONNECTED) == 0) {
         /* sd-varlink reports a connection closed during the call as a reply */
         g_set_error_literal(error,

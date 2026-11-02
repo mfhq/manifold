@@ -38,6 +38,7 @@ MF_BEGIN_PRIVATE_DECLS
 #define MF_VARLINK_ERROR_COMPONENT_IN_USE    MF_INTERFACE ".ComponentInUse"
 #define MF_VARLINK_ERROR_WRONG_ARCHITECTURE  MF_INTERFACE ".WrongArchitecture"
 #define MF_VARLINK_ERROR_ID_CONFLICT         MF_INTERFACE ".IdConflict"
+#define MF_VARLINK_ERROR_FILE_CONFLICT       MF_INTERFACE ".FileConflict"
 
 /* exported so the daemon can serve it */
 MF_INTERNAL_VISIBLE

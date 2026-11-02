@@ -29,14 +29,14 @@ gboolean mfd_replace_link(const char *target,
                           const char *name,
                           GError    **error);
 
-gboolean mfd_write_marker(const char *dir,
-                          const char *name,
-                          const char *content,
-                          gssize      length,
-                          GError    **error);
-gboolean mfd_write_word(const char *dir,
-                        const char *name,
-                        const char *word,
-                        GError    **error);
+gboolean mfd_write_contents_safe(const char *dir,
+                                 const char *name,
+                                 const char *content,
+                                 gssize      length,
+                                 GError    **error);
+gboolean mfd_write_word_safe(const char *dir,
+                             const char *name,
+                             const char *word,
+                             GError    **error);
 
 G_END_DECLS
