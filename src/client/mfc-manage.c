@@ -95,6 +95,115 @@ mfc_print_result(MfResult *result)
 }
 
 /**
+ * mfc_integration_kind_get_label:
+ *
+ * Returns: what we call a kind of integration file when we list it
+ */
+static const char *
+mfc_integration_kind_get_label(MfIntegrationKind kind)
+{
+    switch (kind) {
+    case MF_INTEGRATION_KIND_DESKTOP_ENTRY:
+        /* TRANSLATORS: what an application installs on the system, in a list */
+        return _("menu entry");
+    case MF_INTEGRATION_KIND_MIME_PACKAGE:
+        /* TRANSLATORS: what an application installs on the system, in a list */
+        return _("file types");
+    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM:
+        /* TRANSLATORS: what an application installs on the system, in a list */
+        return _("system service");
+    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER:
+        /* TRANSLATORS: what an application installs on the system, in a list */
+        return _("user service");
+    case MF_INTEGRATION_KIND_UDEV_RULE:
+        /* TRANSLATORS: what an application installs on the system, in a list */
+        return _("udev rule");
+    default:
+        return mf_integration_kind_to_string(kind);
+    }
+}
+
+/**
+ * mfc_print_image_integration:
+ * @manifest: a manifest that passed mf_manifest_check_integration()
+ * @integration: the integration section of @manifest
+ *
+ * List what a component will install on this system.
+ */
+static void
+mfc_print_image_integration(MfManifest *manifest, MfIntegration *integration)
+{
+    GPtrArray *files = mf_integration_get_files(integration);
+    GPtrArray *aliases = mf_integration_get_aliases(integration);
+    guint n_icons = 0;
+
+    if (files->len == 0 && aliases->len == 0)
+        return;
+
+    /* TRANSLATORS: %s is a component, and a list of what it installs follows */
+    g_print(_("%s will install this on the system:\n"), mf_manifest_get_component_id(manifest));
+    for (guint i = 0; i < files->len; i++) {
+        MfIntegrationFile *file = g_ptr_array_index(files, i);
+        MfIntegrationKind kind = mf_integration_file_get_kind(file);
+        g_autofree char *name = g_path_get_basename(mf_integration_file_get_path(file));
+
+        /* an application ships the same icon in many sizes, so we only count them */
+        if (kind == MF_INTEGRATION_KIND_ICON) {
+            n_icons++;
+            continue;
+        }
+
+        if (mf_integration_kind_is_privileged(kind))
+            /* TRANSLATORS: the kind of a file and its name, see "Privileged items" */
+            g_print(_("  %s: %s (privileged)\n"), mfc_integration_kind_get_label(kind), name);
+        else
+            g_print("  %s: %s\n", mfc_integration_kind_get_label(kind), name);
+    }
+    if (n_icons > 0)
+        /* TRANSLATORS: how many icons an application installs, in a list */
+        g_print("  %s: %u\n", _("icons"), n_icons);
+    for (guint i = 0; i < aliases->len; i++) {
+        MfIntegrationAlias *alias = g_ptr_array_index(aliases, i);
+
+        /* TRANSLATORS: a command an application installs, in a list */
+        g_print("  %s: %s\n", _("command"), mf_integration_alias_get_name(alias));
+    }
+
+    if (mf_integration_is_privileged(integration))
+        g_print("%s\n", _("Privileged items can gain full access to this system."));
+}
+
+/**
+ * mfc_print_integration:
+ * @fd: the file descriptor of a bundle
+ *
+ * List what a bundle will install on this system. Root is not asked before it
+ * installs a bundle, and everyone else only gets the password prompts of polkit.
+ *
+ * This is a notice and no check, as the service decides what can be installed.
+ * If a bundle is not fine, we print nothing, and the service reports the problem.
+ */
+static void
+mfc_print_integration(int fd)
+{
+    g_autoptr(MfBundle) bundle = mf_bundle_new_from_fd(fd, NULL);
+    GPtrArray *images;
+
+    if (bundle == NULL)
+        return;
+
+    images = mf_bundle_get_images(bundle);
+    for (guint i = 0; i < images->len; i++) {
+        MfManifest *manifest = mf_bundle_image_get_manifest(g_ptr_array_index(images, i));
+        MfIntegration *integration = mf_manifest_get_integration(manifest);
+
+        /* a bundle could put terminal escapes into these names, which the check rules out */
+        if (integration != NULL && mf_manifest_check_integration(manifest, NULL))
+            mfc_print_image_integration(manifest, integration);
+    }
+}
+
+/**
  * mfc_install_bundle:
  *
  * Install the components of one bundle file.
@@ -111,6 +220,8 @@ mfc_install_bundle(MfcContext *ctx, const char *fname)
         g_printerr(_("Unable to open %s: %s\n"), fname, g_strerror(errno));
         return MFC_EXIT_BAD_INPUT;
     }
+
+    mfc_print_integration(fd);
 
     basename = g_path_get_basename(fname);
     result = mf_manager_install_file(mfc_context_get_manager(ctx), fd, mfc_on_progress, ctx, NULL, &error);
