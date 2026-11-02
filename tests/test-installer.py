@@ -52,6 +52,8 @@ MIME_PACKAGE = (
     b'<mime-type type="application/x-app"><glob pattern="*.appfile"/></mime-type></mime-info>'
 )
 MIME_EXPORT = f'{STORE}/exports/share/mime/packages/{APP_ID}.xml'
+ALIASES = {'app-cli': '/app/bin/app'}
+ALIAS_EXPORT = f'{STORE}/exports/bin/app-cli'
 REGISTRY = f'{STORE}/integrations/{APP_ID}.json'
 
 ARGS = None
@@ -737,8 +739,8 @@ class InstallerTest(unittest.TestCase):
         self.assertNotIn(app.verity_hash, self.stored_images())
 
     def integrated_app(self, version, comment=b'', revision=22910000):
-        """An application with a desktop entry, an icon and a MIME package. The comment
-        is added to the desktop entry, to tell versions apart."""
+        """An application with a desktop entry, an icon, a MIME package and an alias. The
+        comment is added to the desktop entry, to tell versions apart."""
         return Image(
             APP_ID,
             'app',
@@ -750,6 +752,7 @@ class InstallerTest(unittest.TestCase):
                 'icons': {ICON_PATH: ICON},
                 'mime-package': {MIME_PATH: MIME_PACKAGE},
             },
+            aliases=ALIASES,
         )
 
     def registry(self):
@@ -777,6 +780,8 @@ class InstallerTest(unittest.TestCase):
         self.assertIn(b'"*.appfile"', self.read_export(MIME_EXPORT))
         # desktop sessions run as ordinary users
         self.assertEqual(os.stat(DESKTOP_ENTRY_EXPORT).st_mode & 0o777, 0o644)
+        self.assertIn(b'/mfrun com.example.app "$@"\n', self.read_export(ALIAS_EXPORT))
+        self.assertEqual(os.stat(ALIAS_EXPORT).st_mode & 0o777, 0o755)
 
         current = f'{STORE}/apps/{APP_ID}/current/exports'
         self.assertEqual(os.readlink(ICON_EXPORT), current + ICON_PATH[len('/app') :])
@@ -786,7 +791,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(registry['version'], f'0.1.0-{app.revision}')
         self.assertEqual(
             sorted(f['path'] for f in registry['files']),
-            sorted([DESKTOP_ENTRY_EXPORT, ICON_EXPORT, MIME_EXPORT]),
+            sorted([DESKTOP_ENTRY_EXPORT, ICON_EXPORT, MIME_EXPORT, ALIAS_EXPORT]),
         )
 
     def test_exports_follow_the_current_version(self):
@@ -802,11 +807,12 @@ class InstallerTest(unittest.TestCase):
         self.manifold('install', self.bundle('old', [self.kit, old]))
         self.manifold('mark', 'manual', APP_ID)
 
-        # the new version has neither an icon nor a MIME package
+        # the new version has no icon, MIME package or alias
         self.manifold('install', self.bundle('new', [self.kit, new]))
         self.assertIn(b'Comment=New', self.read_export(DESKTOP_ENTRY_EXPORT))
         self.assertFalse(os.path.lexists(ICON_EXPORT))
         self.assertFalse(os.path.lexists(MIME_EXPORT))
+        self.assertFalse(os.path.lexists(ALIAS_EXPORT))
 
         # an older version does not become current
         older = self.integrated_app('0.1.0', b'Comment=Older\n')
@@ -821,6 +827,7 @@ class InstallerTest(unittest.TestCase):
         self.manifold('remove', APP_ID, '0.3.0')
         self.assertIn(b'Comment=Old\n', self.read_export(DESKTOP_ENTRY_EXPORT))
         self.assertEqual(self.read_export(ICON_EXPORT), ICON)
+        self.assertTrue(os.path.exists(ALIAS_EXPORT))
         self.assertEqual(self.registry()['version'], f'0.2.0-{old.revision}')
 
     def test_removal_leaves_no_exports(self):
@@ -833,6 +840,7 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse(os.path.lexists(DESKTOP_ENTRY_EXPORT))
         self.assertFalse(os.path.lexists(ICON_EXPORT))
         self.assertFalse(os.path.lexists(MIME_EXPORT))
+        self.assertFalse(os.path.lexists(ALIAS_EXPORT))
         self.assertFalse(os.path.exists(REGISTRY))
 
     def test_changed_exports_are_replaced(self):
@@ -905,6 +913,24 @@ class InstallerTest(unittest.TestCase):
         os.unlink(f'{STORE}/exports/share/applications/{APP_ID}.extra.desktop')
         out = self.manifold('install', self.bundle('second', [self.kit, second]), expect=1)
         self.assertIn(f'that file belongs to {APP_ID}', out)
+
+    def test_alias_of_another_component_refuses_installation(self):
+        self.manifold('install', self.core_bundle)
+        self.manifold('install', self.bundle('first', [self.kit, self.integrated_app('0.1.0')]))
+        second = Image(
+            APP_ID + '.extra',
+            'app',
+            '0.1.0',
+            base=self.kit,
+            integration={
+                'icons': {f'/app/share/icons/hicolor/scalable/apps/{APP_ID}.extra.svg': ICON}
+            },
+            aliases=ALIASES,
+        )
+
+        out = self.manifold('install', self.bundle('second', [self.kit, second]), expect=1)
+        self.assertIn(f'that file belongs to {APP_ID}', out)
+        self.assertNotIn(second.verity_hash, self.stored_images())
 
     def test_foreign_file_survives_falling_back(self):
         self.manifold('install', self.core_bundle)
@@ -1001,7 +1027,7 @@ class InstallerTest(unittest.TestCase):
         # pretend that we crashed right after recording the version, before we wrote the
         # registry: nothing has reached the host at that point
         os.unlink(REGISTRY)
-        for path in (DESKTOP_ENTRY_EXPORT, ICON_EXPORT, MIME_EXPORT):
+        for path in (DESKTOP_ENTRY_EXPORT, ICON_EXPORT, MIME_EXPORT, ALIAS_EXPORT):
             os.unlink(path)
 
         self.manifold('cleanup')

@@ -120,6 +120,7 @@ test_section(void)
     alias = g_ptr_array_index(aliases, 0);
     g_assert_cmpstr(mf_integration_alias_get_name(alias), ==, "app");
     g_assert_cmpstr(mf_integration_alias_get_command(alias), ==, "/app/bin/app");
+    g_assert_cmpstr(mf_integration_alias_get_export_path(alias), ==, "bin/app");
 
     /* the value of a kind we do not know is not looked at */
     unknown = mf_integration_get_unknown_kinds(integration);
@@ -319,6 +320,50 @@ test_check_aliases(void)
 
         g_test_message("%s %s", aliases[i].name, aliases[i].command);
         g_assert_cmpint(mft_passes_check(&m), ==, aliases[i].valid);
+    }
+}
+
+static void
+test_render_aliases(void)
+{
+    static const struct {
+        const char *command;
+        const char *expected;
+    } aliases[] = {
+        /* the program of the application is what mfrun runs by default */
+        {"/app/bin/app",      "#!/bin/sh\nexec " MF_MFRUN_PATH " com.example.app \"$@\"\n"       },
+        {"/app/libexec/tool",
+         "#!/bin/sh\nexec " MF_MFRUN_PATH " --command=/app/libexec/tool com.example.app \"$@\"\n"},
+
+        /* the script ends up in the PATH, so we check again what goes into it */
+        {"/usr/bin/sh",       NULL                                                               },
+        {"/app/bin/$(id)",    NULL                                                               },
+    };
+
+    for (gsize i = 0; i < G_N_ELEMENTS(aliases); i++) {
+        g_autofree char *section = g_strdup_printf("{\"alias\": [{\"name\": \"tool\", \"command\": \"%s\"}]}",
+                                                   aliases[i].command);
+        g_autoptr(GError) error = NULL;
+        g_autoptr(MfManifest) manifest = mft_manifest_new(section, &error);
+        g_autoptr(GBytes) script = NULL;
+        g_autofree char *text = NULL;
+        gsize size;
+        const char *data;
+
+        g_assert_no_error(error);
+        script = mf_integration_alias_render(
+            g_ptr_array_index(mf_integration_get_aliases(mf_manifest_get_integration(manifest)), 0),
+            manifest,
+            &error);
+        if (aliases[i].expected == NULL) {
+            g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+            g_assert_null(script);
+            continue;
+        }
+        g_assert_no_error(error);
+        data = g_bytes_get_data(script, &size);
+        text = g_strndup(data, size);
+        g_assert_cmpstr(text, ==, aliases[i].expected);
     }
 }
 
@@ -1107,6 +1152,7 @@ main(int argc, char **argv)
     g_test_add_func("/integration/malformed-section", test_malformed_section);
     g_test_add_func("/integration/check-file-paths", test_check_file_paths);
     g_test_add_func("/integration/check-aliases", test_check_aliases);
+    g_test_add_func("/integration/render-aliases", test_render_aliases);
     g_test_add_func("/integration/check-section", test_check_section);
     g_test_add_func("/integration/check-component", test_check_component);
     g_test_add_func("/integration/check-messages", test_check_messages);

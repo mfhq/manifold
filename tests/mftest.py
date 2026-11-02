@@ -213,7 +213,8 @@ class Image:
     """An image for a bundle, with its manifest. Its content is made up, unless it has an
     integration section, which needs a real filesystem. That section maps the kinds of
     files to their paths and contents. image_files are the files the image really holds,
-    if those are to differ from what the manifest records."""
+    if those are to differ from what the manifest records. aliases maps the names of
+    aliases to their programs, and needs an integration section."""
 
     def __init__(
         self,
@@ -227,6 +228,7 @@ class Image:
         architecture=None,
         integration=None,
         image_files=None,
+        aliases=None,
     ):
         self.component = component
         self.kind = kind
@@ -238,6 +240,7 @@ class Image:
         self.name = f'{component}_{version}.raw'
         self.identity = fake_hash('identity:' + component)
         self.integration = integration
+        self.aliases = aliases
         if integration is None:
             self.data = hashlib.sha512((seed or self.name).encode()).digest() * 1024
         else:
@@ -292,6 +295,10 @@ class Image:
                 ]
                 for kind, files in self.integration.items()
             }
+            if self.aliases is not None:
+                m['integration']['alias'] = [
+                    {'name': name, 'command': command} for name, command in self.aliases.items()
+                ]
         return m
 
 

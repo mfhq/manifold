@@ -38,6 +38,10 @@
 /* host tools usually take milliseconds, so this only guards against a tool that hangs */
 constexpr unsigned int HOST_TOOL_TIMEOUT_SEC = 60;
 
+/* every user of the host has to be able to read what we export, and to run the aliases */
+constexpr int EXPORT_FILE_MODE = 0644;
+constexpr int EXPORT_ALIAS_MODE = 0755;
+
 struct _MfdIntegrator {
     GObject parent_instance;
 
@@ -100,6 +104,7 @@ typedef struct {
     char *sha256;    /* the checksum of a regular file, or %NULL for a link */
     char *target;    /* where a link points to, or %NULL for a regular file */
     GBytes *content; /* what to write */
+    int mode;        /* the permissions of a regular file */
 } MfdExport;
 
 static void
@@ -154,11 +159,12 @@ mfd_export_install(const MfdExport *export, GError **error)
     if (export->target != NULL)
         return mfd_replace_link(export->target, dir, name, error);
 
-    return mfd_write_contents_safe(dir,
-                                   name,
-                                   g_bytes_get_data(export->content, NULL),
-                                   (gssize) g_bytes_get_size(export->content),
-                                   error);
+    return g_file_set_contents_full(export->path,
+                                    g_bytes_get_data(export->content, NULL),
+                                    (gssize) g_bytes_get_size(export->content),
+                                    G_FILE_SET_CONTENTS_CONSISTENT,
+                                    export->mode,
+                                    error);
 }
 
 /**
@@ -457,57 +463,14 @@ mfd_integrator_read_exports(MfdIntegrator *integrator,
 
 /**
  * mfd_integrator_build_host_path:
+ * @export_path: a path relative to the directory of exports
  *
- * Returns: (transfer full): where a file of an image is installed on the host
+ * Returns: (transfer full): where a file is installed on the host
  */
 static char *
-mfd_integrator_build_host_path(MfdIntegrator *integrator, MfIntegrationFile *file)
+mfd_integrator_build_host_path(MfdIntegrator *integrator, const char *export_path)
 {
-    return g_build_filename(mf_store_get_path(integrator->store),
-                            MF_STORE_EXPORTS_NAME,
-                            mf_integration_file_get_export_path(file),
-                            NULL);
-}
-
-/**
- * mfd_integrator_export_new:
- *
- * Create the export for a file of an image. Icons are symbolic links that go
- * through the `current` link of the component, so they always show the current
- * version. All other files are copies.
- *
- * Returns: (transfer full): the file, or %NULL
- */
-static MfdExport *
-mfd_integrator_export_new(MfdIntegrator *integrator,
-                          MfComponent *component,
-                          MfManifest *manifest,
-                          MfIntegrationFile *file,
-                          GBytes *content,
-                          GError **error)
-{
-    const char *root = mf_store_get_path(integrator->store);
-    const char *export_path = mf_integration_file_get_export_path(file);
-    g_autoptr(MfdExport) export = g_new0(MfdExport, 1);
-
-    export->path = mfd_integrator_build_host_path(integrator, file);
-    if (mf_integration_file_get_kind(file) == MF_INTEGRATION_KIND_ICON) {
-        export->target = g_build_filename(root,
-                                          mf_store_subdir_for_kind(mf_component_get_kind(component), FALSE),
-                                          mf_component_get_id(component),
-                                          MF_STORE_CURRENT_NAME,
-                                          MF_STORE_EXPORTS_NAME,
-                                          export_path,
-                                          NULL);
-        return g_steal_pointer(&export);
-    }
-
-    export->content = mf_integration_file_render(file, manifest, content, error);
-    if (export->content == NULL)
-        return NULL;
-    export->sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, export->content);
-
-    return g_steal_pointer(&export);
+    return g_build_filename(mf_store_get_path(integrator->store), MF_STORE_EXPORTS_NAME, export_path, NULL);
 }
 
 /**
@@ -532,6 +495,105 @@ mfd_integrator_kind_is_supported(MfIntegrationKind kind)
 }
 
 /**
+ * mfd_integrator_list_host_paths:
+ *
+ * Returns: (transfer full) (element-type utf8): the paths on the host that an
+ *   integration section installs files to
+ */
+static GPtrArray *
+mfd_integrator_list_host_paths(MfdIntegrator *integrator, MfIntegration *integration)
+{
+    GPtrArray *files = mf_integration_get_files(integration);
+    GPtrArray *aliases = mf_integration_get_aliases(integration);
+    g_autoptr(GPtrArray) paths = g_ptr_array_new_with_free_func(g_free);
+
+    for (guint i = 0; i < files->len; i++) {
+        MfIntegrationFile *file = g_ptr_array_index(files, i);
+
+        if (mfd_integrator_kind_is_supported(mf_integration_file_get_kind(file)))
+            g_ptr_array_add(
+                paths,
+                mfd_integrator_build_host_path(integrator, mf_integration_file_get_export_path(file)));
+    }
+    for (guint i = 0; i < aliases->len; i++) {
+        MfIntegrationAlias *alias = g_ptr_array_index(aliases, i);
+
+        g_ptr_array_add(
+            paths,
+            mfd_integrator_build_host_path(integrator, mf_integration_alias_get_export_path(alias)));
+    }
+
+    return g_steal_pointer(&paths);
+}
+
+/**
+ * mfd_integrator_export_new:
+ *
+ * Create the export for a file of an image. Icons are symbolic links that go
+ * through the `current` link of the component, so they always show the current
+ * version. All other files are copies.
+ *
+ * Returns: (transfer full): the file, or %NULL
+ */
+static MfdExport *
+mfd_integrator_export_new(MfdIntegrator *integrator,
+                          MfComponent *component,
+                          MfManifest *manifest,
+                          MfIntegrationFile *file,
+                          GBytes *content,
+                          GError **error)
+{
+    const char *root = mf_store_get_path(integrator->store);
+    const char *export_path = mf_integration_file_get_export_path(file);
+    g_autoptr(MfdExport) export = g_new0(MfdExport, 1);
+
+    export->path = mfd_integrator_build_host_path(integrator, export_path);
+    if (mf_integration_file_get_kind(file) == MF_INTEGRATION_KIND_ICON) {
+        export->target = g_build_filename(root,
+                                          mf_store_subdir_for_kind(mf_component_get_kind(component), FALSE),
+                                          mf_component_get_id(component),
+                                          MF_STORE_CURRENT_NAME,
+                                          MF_STORE_EXPORTS_NAME,
+                                          export_path,
+                                          NULL);
+        return g_steal_pointer(&export);
+    }
+
+    export->content = mf_integration_file_render(file, manifest, content, error);
+    if (export->content == NULL)
+        return NULL;
+    export->sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, export->content);
+    export->mode = EXPORT_FILE_MODE;
+
+    return g_steal_pointer(&export);
+}
+
+/**
+ * mfd_integrator_alias_export_new:
+ *
+ * Create the export for an alias, which is a script that runs a program of the image.
+ *
+ * Returns: (transfer full): the file, or %NULL
+ */
+static MfdExport *
+mfd_integrator_alias_export_new(MfdIntegrator *integrator,
+                                MfManifest *manifest,
+                                MfIntegrationAlias *alias,
+                                GError **error)
+{
+    g_autoptr(MfdExport) export = g_new0(MfdExport, 1);
+
+    export->path = mfd_integrator_build_host_path(integrator, mf_integration_alias_get_export_path(alias));
+    export->content = mf_integration_alias_render(alias, manifest, error);
+    if (export->content == NULL)
+        return NULL;
+    export->sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, export->content);
+    export->mode = EXPORT_ALIAS_MODE;
+
+    return g_steal_pointer(&export);
+}
+
+/**
  * mfd_integrator_collect_exports:
  * @component: (nullable): the current version of a component, if it has one
  *
@@ -546,6 +608,7 @@ mfd_integrator_collect_exports(MfdIntegrator *integrator, MfComponent *component
     g_autoptr(MfManifest) manifest = NULL;
     MfIntegration *integration;
     GPtrArray *files;
+    GPtrArray *aliases;
 
     if (component == NULL)
         return g_steal_pointer(&wanted);
@@ -569,6 +632,18 @@ mfd_integrator_collect_exports(MfdIntegrator *integrator, MfComponent *component
         if (!mfd_integrator_kind_is_supported(mf_integration_file_get_kind(file)))
             continue;
         export = mfd_integrator_export_new(integrator, component, manifest, file, content, error);
+        if (export == NULL)
+            return NULL;
+        mfd_exports_add(wanted, export);
+    }
+
+    aliases = mf_integration_get_aliases(integration);
+    for (guint i = 0; i < aliases->len; i++) {
+        MfdExport *export = mfd_integrator_alias_export_new(integrator,
+                                                            manifest,
+                                                            g_ptr_array_index(aliases, i),
+                                                            error);
+
         if (export == NULL)
             return NULL;
         mfd_exports_add(wanted, export);
@@ -620,25 +695,20 @@ mfd_integrator_check_conflicts(MfdIntegrator *integrator, GPtrArray *manifests, 
         MfManifest *manifest = g_ptr_array_index(manifests, i);
         const char *component_id = mf_manifest_get_component_id(manifest);
         MfIntegration *integration = mf_manifest_get_integration(manifest);
-        GPtrArray *files;
+        g_autoptr(GPtrArray) paths = NULL;
 
         if (integration == NULL)
             continue;
 
-        files = mf_integration_get_files(integration);
-        for (guint j = 0; j < files->len; j++) {
-            MfIntegrationFile *file = g_ptr_array_index(files, j);
-            g_autofree char *path = NULL;
+        paths = mfd_integrator_list_host_paths(integrator, integration);
+        for (guint j = 0; j < paths->len; j++) {
+            const char *path = g_ptr_array_index(paths, j);
 
-            if (!mfd_integrator_kind_is_supported(mf_integration_file_get_kind(file)))
-                continue;
-
-            path = mfd_integrator_build_host_path(integrator, file);
             if (!mfd_owners_check_path(owners, path, component_id, error))
                 return FALSE;
 
             /* the other manifests must not want this file either */
-            g_hash_table_replace(owners, g_steal_pointer(&path), g_strdup(component_id));
+            g_hash_table_replace(owners, g_strdup(path), g_strdup(component_id));
         }
     }
 
