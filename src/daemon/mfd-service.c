@@ -8,6 +8,7 @@
 #include "mfd-service.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <poll.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -53,8 +54,10 @@ G_DEFINE_TYPE(MfdService, mfd_service, G_TYPE_OBJECT)
 
 typedef struct _MfdRequest MfdRequest;
 
-/* what a #MfdRequestFunc returns if it handed the request back to polkit */
-#define MFD_REQUEST_DEFERRED 1
+/* Return value of a #MfdRequestFunc that passed its request to polkit again. The reply
+ * functions of sd-varlink return small positive numbers, so we use a value that can not be
+ * mistaken for one of them. */
+#define MFD_REQUEST_DEFERRED INT_MAX
 
 /**
  * MfdRequestFunc:
@@ -62,9 +65,10 @@ typedef struct _MfdRequest MfdRequest;
  * Execute a request, and reply to its method call. The reply is an error
  * if the request failed.
  *
- * Returns: 0 if we replied, %MFD_REQUEST_DEFERRED if polkit has to authorize
- *   the request for another action, or a negative errno if we were unable
- *   to reply. After %MFD_REQUEST_DEFERRED, the request may not exist anymore.
+ * Returns: %MFD_REQUEST_DEFERRED if polkit has to authorize the request for
+ *   a different action, in which case the request may be freed already.
+ *   Otherwise a negative errno if we were unable to reply, or any other
+ *   number if we replied.
  */
 typedef int (*MfdRequestFunc)(MfdService *service, MfdRequest *request);
 
