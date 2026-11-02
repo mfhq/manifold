@@ -42,7 +42,11 @@ typedef enum {
 
 const char       *mf_integration_kind_to_string(MfIntegrationKind kind);
 MfIntegrationKind mf_integration_kind_from_string(const char *kind_str);
+const char       *mf_integration_kind_get_dir(MfIntegrationKind kind);
 gboolean          mf_integration_kind_is_privileged(MfIntegrationKind kind);
+gboolean          mf_integration_name_is_valid(MfIntegrationKind kind,
+                                               const char       *name,
+                                               const char       *component_id);
 
 #define MF_TYPE_INTEGRATION_FILE (mf_integration_file_get_type())
 G_DECLARE_FINAL_TYPE(MfIntegrationFile, mf_integration_file, MF, INTEGRATION_FILE, GObject)

@@ -206,7 +206,57 @@ mfd_registry_free(MfdRegistry *registry)
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdRegistry, mfd_registry_free)
 
 /**
+ * mfd_kind_is_in_prefix:
+ *
+ * Returns: %TRUE if files of this kind are installed below our prefix. The search
+ *   paths of systemd and udev are fixed, so their files can not stay in our store.
+ */
+static gboolean
+mfd_kind_is_in_prefix(MfIntegrationKind kind)
+{
+    switch (kind) {
+    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM:
+    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER:
+    case MF_INTEGRATION_KIND_UDEV_RULE:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+/**
+ * mfd_integrator_path_is_export:
+ * @path: a path that a registry lists
+ *
+ * Returns: %TRUE if @path is in a directory that we install files to
+ */
+static gboolean
+mfd_integrator_path_is_export(MfdIntegrator *integrator, const char *path)
+{
+    g_autofree char *exports = g_build_filename(mf_store_get_path(integrator->store),
+                                                MF_STORE_EXPORTS_NAME,
+                                                NULL);
+
+    if (mf_path_is_below(path, exports))
+        return TRUE;
+    for (MfIntegrationKind kind = MF_INTEGRATION_KIND_UNKNOWN + 1; kind < MF_INTEGRATION_KIND_LAST; kind++) {
+        g_autofree char *dir = g_build_filename(MF_INTEGRATION_PREFIX,
+                                                mf_integration_kind_get_dir(kind),
+                                                NULL);
+
+        if (mfd_kind_is_in_prefix(kind) && mf_path_is_below(path, dir))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+/**
  * mfd_integrator_read_registry:
+ *
+ * Read the registry of a component. We ignore a path of the registry that is
+ * not in a directory we install files to, so that whatever a registry says, we
+ * never replace or remove anything else.
  *
  * Returns: (transfer full): the registry of a component, which is empty if the
  *   component has none, or %NULL on error
@@ -240,6 +290,13 @@ mfd_integrator_read_registry(MfdIntegrator *integrator, const char *component_id
         export->path = g_strdup(mf_json_get_string(entry, "path"));
         export->sha256 = g_strdup(mf_json_get_string(entry, "sha256"));
         export->target = g_strdup(mf_json_get_string(entry, "target"));
+        if (export->path == NULL || !mfd_integrator_path_is_export(integrator, export->path)) {
+            g_warning("Ignoring %s in the registry of %s, as we install nothing there",
+                      export->path != NULL ? export->path : "an entry without a path",
+                      component_id);
+            mfd_export_free(export);
+            continue;
+        }
         mfd_exports_add(registry->exports, export);
     }
 
@@ -540,15 +597,9 @@ mfd_integrator_build_file_path(MfdIntegrator *integrator, MfIntegrationFile *fil
 {
     const char *export_path = mf_integration_file_get_export_path(file);
 
-    /* the search paths of systemd and udev are fixed, so their files can not stay in our store */
-    switch (mf_integration_file_get_kind(file)) {
-    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM:
-    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER:
-    case MF_INTEGRATION_KIND_UDEV_RULE:
+    if (mfd_kind_is_in_prefix(mf_integration_file_get_kind(file)))
         return g_build_filename(MF_INTEGRATION_PREFIX, export_path, NULL);
-    default:
-        return mfd_integrator_build_host_path(integrator, export_path);
-    }
+    return mfd_integrator_build_host_path(integrator, export_path);
 }
 
 /**
@@ -672,16 +723,21 @@ mfd_integrator_alias_export_new(MfdIntegrator *integrator,
 /**
  * mfd_integrator_collect_exports:
  * @component: (nullable): the current version of a component, if it has one
+ * @result: (nullable): where to report a version whose files we do not install
  *
  * Returns: (transfer full) (element-type utf8 MfdExport): the files that have to
  *   be on the host for @component, or %NULL on error
  */
 static GHashTable *
-mfd_integrator_collect_exports(MfdIntegrator *integrator, MfComponent *component, GError **error)
+mfd_integrator_collect_exports(MfdIntegrator *integrator,
+                               MfComponent *component,
+                               MfResult *result,
+                               GError **error)
 {
     g_autoptr(GHashTable) wanted = mfd_exports_new();
     g_autoptr(GHashTable) contents = NULL;
     g_autoptr(MfManifest) manifest = NULL;
+    g_autoptr(GError) rules_error = NULL;
     MfIntegration *integration;
     GPtrArray *files;
     GPtrArray *aliases;
@@ -694,6 +750,18 @@ mfd_integrator_collect_exports(MfdIntegrator *integrator, MfComponent *component
     integration = mf_manifest_get_integration(manifest);
     if (integration == NULL)
         return g_steal_pointer(&wanted);
+
+    /* The rules were checked when this version was installed. We check them again, as
+     * they may have become stricter since, and the paths of files on the host come
+     * from this manifest: a file that does not pass them is never installed. */
+    if (!mf_manifest_check_integration(manifest, &rules_error)) {
+        mfd_emit_warning(result,
+                         "Not installing the host files of %s %s: %s",
+                         mf_component_get_id(component),
+                         mf_component_get_full_version(component),
+                         rules_error->message);
+        return g_steal_pointer(&wanted);
+    }
 
     contents = mfd_integrator_read_exports(integrator, component, manifest, error);
     if (contents == NULL)
@@ -1081,7 +1149,7 @@ mfd_integrator_reconcile(MfdIntegrator *integrator,
     if (current != NULL && g_strcmp0(registry->version, mf_component_get_full_version(current)) == 0)
         return TRUE;
 
-    wanted = mfd_integrator_collect_exports(integrator, current, error);
+    wanted = mfd_integrator_collect_exports(integrator, current, result, error);
     if (wanted == NULL)
         return FALSE;
     has_registry = g_file_test(registry->path, G_FILE_TEST_EXISTS);
@@ -1128,7 +1196,7 @@ mfd_integrator_reconcile(MfdIntegrator *integrator,
     for (guint i = 0; i < stale->len; i++) {
         MfdExport *export = g_ptr_array_index(stale, i);
 
-        if (!mfd_remove_if_exists(export->path, error))
+        if (!mfd_unlink_if_exists(export->path, error))
             return FALSE;
         g_hash_table_remove(registry->exports, export->path);
     }
@@ -1144,7 +1212,7 @@ mfd_integrator_reconcile(MfdIntegrator *integrator,
     mfd_integrator_update_host_caches(integrator, result);
 
     if (current == NULL || g_hash_table_size(wanted) == 0)
-        return mfd_remove_if_exists(registry->path, error);
+        return mfd_unlink_if_exists(registry->path, error);
 
     registry->version = g_strdup(mf_component_get_full_version(current));
     return mfd_registry_save(registry, error);

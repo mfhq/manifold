@@ -13,9 +13,6 @@
 
 MF_BEGIN_PRIVATE_DECLS
 
-MF_INTERNAL_VISIBLE
-const char    *mf_integration_kind_get_dir(MfIntegrationKind kind);
-
 MfIntegration *mf_integration_new_from_json(sd_json_variant *section,
                                             GError         **error);
 gboolean       mf_integration_check(MfIntegration *integration,

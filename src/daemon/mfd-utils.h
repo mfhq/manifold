@@ -18,6 +18,8 @@ void     mfd_emit_warning(MfResult   *result,
                           ...) G_GNUC_PRINTF(2, 3);
 
 gboolean mfd_is_directory(const char *path);
+gboolean mfd_unlink_if_exists(const char *path,
+                              GError    **error);
 gboolean mfd_is_symlink(const char *path);
 gboolean mfd_is_hidden(const char *name);
 

@@ -29,6 +29,9 @@ gboolean mf_unit_file_name_is_valid(const char *name);
 gboolean mf_bundle_file_name_is_valid(const char *name);
 gboolean mf_program_path_is_valid(const char *path);
 gboolean mf_reverse_dns_name_is_valid(const char *name);
+MF_INTERNAL_VISIBLE
+gboolean mf_path_is_below(const char *path,
+                          const char *dir);
 gboolean mf_mime_type_is_valid(const char *type);
 gboolean mf_mime_glob_is_valid(const char *pattern);
 gboolean mf_mime_weight_is_valid(const char *weight);

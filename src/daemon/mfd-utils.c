@@ -67,6 +67,20 @@ mfd_remove_if_exists(const char *path, GError **error)
 }
 
 /**
+ * mfd_unlink_if_exists:
+ *
+ * Remove a file or a link, but never a directory.
+ */
+gboolean
+mfd_unlink_if_exists(const char *path, GError **error)
+{
+    if (unlink(path) == 0 || errno == ENOENT)
+        return TRUE;
+    glnx_throw_errno_prefix(error, "Unable to remove %s", path);
+    return FALSE;
+}
+
+/**
  * mfd_make_dir:
  */
 gboolean

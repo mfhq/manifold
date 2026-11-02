@@ -78,6 +78,9 @@ test_kind_strings(void)
     g_assert_cmpint(mf_integration_kind_from_string("unknown"), ==, MF_INTEGRATION_KIND_UNKNOWN);
     g_assert_cmpint(mf_integration_kind_from_string("alias"), ==, MF_INTEGRATION_KIND_UNKNOWN);
     g_assert_cmpint(mf_integration_kind_from_string(NULL), ==, MF_INTEGRATION_KIND_UNKNOWN);
+
+    g_assert_cmpstr(mf_integration_kind_get_dir(MF_INTEGRATION_KIND_UDEV_RULE), ==, "lib/udev/rules.d");
+    g_assert_null(mf_integration_kind_get_dir(MF_INTEGRATION_KIND_UNKNOWN));
 }
 
 static void
@@ -106,6 +109,41 @@ test_privileged(void)
     g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_DESKTOP_ENTRY));
     g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_UNKNOWN));
     g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_LAST));
+}
+
+static void
+test_export_paths(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autoptr(MfManifest) manifest = mft_manifest_new(
+        "{\"desktop-entry\": [{\"path\": \"/app/share/applications/com.example.app.desktop\", " HASHES
+        "},"
+        " {\"path\": \"/app/share/applications/../../../etc/com.example.app.desktop\", " HASHES
+        "},"
+        " {\"path\": \"/app/share/applications/./com.example.app.desktop\", " HASHES
+        "},"
+        " {\"path\": \"/app/share/applications\", " HASHES
+        "}],"
+        " \"alias\": [{\"name\": \"app\", \"command\": \"/app/bin/app\"},"
+        " {\"name\": \"../app\", \"command\": \"/app/bin/app\"}]}",
+        &error);
+    GPtrArray *files;
+    GPtrArray *aliases;
+
+    /* reading a manifest takes any path, but the export path can not lead out of its directory */
+    g_assert_no_error(error);
+    files = mf_integration_get_files(mf_manifest_get_integration(manifest));
+    g_assert_cmpuint(files->len, ==, 4);
+    g_assert_cmpstr(mf_integration_file_get_export_path(g_ptr_array_index(files, 0)),
+                    ==,
+                    "share/applications/com.example.app.desktop");
+    for (guint i = 1; i < files->len; i++)
+        g_assert_null(mf_integration_file_get_export_path(g_ptr_array_index(files, i)));
+
+    aliases = mf_integration_get_aliases(mf_manifest_get_integration(manifest));
+    g_assert_cmpstr(mf_integration_alias_get_export_path(g_ptr_array_index(aliases, 0)), ==, "bin/app");
+    g_assert_null(mf_integration_alias_get_export_path(g_ptr_array_index(aliases, 1)));
+    g_assert_false(mf_manifest_check_integration(manifest, NULL));
 }
 
 static void
@@ -211,12 +249,13 @@ test_check_file_paths(void)
         {"desktop-entry",       "/app/share/applications/com.example.app.desktop",                     TRUE },
         {"desktop-entry",       "/app/share/applications/com.example.app.open.desktop",                TRUE },
         {"desktop-entry",       "/app/share/applications/com.example.app-open.desktop",                TRUE },
-        {"icons",               "/app/share/icons/hicolor/scalable/apps/com.example.app.svg",          TRUE },
-        {"icons",               "/app/share/icons/hicolor/48x48/apps/com.example.app.png",             TRUE },
-        {"icons",               "/app/share/icons/hicolor/48x48/apps/com.example.app.jxl",             TRUE },
-        {"icons",               "/app/share/icons/hicolor/16x16@2x/apps/com.example.app.png",          TRUE },
-        {"icons",               "/app/share/icons/hicolor/symbolic/apps/com.example.app-symbolic.svg", TRUE },
-        {"icons",               "/app/share/icons/hicolor/48x48/mimetypes/com.example.app.doc.png",    TRUE },
+        {"icon",                "/app/share/icons/hicolor/scalable/apps/com.example.app.svg",          TRUE },
+        {"icon",                "/app/share/icons/hicolor/48x48/apps/com.example.app.png",             TRUE },
+        {"icon",                "/app/share/icons/hicolor/48x48/apps/com.example.app.jxl",             TRUE },
+        {"icon",                "/app/share/icons/hicolor/16x16@2x/apps/com.example.app.png",          TRUE },
+        {"icon",                "/app/share/icons/hicolor/64x64@2/apps/com.example.app.png",           TRUE },
+        {"icon",                "/app/share/icons/hicolor/symbolic/apps/com.example.app-symbolic.svg", TRUE },
+        {"icon",                "/app/share/icons/hicolor/48x48/mimetypes/com.example.app.doc.png",    TRUE },
         {"mime-package",        "/app/share/mime/packages/com.example.app.xml",                        TRUE },
         {"systemd-unit-system", "/app/lib/systemd/system/com.example.app.service",                     TRUE },
         {"systemd-unit-system", "/app/lib/systemd/system/com.example.app-report.service",              TRUE },
@@ -239,12 +278,12 @@ test_check_file_paths(void)
         {"systemd-unit-user",   "/app/lib/systemd/system/com.example.app.service",                     FALSE},
         {"systemd-unit-system", "/app/etc/systemd/system/com.example.app.service",                     FALSE},
         {"systemd-unit-system", "/app/lib/systemd/system/com.example.app.service.d/x.conf",            FALSE},
-        {"icons",               "/app/share/icons/Adwaita/48x48/apps/com.example.app.png",             FALSE},
-        {"icons",               "/app/share/icons/hicolor/apps/com.example.app.png",                   FALSE},
-        {"icons",               "/app/share/icons/hicolor/big/apps/com.example.app.png",               FALSE},
-        {"icons",               "/app/share/icons/hicolor/48x48/actions/com.example.app.png",          FALSE},
-        {"icons",               "/app/share/icons/hicolor/48x48/apps/x/com.example.app.png",           FALSE},
-        {"icons",               "/app/share/icons/hicolor/48x48\\n/apps/com.example.app.png",          FALSE},
+        {"icon",                "/app/share/icons/Adwaita/48x48/apps/com.example.app.png",             FALSE},
+        {"icon",                "/app/share/icons/hicolor/apps/com.example.app.png",                   FALSE},
+        {"icon",                "/app/share/icons/hicolor/big/apps/com.example.app.png",               FALSE},
+        {"icon",                "/app/share/icons/hicolor/48x48/actions/com.example.app.png",          FALSE},
+        {"icon",                "/app/share/icons/hicolor/48x48/apps/x/com.example.app.png",           FALSE},
+        {"icon",                "/app/share/icons/hicolor/48x48\\n/apps/com.example.app.png",          FALSE},
 
         /* not named after the component */
         {"desktop-entry",       "/app/share/applications/org.gnome.Nautilus.desktop",                  FALSE},
@@ -263,7 +302,7 @@ test_check_file_paths(void)
         {"desktop-entry",       "/app/share/applications/com.example.app",                             FALSE},
         {"desktop-entry",       "/app/share/applications/com.example.app.desktop.bak",                 FALSE},
         {"desktop-entry",       "/app/share/applications/com.example.app@.desktop",                    FALSE},
-        {"icons",               "/app/share/icons/hicolor/48x48/apps/com.example.app.gif",             FALSE},
+        {"icon",                "/app/share/icons/hicolor/48x48/apps/com.example.app.gif",             FALSE},
         {"systemd-unit-system", "/app/lib/systemd/system/com.example.app.mount",                       FALSE},
         {"systemd-unit-system", "/app/lib/systemd/system/com.example.app.automount",                   FALSE},
         {"systemd-unit-system", "/app/lib/systemd/system/com.example.app.swap",                        FALSE},
@@ -1176,6 +1215,7 @@ main(int argc, char **argv)
 
     g_test_add_func("/integration/kind-strings", test_kind_strings);
     g_test_add_func("/integration/privileged", test_privileged);
+    g_test_add_func("/integration/export-paths", test_export_paths);
     g_test_add_func("/integration/section", test_section);
     g_test_add_func("/integration/no-section", test_no_section);
     g_test_add_func("/integration/malformed-section", test_malformed_section);
