@@ -56,6 +56,7 @@ MIME_EXPORT = f'{STORE}/exports/share/mime/packages/{APP_ID}.xml'
 ALIASES = {'app-cli': '/app/bin/app'}
 ALIAS_EXPORT = f'{STORE}/exports/bin/app-cli'
 REGISTRY = f'{STORE}/integrations/{APP_ID}.json'
+UNIT = b'[Service]\nExecStart=app\n'
 
 ARGS = None
 
@@ -80,6 +81,8 @@ class InstallerTestCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.work = tempfile.mkdtemp(prefix='manifold-test-')
+        cls.system_units = f'{ARGS.integration_prefix}/lib/systemd/system'
+        cls.user_units = f'{ARGS.integration_prefix}/lib/systemd/user'
         cls.bundle_count = 0
         cls.stub_host_tools()
         cls.daemon = Daemon(ARGS.daemon, SOCKET, os.path.join(cls.work, 'manifoldd.log'))
@@ -103,16 +106,20 @@ class InstallerTestCase(unittest.TestCase):
     def stub_host_tools(cls):
         """Put stub scripts into the PATH that replace the host tools the daemon runs.
 
-        A stub logs how it was called, and fails if the fail_host_tools file exists."""
+        A stub logs how it was called, and fails if the fail_host_tools file exists. A
+        "systemctl disable" for a unit file that was deleted already is logged too, as
+        systemd needs the file to disable the unit."""
         cls.host_tools_log = os.path.join(cls.work, 'host-tools.log')
         cls.fail_host_tools = os.path.join(cls.work, 'fail-host-tools')
         stubs = os.path.join(cls.work, 'bin')
         os.mkdir(stubs)
-        for tool in ('update-desktop-database', 'update-mime-database'):
+        for tool in ('update-desktop-database', 'update-mime-database', 'systemctl'):
             with open(os.path.join(stubs, tool), 'w', encoding='utf-8') as f:
                 f.write(
                     '#!/bin/sh\n'
                     f'echo "{tool} $*" >> {cls.host_tools_log}\n'
+                    f'[ "$1" != disable ] || [ -e "{cls.system_units}/$4" ] '
+                    f'|| echo "$4 is gone" >> {cls.host_tools_log}\n'
                     f'test ! -e {cls.fail_host_tools}\n'
                 )
             os.chmod(os.path.join(stubs, tool), 0o755)
@@ -132,11 +139,14 @@ class InstallerTestCase(unittest.TestCase):
         return result
 
     def setUp(self):
-        """Empty the store."""
+        """Empty the store and the directory for units."""
         for name in os.listdir(STORE):
             shutil.rmtree(os.path.join(STORE, name))
         for name in ('images/by-verity', 'apps', 'plugins', 'runtimes'):
             os.makedirs(os.path.join(STORE, name))
+        units = os.path.dirname(self.system_units)
+        for name in os.listdir(units):
+            shutil.rmtree(os.path.join(units, name))
         self.host_tool_calls()
 
     def host_tool_calls(self):
@@ -942,6 +952,73 @@ class HostIntegrationTest(InstallerTestCase):
         self.manifold('remove', APP_ID)
         self.assertEqual(self.host_tool_calls(), [update_applications, update_mime])
 
+    def test_units_follow_the_current_version(self):
+        kept = f'{APP_ID}.service'
+        template = f'{APP_ID}-worker@.service'
+        stale = f'{APP_ID}-old.service'
+        user_unit = f'{APP_ID}-user.service'
+
+        def app_with_units(version, *units):
+            return self.app_with(
+                {
+                    'systemd-unit-system': {f'/app/lib/systemd/system/{u}': UNIT for u in units},
+                    'systemd-unit-user': {f'/app/lib/systemd/user/{user_unit}': UNIT},
+                },
+                version=version,
+            )
+
+        def unit_names(call):
+            return sorted(call.partition(' --no-block ')[2].split())
+
+        self.install_core()
+
+        # a unit is never enabled or started
+        self.install(self.kit, app_with_units('0.1.0', kept, template, stale))
+        self.assertEqual(self.host_tool_calls(), ['systemctl daemon-reload'])
+        self.assertIn(b'/mfrun com.example.app\n', self.read_export(f'{self.system_units}/{kept}'))
+        self.assertEqual(os.stat(f'{self.system_units}/{kept}').st_mode & 0o777, 0o644)
+        self.assertIn(
+            b'/mfrun com.example.app\n', self.read_export(f'{self.user_units}/{user_unit}')
+        )
+
+        # a template has no unit of its own that could be restarted, only its instances do
+        self.install(self.kit, app_with_units('0.2.0', kept, template))
+        disable, reload, restart = self.host_tool_calls()
+        self.assertEqual(disable, f'systemctl disable --now --no-block {stale}')
+        self.assertEqual(reload, 'systemctl daemon-reload')
+        self.assertTrue(restart.startswith('systemctl try-restart --no-block '))
+        self.assertEqual(unit_names(restart), sorted([kept, f'{APP_ID}-worker@*.service']))
+        self.assertFalse(os.path.exists(f'{self.system_units}/{stale}'))
+
+        # a template is disabled by the name of its file, which also disables its instances
+        self.install(self.kit, app_with_units('0.3.0'))
+        disable, reload = self.host_tool_calls()
+        self.assertTrue(disable.startswith('systemctl disable --now --no-block '))
+        self.assertEqual(unit_names(disable), sorted([kept, template]))
+        self.assertEqual(reload, 'systemctl daemon-reload')
+        self.assertEqual(os.listdir(self.system_units), [])
+
+        # systemctl is not called for user units
+        self.install(self.kit, app_with_units('0.4.0'))
+        self.assertEqual(self.host_tool_calls(), [])
+        self.manifold('remove', APP_ID)
+        self.assertEqual(self.host_tool_calls(), [])
+        self.assertEqual(os.listdir(self.user_units), [])
+
+    def test_unit_of_the_host_refuses_installation(self):
+        self.install_core()
+        name = f'{APP_ID}.service'
+        host_dir = '/usr/lib/systemd/system'
+        subprocess.run(['mount', '-t', 'tmpfs', 'tmpfs', host_dir], check=True)
+        self.addCleanup(subprocess.run, ['umount', host_dir], check=True)
+        self.write_foreign_file(f'{host_dir}/{name}')
+        app = self.app_with({'systemd-unit-system': {f'/app/lib/systemd/system/{name}': UNIT}})
+
+        out = self.install(self.kit, app, expect=1)
+        self.assertIn(f'the host already has {host_dir}/{name}', out)
+        self.assertNotIn(app.verity_hash, self.stored_images())
+        self.assertFalse(os.path.exists(f'{self.system_units}/{name}'))
+
     def test_failing_host_tool_is_only_a_warning(self):
         self.install_core()
         app = self.integrated_app('0.1.0')
@@ -1275,6 +1352,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--daemon', required=True)
     parser.add_argument('--client', required=True)
+    parser.add_argument('--integration-prefix', required=True)
     ARGS, remaining = parser.parse_known_args()
     # we need b3sum to hash the bundles that the test creates, and varlinkctl to call the daemon
     missing = [tool for tool in ('b3sum', 'varlinkctl') if shutil.which(tool) is None]

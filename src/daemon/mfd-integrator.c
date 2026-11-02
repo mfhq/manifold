@@ -33,6 +33,9 @@
  * Before we change any file, we add the new files to the registry, next to the
  * old ones. After a crash, the registry therefore lists every file that we may
  * have left behind, and the next operation completes the update.
+ *
+ * We never enable a systemd unit, and we never start one that was not running.
+ * Whether a service runs on a host is up to the admin of that host.
  */
 
 /* host tools usually take milliseconds, so this only guards against a tool that hangs */
@@ -41,6 +44,19 @@ constexpr unsigned int HOST_TOOL_TIMEOUT_SEC = 60;
 /* file modes of the exported files and of the aliases */
 constexpr int EXPORT_FILE_MODE = 0644;
 constexpr int EXPORT_ALIAS_MODE = 0755;
+
+/* The directories that systemd and udev search in addition to our prefix. Each of them has
+ * the same layout as the `lib` directory of our prefix. The last three directories are only
+ * searched for user units, they are the defaults of $XDG_CONFIG_DIRS and $XDG_DATA_DIRS. */
+static const char *const HOST_SEARCH_DIRS[] = {
+    "/etc",
+    "/run",
+    "/usr/lib",
+    "/etc/xdg",
+    "/usr/share",
+    MF_INTEGRATION_PREFIX "/share",
+    NULL,
+};
 
 struct _MfdIntegrator {
     GObject parent_instance;
@@ -343,13 +359,43 @@ mfd_integrator_read_owners(MfdIntegrator *integrator, GError **error)
 }
 
 /**
+ * mfd_find_host_file:
+ * @path: the path that a component wants to install a file at
+ *
+ * Find a file in the search directories of the host that has the same name as
+ * a file below our prefix. Systemd and udev only use the first file with a
+ * given name that they find, so our file would either override the file of
+ * the host, or have no effect.
+ *
+ * Returns: (transfer full) (nullable): the path of the conflicting file of the host, or %NULL
+ */
+static char *
+mfd_find_host_file(const char *path)
+{
+    const char *lib_dir = MF_INTEGRATION_PREFIX "/lib/";
+
+    if (!g_str_has_prefix(path, lib_dir))
+        return NULL;
+
+    for (guint i = 0; HOST_SEARCH_DIRS[i] != NULL; i++) {
+        g_autofree char *host_file = g_build_filename(HOST_SEARCH_DIRS[i], path + strlen(lib_dir), NULL);
+
+        if (g_file_test(host_file, G_FILE_TEST_EXISTS) || mfd_is_symlink(host_file))
+            return g_steal_pointer(&host_file);
+    }
+
+    return NULL;
+}
+
+/**
  * mfd_owners_check_path:
  * @owners: (element-type utf8 utf8): a table of path -> ID of the owning component
- * @path: where a component wants to install a file
+ * @path: the path that a component wants to install a file at
  * @component_id: the component that wants to install the file
  *
- * Check that a component may install a file at a path. It may do that if it
- * owns the file already, or if there is nothing at this path.
+ * Check that a component may install a file at a path. This is allowed if the
+ * component owns the file at this path already, or if no file exists at the
+ * path and the host has no file with the same name in its search directories.
  *
  * Returns: %TRUE if the component may install the file
  */
@@ -357,6 +403,7 @@ static gboolean
 mfd_owners_check_path(GHashTable *owners, const char *path, const char *component_id, GError **error)
 {
     const char *owner = g_hash_table_lookup(owners, path);
+    g_autofree char *host_file = NULL;
 
     if (g_strcmp0(owner, component_id) == 0)
         return TRUE;
@@ -378,6 +425,17 @@ mfd_owners_check_path(GHashTable *owners, const char *path, const char *componen
             "%s needs to install %s, but that file already exists and does not belong to any component",
             component_id,
             path);
+        return FALSE;
+    }
+    host_file = mfd_find_host_file(path);
+    if (host_file != NULL) {
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_FILE_CONFLICT,
+                    "%s needs to install %s, but the host already has %s",
+                    component_id,
+                    path,
+                    host_file);
         return FALSE;
     }
 
@@ -477,6 +535,26 @@ mfd_integrator_build_host_path(MfdIntegrator *integrator, const char *export_pat
 }
 
 /**
+ * mfd_integrator_build_file_path:
+ *
+ * Returns: (transfer full): the path on the host that an integration file is installed at
+ */
+static char *
+mfd_integrator_build_file_path(MfdIntegrator *integrator, MfIntegrationFile *file)
+{
+    const char *export_path = mf_integration_file_get_export_path(file);
+
+    /* the search paths of systemd are fixed, so units can not stay in our store */
+    switch (mf_integration_file_get_kind(file)) {
+    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM:
+    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER:
+        return g_build_filename(MF_INTEGRATION_PREFIX, export_path, NULL);
+    default:
+        return mfd_integrator_build_host_path(integrator, export_path);
+    }
+}
+
+/**
  * mfd_integrator_kind_is_supported:
  *
  * Returns: %TRUE if we install this kind of file
@@ -488,10 +566,12 @@ mfd_integrator_kind_is_supported(MfIntegrationKind kind)
     case MF_INTEGRATION_KIND_DESKTOP_ENTRY:
     case MF_INTEGRATION_KIND_ICON:
     case MF_INTEGRATION_KIND_MIME_PACKAGE:
+    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM:
+    case MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER:
         return TRUE;
     default:
-        /* TODO: Install systemd units and udev rules. A caller already needs a polkit
-         * action of its own for them, as they can give an image root access to the host. */
+        /* TODO: Install udev rules. A caller already needs a polkit action of its own
+         * for them, as they can give an image root access to the host. */
         return FALSE;
     }
 }
@@ -513,9 +593,7 @@ mfd_integrator_list_host_paths(MfdIntegrator *integrator, MfIntegration *integra
         MfIntegrationFile *file = g_ptr_array_index(files, i);
 
         if (mfd_integrator_kind_is_supported(mf_integration_file_get_kind(file)))
-            g_ptr_array_add(
-                paths,
-                mfd_integrator_build_host_path(integrator, mf_integration_file_get_export_path(file)));
+            g_ptr_array_add(paths, mfd_integrator_build_file_path(integrator, file));
     }
     for (guint i = 0; i < aliases->len; i++) {
         MfIntegrationAlias *alias = g_ptr_array_index(aliases, i);
@@ -549,7 +627,7 @@ mfd_integrator_export_new(MfdIntegrator *integrator,
     const char *export_path = mf_integration_file_get_export_path(file);
     g_autoptr(MfdExport) export = g_new0(MfdExport, 1);
 
-    export->path = mfd_integrator_build_host_path(integrator, export_path);
+    export->path = mfd_integrator_build_file_path(integrator, file);
     if (mf_integration_file_get_kind(file) == MF_INTEGRATION_KIND_ICON) {
         export->target = g_build_filename(root,
                                           mf_store_subdir_for_kind(mf_component_get_kind(component), FALSE),
@@ -802,6 +880,87 @@ mfd_host_tool_run(const char *const *argv)
 }
 
 /**
+ * mfd_path_get_system_unit:
+ * @path: where a file is on the host
+ *
+ * Returns: (nullable): the name of the unit, which is a part of @path, if the
+ *   file is a unit of the system manager
+ */
+static const char *
+mfd_path_get_system_unit(const char *path)
+{
+    g_autofree char *dir = g_strconcat(MF_INTEGRATION_PREFIX "/",
+                                       mf_integration_kind_get_dir(MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM),
+                                       "/",
+                                       NULL);
+
+    return g_str_has_prefix(path, dir) ? path + strlen(dir) : NULL;
+}
+
+/**
+ * mfd_unit_build_pattern:
+ * @unit: the name of a unit file
+ *
+ * Returns: (transfer full): a pattern that makes systemctl act on the running
+ *   units of a unit file. For a template, the pattern matches all of its instances.
+ */
+static char *
+mfd_unit_build_pattern(const char *unit)
+{
+    const char *at = strchr(unit, '@');
+
+    if (at == NULL)
+        return g_strdup(unit);
+    return g_strdup_printf("%.*s@*%s", (int) (at - unit), unit, at + 1);
+}
+
+/**
+ * mfd_systemctl_run:
+ * @command: the command of systemctl and its options, %NULL terminated
+ * @units: (element-type utf8): the units to act on
+ *
+ * Run a command for some units, if there are any. We do not wait for the units
+ * to change their state, as a service can take longer for that than we allow
+ * host tools to run, and we can not handle other requests in the meantime.
+ * Systemd finishes the job even if the file of the unit is gone by then.
+ */
+static void
+mfd_systemctl_run(const char *const *command, GPtrArray *units)
+{
+    g_autoptr(GPtrArray) argv = g_ptr_array_new();
+
+    if (units->len == 0)
+        return;
+
+    g_ptr_array_add(argv, "systemctl");
+    for (guint i = 0; command[i] != NULL; i++)
+        g_ptr_array_add(argv, (char *) command[i]);
+    g_ptr_array_add(argv, "--no-block");
+    for (guint i = 0; i < units->len; i++)
+        g_ptr_array_add(argv, g_ptr_array_index(units, i));
+    g_ptr_array_add(argv, NULL);
+
+    mfd_host_tool_run((const char *const *) argv->pdata);
+}
+
+/**
+ * mfd_restore_selinux_labels:
+ *
+ * Give the files below our prefix the labels of the policy of the host. A file
+ * we create gets the label of its directory, which is the wrong one if we had
+ * to create that directory as well.
+ */
+static void
+mfd_restore_selinux_labels(void)
+{
+    g_autofree char *dir = g_build_filename(MF_INTEGRATION_PREFIX, "lib", "systemd", NULL);
+    const char *const argv[] = {"restorecon", "-R", dir, NULL};
+
+    if (g_file_test("/sys/fs/selinux/enforce", G_FILE_TEST_EXISTS))
+        mfd_host_tool_run(argv);
+}
+
+/**
  * mfd_integrator_update_host_caches:
  *
  * Update the caches of the host that are built from our desktop entries and
@@ -851,6 +1010,10 @@ mfd_integrator_update_host_caches(MfdIntegrator *integrator)
  * belong to the current version. If this fails, the registry shows that the
  * files are not up to date, and the next call tries again.
  *
+ * Services of a unit that goes away are stopped, and those of a unit that stays
+ * are restarted, so that they run the current version. User managers find out
+ * about new units with the next session of a user.
+ *
  * Returns: %TRUE on success
  */
 gboolean
@@ -860,6 +1023,12 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
     g_autoptr(MfComponent) current = NULL;
     g_autoptr(GHashTable) wanted = NULL;
     g_autoptr(GPtrArray) stale = g_ptr_array_new();
+    g_autoptr(GPtrArray) stale_units = g_ptr_array_new_with_free_func(g_free);
+    g_autoptr(GPtrArray) kept_units = g_ptr_array_new_with_free_func(g_free);
+    const char *const disable_command[] = {"disable", "--now", NULL};
+    const char *const restart_command[] = {"try-restart", NULL};
+    const char *const reload_argv[] = {"systemctl", "daemon-reload", NULL};
+    gboolean units_changed;
     gboolean has_registry;
     GHashTableIter iter;
     gpointer value;
@@ -891,15 +1060,30 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
     g_hash_table_iter_init(&iter, registry->exports);
     while (g_hash_table_iter_next(&iter, NULL, &value)) {
         MfdExport *export = value;
+        const char *unit = mfd_path_get_system_unit(export->path);
 
-        if (!g_hash_table_contains(wanted, export->path))
-            g_ptr_array_add(stale, export);
+        if (g_hash_table_contains(wanted, export->path)) {
+            if (unit != NULL)
+                g_ptr_array_add(kept_units, mfd_unit_build_pattern(unit));
+            continue;
+        }
+        g_ptr_array_add(stale, export);
+        if (unit != NULL)
+            g_ptr_array_add(stale_units, g_strdup(unit));
     }
+    units_changed = stale_units->len > 0;
     g_hash_table_iter_init(&iter, wanted);
-    while (g_hash_table_iter_next(&iter, NULL, &value))
-        mfd_exports_add(registry->exports, mfd_export_copy(value));
+    while (g_hash_table_iter_next(&iter, NULL, &value)) {
+        MfdExport *export = value;
+
+        units_changed = units_changed || mfd_path_get_system_unit(export->path) != NULL;
+        mfd_exports_add(registry->exports, mfd_export_copy(export));
+    }
     if (!mfd_registry_save(registry, error))
         return FALSE;
+
+    /* systemctl reads what enabling a unit has done from its file, so the file has to be there */
+    mfd_systemctl_run(disable_command, stale_units);
 
     g_hash_table_iter_init(&iter, wanted);
     while (g_hash_table_iter_next(&iter, NULL, &value)) {
@@ -915,7 +1099,11 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
     }
 
     /* we do this while the registry still says that we are not done, so that the next
-     * operation updates the caches if we crash here */
+     * operation updates the host if we crash here */
+    mfd_restore_selinux_labels();
+    if (units_changed)
+        mfd_host_tool_run(reload_argv);
+    mfd_systemctl_run(restart_command, kept_units);
     mfd_integrator_update_host_caches(integrator);
 
     if (current == NULL || g_hash_table_size(wanted) == 0)
