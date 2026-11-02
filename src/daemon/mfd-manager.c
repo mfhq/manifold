@@ -19,6 +19,7 @@
 #include "mfd-image-reader.h"
 #include "mfd-integrator.h"
 #include "mfd-store-writer.h"
+#include "mfd-utils.h"
 
 /**
  * MfdManager:
@@ -1329,11 +1330,13 @@ mfd_manager_execute_removal(MfdManager *manager,
 
         if (mf_component_get_kind(item->component) == MF_COMPONENT_KIND_APP &&
             !mfd_integrator_reconcile(manager->integrator,
+                                      result,
                                       mf_component_get_id(item->component),
                                       &reconcile_error))
-            g_warning("Unable to update the host files of %s: %s",
-                      mf_component_get_id(item->component),
-                      reconcile_error->message);
+            mfd_emit_warning(result,
+                             "Unable to update the host files of %s: %s",
+                             mf_component_get_id(item->component),
+                             reconcile_error->message);
     }
 
     for (guint i = 0; i < rmplan->images->len; i++) {
@@ -1439,6 +1442,7 @@ mfd_manager_execute_install_plan(MfdManager *manager,
                                  MfBundle *bundle,
                                  MfdInstallPlan *iplan,
                                  MfdProgressTracker *tracker,
+                                 MfResult *result,
                                  guint64 *ret_bytes_added,
                                  MfdErrorDetail *ret_detail,
                                  GError **error)
@@ -1509,8 +1513,11 @@ mfd_manager_execute_install_plan(MfdManager *manager,
     /* the component is installed at this point, so if updating its host files fails we only
      * warn about it, and the next operation will try to update them again */
     if (mf_manifest_get_kind(manifest) == MF_COMPONENT_KIND_APP &&
-        !mfd_integrator_reconcile(manager->integrator, component_id, &local_error))
-        g_warning("Unable to update the host files of %s: %s", component_id, local_error->message);
+        !mfd_integrator_reconcile(manager->integrator, result, component_id, &local_error))
+        mfd_emit_warning(result,
+                         "Unable to update the host files of %s: %s",
+                         component_id,
+                         local_error->message);
 
     if (iplan->add_image)
         mfd_progress_end_item(tracker);
@@ -1676,6 +1683,7 @@ mfd_manager_install_bundle(MfdManager *manager,
         if (g_array_index(plans, MfdInstallPlan, i).add_image)
             tracker.total++;
     }
+    result = mf_result_new();
     for (guint i = 0; i < plans->len; i++) {
         MfdInstallPlan *plan = &g_array_index(plans, MfdInstallPlan, i);
         guint64 image_bytes;
@@ -1686,6 +1694,7 @@ mfd_manager_install_bundle(MfdManager *manager,
                                               bundle,
                                               plan,
                                               &tracker,
+                                              result,
                                               &image_bytes,
                                               ret_detail,
                                               error))
@@ -1694,11 +1703,12 @@ mfd_manager_install_bundle(MfdManager *manager,
     }
 
     /* we remove what the installation supersedes, but the installation stands even if that fails */
-    result = mf_result_new();
     rmplan = mfd_manager_plan_supersede(manager, plans, &supersede_error);
     mfd_progress_split_last_item(&tracker, rmplan != NULL ? rmplan->items->len : 0);
     if (rmplan == NULL || !mfd_manager_execute_removal(manager, rmplan, &tracker, result, &supersede_error))
-        g_warning("Unable to remove what the installation supersedes: %s", supersede_error->message);
+        mfd_emit_warning(result,
+                         "Unable to remove what the installation supersedes: %s",
+                         supersede_error->message);
 
     mfd_manager_results_add_installed(manager, result, plans);
     mf_result_set_bytes_added(result, bytes_added);

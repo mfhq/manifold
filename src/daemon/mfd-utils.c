@@ -9,9 +9,33 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <libglnx.h>
+
+/**
+ * mfd_emit_warning:
+ * @result: (nullable): the result of the operation that this is about
+ * @format: a printf() format for the message
+ *
+ * Log a problem that does not fail an operation. If a caller is waiting for
+ * the operation, the message also reaches it through @result.
+ */
+void
+mfd_emit_warning(MfResult *result, const char *format, ...)
+{
+    g_autofree char *message = NULL;
+    va_list args;
+
+    va_start(args, format);
+    message = g_strdup_vprintf(format, args);
+    va_end(args);
+
+    g_warning("%s", message);
+    if (result != NULL)
+        mf_result_add_warning(result, message);
+}
 
 gboolean
 mfd_is_directory(const char *path)

@@ -392,10 +392,32 @@ mfd_varlink_build_components_array(GPtrArray *components, sd_json_variant **ret_
 }
 
 /**
+ * mfd_varlink_build_strings_array:
+ * @strings: (element-type utf8): some strings
+ * @ret: (out): the JSON array
+ *
+ * Returns: 0, or a negative errno
+ */
+static int
+mfd_varlink_build_strings_array(GPtrArray *strings, sd_json_variant **ret)
+{
+    int r;
+
+    for (guint i = 0; i < strings->len; i++) {
+        r = sd_json_variant_append_arrayb(ret, SD_JSON_BUILD_STRING(g_ptr_array_index(strings, i)));
+        if (r < 0)
+            return r;
+    }
+
+    return mfd_json_ensure_array(ret);
+}
+
+/**
  * mfd_service_reply_result:
  *
  * Send the final reply of an operation: the components it installed and
- * removed, the images it removed, and the disk space it used and freed.
+ * removed, the images it removed, the disk space it used and freed, and what
+ * went wrong without failing it.
  */
 static int
 mfd_service_reply_result(sd_varlink *link, MfResult *result)
@@ -403,32 +425,28 @@ mfd_service_reply_result(sd_varlink *link, MfResult *result)
     g_autoptr(sd_json_variant) installed = NULL;
     g_autoptr(sd_json_variant) removed = NULL;
     g_autoptr(sd_json_variant) removed_images = NULL;
-    GPtrArray *images = mf_result_get_removed_images(result);
+    g_autoptr(sd_json_variant) warnings = NULL;
     int r;
 
     if ((r = mfd_varlink_build_components_array(mf_result_get_installed(result), &installed)) < 0)
         return r;
     if ((r = mfd_varlink_build_components_array(mf_result_get_removed(result), &removed)) < 0)
         return r;
-    for (guint i = 0; i < images->len; i++) {
-        r = sd_json_variant_append_arrayb(&removed_images,
-                                          SD_JSON_BUILD_STRING(g_ptr_array_index(images, i)));
-        if (r < 0)
-            return r;
-    }
-    if ((r = mfd_json_ensure_array(&removed_images)) < 0)
+    if ((r = mfd_varlink_build_strings_array(mf_result_get_removed_images(result), &removed_images)) < 0)
+        return r;
+    if ((r = mfd_varlink_build_strings_array(mf_result_get_warnings(result), &warnings)) < 0)
         return r;
 
     return sd_varlink_replybo(
         link,
         SD_JSON_BUILD_PAIR(
             "result",
-            SD_JSON_BUILD_OBJECT(
-                SD_JSON_BUILD_PAIR_VARIANT("installed", installed),
-                SD_JSON_BUILD_PAIR_VARIANT("removed", removed),
-                SD_JSON_BUILD_PAIR_VARIANT("removedImages", removed_images),
-                SD_JSON_BUILD_PAIR_UNSIGNED("bytesAdded", mf_result_get_bytes_added(result)),
-                SD_JSON_BUILD_PAIR_UNSIGNED("bytesFreed", mf_result_get_bytes_freed(result)))));
+            SD_JSON_BUILD_OBJECT(SD_JSON_BUILD_PAIR_VARIANT("installed", installed),
+                                 SD_JSON_BUILD_PAIR_VARIANT("removed", removed),
+                                 SD_JSON_BUILD_PAIR_VARIANT("removedImages", removed_images),
+                                 SD_JSON_BUILD_PAIR_UNSIGNED("bytesAdded", mf_result_get_bytes_added(result)),
+                                 SD_JSON_BUILD_PAIR_UNSIGNED("bytesFreed", mf_result_get_bytes_freed(result)),
+                                 SD_JSON_BUILD_PAIR_VARIANT("warnings", warnings))));
 }
 
 /**

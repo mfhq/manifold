@@ -32,11 +32,14 @@ GPtrArray *mf_result_get_removed(MfResult *result);
 GPtrArray *mf_result_get_removed_images(MfResult *result);
 guint64    mf_result_get_bytes_added(MfResult *result);
 guint64    mf_result_get_bytes_freed(MfResult *result);
+GPtrArray *mf_result_get_warnings(MfResult *result);
 
 void       mf_result_add_installed(MfResult    *result,
                                    MfComponent *component);
 void       mf_result_add_removed(MfResult    *result,
                                  MfComponent *component);
+void       mf_result_add_warning(MfResult   *result,
+                                 const char *message);
 void       mf_result_set_bytes_added(MfResult *result,
                                      guint64   bytes);
 void       mf_result_set_bytes_freed(MfResult *result,

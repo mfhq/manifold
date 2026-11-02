@@ -25,6 +25,7 @@ gboolean       mfd_integrator_check_conflicts(MfdIntegrator *integrator,
                                               GError       **error);
 
 gboolean       mfd_integrator_reconcile(MfdIntegrator *integrator,
+                                        MfResult      *result,
                                         const char    *component_id,
                                         GError       **error);
 void           mfd_integrator_reconcile_all(MfdIntegrator *integrator);
