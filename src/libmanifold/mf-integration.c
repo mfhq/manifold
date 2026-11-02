@@ -54,7 +54,7 @@ static const struct {
     [MF_INTEGRATION_KIND_UNKNOWN] = {.name = "unknown"},
     [MF_INTEGRATION_KIND_DESKTOP_ENTRY] = {"desktop-entry",
                                      "share/applications", (const char *const[]){".desktop", NULL}},
-    [MF_INTEGRATION_KIND_ICON] = {"icons",
+    [MF_INTEGRATION_KIND_ICON] = {"icon",
                                      "share/icons/hicolor", (const char *const[]){".png", ".svg", ".svgz", ".jxl", NULL}},
     [MF_INTEGRATION_KIND_MIME_PACKAGE] = {"mime-package",
                                      "share/mime/packages", (const char *const[]){".xml", NULL}},
@@ -216,7 +216,8 @@ struct _MfIntegrationFile {
     GObject parent_instance;
 
     MfIntegrationKind kind;
-    char *path; /* the absolute path in the image */
+    char *path;        /* the absolute path in the image */
+    char *export_path; /* @path relative to /app, or NULL if @path is not in the directory of its kind */
     char *checksums[MF_CHECKSUM_KIND_LAST];
 };
 
@@ -228,6 +229,7 @@ mf_integration_file_finalize(GObject *object)
     MfIntegrationFile *file = MF_INTEGRATION_FILE(object);
 
     g_free(file->path);
+    g_free(file->export_path);
     for (guint i = 0; i < MF_CHECKSUM_KIND_LAST; i++)
         g_free(file->checksums[i]);
 
@@ -276,13 +278,15 @@ mf_integration_file_get_path(MfIntegrationFile *file)
  * @file: an #MfIntegrationFile
  *
  * Retrieve the export path of the file, relative to the directory of exports.
+ *
+ * Returns: (nullable): the export path, or %NULL if the path in the image is not in
+ *   the directory of its kind. mf_manifest_check_integration() refuses such a file.
  */
 const char *
 mf_integration_file_get_export_path(MfIntegrationFile *file)
 {
     g_return_val_if_fail(MF_IS_INTEGRATION_FILE(file), NULL);
-    g_return_val_if_fail(g_str_has_prefix(file->path, APP_DIR), NULL);
-    return file->path + strlen(APP_DIR);
+    return file->export_path;
 }
 
 /**
@@ -392,6 +396,9 @@ mf_integration_alias_get_command(MfIntegrationAlias *alias)
  * @alias: an #MfIntegrationAlias
  *
  * Retrieve the export path of the alias, relative to the directory of exports.
+ *
+ * Returns: (nullable): the export path, or %NULL if the name of the alias is not a file
+ *   name in the alias directory. mf_manifest_check_integration() refuses such an alias.
  */
 const char *
 mf_integration_alias_get_export_path(MfIntegrationAlias *alias)
@@ -498,6 +505,41 @@ mf_integration_is_privileged(MfIntegration *integration)
 }
 
 /**
+ * mf_integration_build_export_path:
+ * @kind: the kind of the file
+ * @path: the path of the file in the image
+ *
+ * Returns: (transfer full) (nullable): @path relative to /app, or %NULL if
+ *   @path is not below the directory of its kind
+ */
+static char *
+mf_integration_build_export_path(MfIntegrationKind kind, const char *path)
+{
+    g_autofree char *dir = g_strconcat(APP_DIR, KINDS[kind].dir, NULL);
+
+    if (!mf_path_is_below(path, dir))
+        return NULL;
+    return g_strdup(path + strlen(APP_DIR));
+}
+
+/**
+ * mf_integration_build_alias_export_path:
+ * @name: the name of an alias
+ *
+ * Returns: (transfer full) (nullable): the path of the alias script, relative to the
+ *   exports directory, or %NULL if the path would not be below the alias directory
+ */
+static char *
+mf_integration_build_alias_export_path(const char *name)
+{
+    g_autofree char *path = g_build_filename(ALIAS_DIR, name, NULL);
+
+    if (!mf_path_is_below(path, ALIAS_DIR))
+        return NULL;
+    return g_steal_pointer(&path);
+}
+
+/**
  * mf_integration_check_is_list:
  * @context: a description of @value for the error message
  *
@@ -540,6 +582,7 @@ mf_integration_parse_files(MfIntegration *integration,
             mf_json_get_string_field(entry, context, "path", MF_ERROR_INVALID_MANIFEST, error));
         if (file->path == NULL)
             return FALSE;
+        file->export_path = mf_integration_build_export_path(kind, file->path);
         for (MfChecksumKind checksum = MF_CHECKSUM_KIND_UNKNOWN + 1; checksum < MF_CHECKSUM_KIND_LAST;
              checksum++) {
             file->checksums[checksum] = g_strdup(mf_json_get_hash_field(entry,
@@ -582,7 +625,7 @@ mf_integration_parse_aliases(MfIntegration *integration, sd_json_variant *entrie
             mf_json_get_string_field(entry, context, "command", MF_ERROR_INVALID_MANIFEST, error));
         if (alias->command == NULL)
             return FALSE;
-        alias->export_path = g_build_filename(ALIAS_DIR, alias->name, NULL);
+        alias->export_path = mf_integration_build_alias_export_path(alias->name);
         g_ptr_array_add(integration->aliases, g_steal_pointer(&alias));
     }
 
@@ -677,12 +720,16 @@ mf_integration_name_is_owned(const char *stem, gsize stem_len, const char *compo
 
 /**
  * mf_integration_name_is_valid:
+ * @kind: a #MfIntegrationKind
  * @name: the name of an integration file
+ * @component_id: the component that installs the file
  *
  * Check that a file name starts with the component ID, and has a suffix that
  * the host recognizes for files of this kind.
+ *
+ * Returns: %TRUE if a component may install a file of this name
  */
-static gboolean
+gboolean
 mf_integration_name_is_valid(MfIntegrationKind kind, const char *name, const char *component_id)
 {
     const char *const *suffixes = KINDS[kind].suffixes;
@@ -734,7 +781,7 @@ mf_integration_check_file(MfIntegrationFile *file, const char *component_id, GEr
     const char *rest;
     const char *name;
 
-    if (!g_str_has_prefix(file->path, dir)) {
+    if (file->export_path == NULL) {
         /* TRANSLATORS: the kind of the file, its path, and the directory it has to be in */
         mf_integration_set_error(error, _("%s: %s is not in %s"), kind_name, shown, dir);
         return FALSE;
@@ -748,7 +795,7 @@ mf_integration_check_file(MfIntegrationFile *file, const char *component_id, GEr
     if (file->kind == MF_INTEGRATION_KIND_ICON) {
         g_autofree char *icon_dir = g_strndup(rest, (gsize) (name - rest));
 
-        if (!g_regex_match_simple("^([0-9]+x[0-9]+(@[0-9]+x)?|scalable|symbolic)/(apps|mimetypes)/\\z",
+        if (!g_regex_match_simple("^([0-9]+x[0-9]+(@[0-9]+x?)?|scalable|symbolic)/(apps|mimetypes)/\\z",
                                   icon_dir,
                                   0,
                                   0)) {
