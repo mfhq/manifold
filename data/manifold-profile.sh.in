@@ -1,0 +1,15 @@
+#
+# Make the applications that Manifold installed available to login shells.
+#
+
+case ":${PATH:-}:" in
+    *":@MF_EXPORTS_DIR@/bin:"*) ;;
+    *) PATH="${PATH:+${PATH}:}@MF_EXPORTS_DIR@/bin" ;;
+esac
+
+case ":${XDG_DATA_DIRS:-}:" in
+    *":@MF_EXPORTS_DIR@/share:"*) ;;
+    *) XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}:@MF_EXPORTS_DIR@/share" ;;
+esac
+
+export PATH XDG_DATA_DIRS
