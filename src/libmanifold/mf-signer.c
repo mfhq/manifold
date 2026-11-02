@@ -90,7 +90,7 @@ mf_signer_init(MfSigner *signer)
  *
  * Returns: (transfer full) (nullable): the fingerprint, or %NULL if @public_key is not a public key
  */
-static char *
+char *
 mf_ssh_key_fingerprint(const char *public_key)
 {
     g_auto(GStrv) parts = g_strsplit(public_key, " ", 3);
@@ -547,7 +547,7 @@ mf_signer_check_key(MfSigner *signer, GError **error)
  *
  * Returns: the SSHSig namespace of a scope, or %NULL if the scope is not known
  */
-static const char *
+const char *
 mf_signature_scope_to_namespace(MfSignatureScope scope)
 {
     switch (scope) {
