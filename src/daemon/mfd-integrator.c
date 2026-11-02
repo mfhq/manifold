@@ -8,8 +8,11 @@
 #include "mfd-integrator.h"
 
 #include <string.h>
+#include <unistd.h>
+#include <gio/gio.h>
 #include <systemd/sd-json.h>
 
+#include "mf-integration-private.h"
 #include "mf-json-private.h"
 #include "mf-sdautoptr-private.h"
 #include "mf-store-private.h"
@@ -31,6 +34,9 @@
  * old ones. So after a crash the registry knows about every file we may have
  * left behind, and the next operation finishes the job.
  */
+
+/* host tools usually take milliseconds, so this only guards against a tool that hangs */
+constexpr unsigned int HOST_TOOL_TIMEOUT_SEC = 60;
 
 struct _MfdIntegrator {
     GObject parent_instance;
@@ -678,6 +684,93 @@ mfd_integrator_drop_conflicts(MfdIntegrator *integrator,
 }
 
 /**
+ * mfd_host_tool_child_setup:
+ *
+ * Limit a host tool, between fork and exec. The alarm timer stays set across
+ * the exec, and kills the tool if it does not finish in time.
+ */
+static void
+mfd_host_tool_child_setup(gpointer user_data)
+{
+    alarm(HOST_TOOL_TIMEOUT_SEC);
+}
+
+/**
+ * mfd_host_tool_run:
+ * @argv: the name of the tool, followed by its arguments
+ *
+ * Run a tool of the host if it is installed, and warn if it fails. A server
+ * usually does not have these tools at all, so a missing tool is fine, and a tool
+ * that fails must not fail the operation that changed the files.
+ */
+static void
+mfd_host_tool_run(const char *const *argv)
+{
+    g_autofree char *tool = g_find_program_in_path(argv[0]);
+    g_autofree char *output = NULL;
+    g_autoptr(GSubprocessLauncher) launcher = NULL;
+    g_autoptr(GSubprocess) proc = NULL;
+    g_autoptr(GError) error = NULL;
+
+    if (tool == NULL) {
+        g_debug("Not running %s, as it is not installed", argv[0]);
+        return;
+    }
+
+    /* we keep the output of a tool for when it fails, as it also prints notes that are of no use to us */
+    launcher = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_MERGE);
+    g_subprocess_launcher_set_child_setup(launcher, mfd_host_tool_child_setup, NULL, NULL);
+    proc = g_subprocess_launcher_spawnv(launcher, argv, &error);
+    if (proc == NULL || !g_subprocess_communicate_utf8(proc, NULL, NULL, &output, NULL, &error)) {
+        g_warning("Unable to run %s: %s", argv[0], error->message);
+        return;
+    }
+    if (!g_subprocess_get_successful(proc))
+        g_warning("%s failed: %s", argv[0], g_strstrip(output));
+}
+
+/**
+ * mfd_integrator_update_host_caches:
+ *
+ * Update the caches of the host that are built from our desktop entries and
+ * MIME packages. A MIME package has no effect until update-mime-database has
+ * compiled it, and applications look up which program opens a file type in the
+ * cache that update-desktop-database writes. Icons need nothing like that, as
+ * icon themes search a directory that has no cache, and our exports directory
+ * never has one.
+ *
+ * Both tools fail on a directory that does not exist, which is the case until
+ * the first application has installed a file of that kind.
+ */
+static void
+mfd_integrator_update_host_caches(MfdIntegrator *integrator)
+{
+    const char *root = mf_store_get_path(integrator->store);
+    g_autofree char *applications = g_build_filename(
+        root,
+        MF_STORE_EXPORTS_NAME,
+        mf_integration_kind_get_dir(MF_INTEGRATION_KIND_DESKTOP_ENTRY),
+        NULL);
+    g_autofree char *packages = g_build_filename(
+        root,
+        MF_STORE_EXPORTS_NAME,
+        mf_integration_kind_get_dir(MF_INTEGRATION_KIND_MIME_PACKAGE),
+        NULL);
+    g_autofree char *mime = g_path_get_dirname(packages);
+
+    if (mfd_is_directory(applications)) {
+        const char *const argv[] = {"update-desktop-database", "--quiet", applications, NULL};
+
+        mfd_host_tool_run(argv);
+    }
+    if (mfd_is_directory(packages)) {
+        const char *const argv[] = {"update-mime-database", mime, NULL};
+
+        mfd_host_tool_run(argv);
+    }
+}
+
+/**
  * mfd_integrator_reconcile:
  * @integrator: an #MfdIntegrator
  * @component_id: a component, which may not be installed anymore
@@ -750,6 +843,10 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
             return FALSE;
         g_hash_table_remove(registry->exports, export->path);
     }
+
+    /* we do this while the registry still says that we are not done, so that the next
+     * operation updates the caches if we crash here */
+    mfd_integrator_update_host_caches(integrator);
 
     if (current == NULL || g_hash_table_size(wanted) == 0)
         return mfd_remove_if_exists(registry->path, error);
