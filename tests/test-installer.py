@@ -79,6 +79,7 @@ class InstallerTestCase(unittest.TestCase):
     def setUpClass(cls):
         cls.work = tempfile.mkdtemp(prefix='manifold-test-')
         cls.bundle_count = 0
+        cls.stub_host_tools()
         cls.daemon = Daemon(ARGS.daemon, SOCKET, os.path.join(cls.work, 'manifoldd.log'))
         cls.daemon.start()
 
@@ -96,6 +97,27 @@ class InstallerTestCase(unittest.TestCase):
         cls.daemon.stop()
         shutil.rmtree(cls.work, ignore_errors=True)
 
+    @classmethod
+    def stub_host_tools(cls):
+        """Put stub scripts into the PATH that replace the host tools the daemon runs.
+
+        A stub logs how it was called, and fails if the fail_host_tools file exists."""
+        cls.host_tools_log = os.path.join(cls.work, 'host-tools.log')
+        cls.fail_host_tools = os.path.join(cls.work, 'fail-host-tools')
+        stubs = os.path.join(cls.work, 'bin')
+        os.mkdir(stubs)
+        for tool in ('update-desktop-database', 'update-mime-database'):
+            with open(os.path.join(stubs, tool), 'w', encoding='utf-8') as f:
+                f.write(
+                    '#!/bin/sh\n'
+                    f'echo "{tool} $*" >> {cls.host_tools_log}\n'
+                    f'test ! -e {cls.fail_host_tools}\n'
+                )
+            os.chmod(os.path.join(stubs, tool), 0o755)
+        path = mock.patch.dict(os.environ, {'PATH': stubs + os.pathsep + os.environ['PATH']})
+        path.start()
+        cls.addClassCleanup(path.stop)
+
     def run(self, result=None):
         """Run a test, and if it fails, show what the daemon logged meanwhile."""
         result = result if result is not None else self.defaultTestResult()
@@ -112,6 +134,16 @@ class InstallerTestCase(unittest.TestCase):
             shutil.rmtree(os.path.join(STORE, name))
         for name in ('images/by-verity', 'apps', 'plugins', 'runtimes'):
             os.makedirs(os.path.join(STORE, name))
+        self.host_tool_calls()
+
+    def host_tool_calls(self):
+        """Return the host tool calls that were logged since the last call of this method."""
+        if not os.path.exists(self.host_tools_log):
+            return []
+        with open(self.host_tools_log, encoding='utf-8') as f:
+            calls = f.read().splitlines()
+        os.unlink(self.host_tools_log)
+        return calls
 
     def manifold_streams(self, *args, expect=0):
         """Run the manifold tool, check its exit status, and return its standard
@@ -841,6 +873,44 @@ class HostIntegrationTest(InstallerTestCase):
 
         self.manifold('remove', APP_ID)
         self.assertEqual(self.read_export(MIME_EXPORT), b'foreign')
+
+    def test_host_caches_follow_the_exports(self):
+        update_applications = f'update-desktop-database --quiet {STORE}/exports/share/applications'
+        update_mime = f'update-mime-database {STORE}/exports/share/mime'
+        self.install_core()
+
+        # no application has installed a desktop entry or a MIME package yet, so the
+        # directories of these files do not exist, and the tools would fail on them
+        first = self.app_with({'icons': {ICON_PATH: ICON}}, version='0.2.0')
+        self.install(self.kit, first)
+        self.assertEqual(self.host_tool_calls(), [])
+
+        second = self.integrated_app('0.3.0', b'Comment=Second\n')
+        self.install(self.kit, second)
+        self.assertEqual(self.host_tool_calls(), [update_applications, update_mime])
+
+        # an older version does not change the host
+        older = self.integrated_app('0.1.0', b'Comment=Older\n')
+        self.install(self.kit, older)
+        self.assertEqual(self.host_tool_calls(), [])
+
+        # falling back to the older version changes the host, and so does removing that version
+        self.manifold('remove', APP_ID, '0.3.0')
+        self.assertEqual(self.host_tool_calls(), [update_applications, update_mime])
+        self.manifold('remove', APP_ID)
+        self.assertEqual(self.host_tool_calls(), [update_applications, update_mime])
+
+    def test_failing_host_tool_is_only_a_warning(self):
+        self.install_core()
+        app = self.integrated_app('0.1.0')
+        with open(self.fail_host_tools, 'w', encoding='utf-8'):
+            pass
+        self.addCleanup(os.unlink, self.fail_host_tools)
+        start = self.daemon.log_size()
+
+        self.install(self.kit, app)
+        self.assertEqual(self.registry()['version'], f'0.1.0-{app.revision}')
+        self.assertIn('update-mime-database failed', self.daemon.read_log(start))
 
     def test_interrupted_integration_is_finished(self):
         self.install_core()

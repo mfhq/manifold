@@ -168,6 +168,21 @@ mf_integration_kind_from_string(const char *kind_str)
 }
 
 /**
+ * mf_integration_kind_get_dir:
+ * @kind: a #MfIntegrationKind
+ *
+ * Returns: The directory that holds files of this kind, relative to `/app` in
+ *   an image and to the exports directory on the host, or %NULL for an unknown kind
+ */
+const char *
+mf_integration_kind_get_dir(MfIntegrationKind kind)
+{
+    if (kind <= MF_INTEGRATION_KIND_UNKNOWN || kind >= MF_INTEGRATION_KIND_LAST)
+        return NULL;
+    return KINDS[kind].dir;
+}
+
+/**
  * MfIntegrationFile:
  *
  * A file of an image to install on the host.
