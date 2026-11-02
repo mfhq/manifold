@@ -676,10 +676,10 @@ class InstallerTest(unittest.TestCase):
         self.assertIn('describes org.example.Other, not', out)
         self.assertEqual(self.installed(), [])
 
-    def test_invalid_manifest_is_an_invalid_bundle(self):
+    def test_invalid_manifest_is_refused(self):
         sdk = Image(CORE_ID + '.sdk', 'core', '13.4', sdk=True)
         out = self.manifold('install', self.bundle('sdk-without-base', [sdk]), expect=1)
-        self.assertIn('Not a valid bundle', out)
+        self.assertIn('Not a valid manifest', out)
         self.assertIn('an SDK must name the component it extends', out)
 
     # integrating with the host
@@ -726,7 +726,7 @@ class InstallerTest(unittest.TestCase):
             integration={'desktop-entry': {path: DESKTOP_ENTRY}},
         )
         out = self.manifold('install', self.bundle('foreign-entry', [self.kit, app]), expect=1)
-        self.assertIn('Not a valid bundle', out)
+        self.assertIn('Not a valid manifest', out)
         self.assertIn(f'is not named like {APP_ID}', out)
         self.assertEqual(self.stored_images(), images)
         # names are only printed once they are known to be harmless

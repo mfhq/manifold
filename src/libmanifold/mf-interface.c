@@ -7,6 +7,8 @@
 #define _GNU_SOURCE
 #include "mf-interface-private.h"
 
+#include <systemd/sd-varlink.h>
+
 /*
  * Definition of the org.freedesktop.manifold Varlink interface.
  */
@@ -160,75 +162,98 @@ static SD_VARLINK_DEFINE_METHOD(
     SD_VARLINK_FIELD_COMMENT("The versions that were marked."),
     SD_VARLINK_DEFINE_OUTPUT_BY_TYPE(done, Done, 0));
 
+/*
+ * Every error of the interface describes what went wrong in its message.
+ * Errors about a component may also carry its details, which are only set
+ * when the service knows them.
+ */
+#define MF_ERROR_MESSAGE_FIELD \
+    SD_VARLINK_FIELD_COMMENT("Description of what went wrong."), \
+    SD_VARLINK_DEFINE_FIELD(message, SD_VARLINK_STRING, 0)
+
 static SD_VARLINK_DEFINE_ERROR(
     Failed,
-    SD_VARLINK_FIELD_COMMENT("Description of what went wrong."),
-    SD_VARLINK_DEFINE_FIELD(message, SD_VARLINK_STRING, 0));
+    MF_ERROR_MESSAGE_FIELD);
 
 static SD_VARLINK_DEFINE_ERROR(
-    InvalidBundle,
-    SD_VARLINK_FIELD_COMMENT("Description of what is wrong with the file."),
-    SD_VARLINK_DEFINE_FIELD(message, SD_VARLINK_STRING, 0));
+    NotImplemented,
+    MF_ERROR_MESSAGE_FIELD);
 
 static SD_VARLINK_DEFINE_ERROR(
-    VerificationFailed,
-    SD_VARLINK_FIELD_COMMENT("Description of the problem."),
-    SD_VARLINK_DEFINE_FIELD(message, SD_VARLINK_STRING, 0));
-
-static SD_VARLINK_DEFINE_ERROR(
-    MissingBase,
-    SD_VARLINK_FIELD_COMMENT("Identifier of the component that is missing its base."),
-    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, 0),
-    SD_VARLINK_FIELD_COMMENT("Identifier of the base that is missing."),
-    SD_VARLINK_DEFINE_FIELD(baseId, SD_VARLINK_STRING, 0),
-    SD_VARLINK_FIELD_COMMENT("Version of the base that is missing."),
-    SD_VARLINK_DEFINE_FIELD(baseVersion, SD_VARLINK_STRING, 0),
-    SD_VARLINK_FIELD_COMMENT("The identity hash an image would have to have to be the base."),
-    SD_VARLINK_DEFINE_FIELD(identity, SD_VARLINK_STRING, 0));
-
-static SD_VARLINK_DEFINE_ERROR(
-    AlreadyInstalled,
-    SD_VARLINK_FIELD_COMMENT("Identifier of the component that is installed already."),
-    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, 0),
-    SD_VARLINK_FIELD_COMMENT("The version that is installed already."),
-    SD_VARLINK_DEFINE_FIELD(version, SD_VARLINK_STRING, 0));
-
-static SD_VARLINK_DEFINE_ERROR(
-    NoSuchComponent,
+    NotFound,
+    MF_ERROR_MESSAGE_FIELD,
     SD_VARLINK_FIELD_COMMENT("Identifier of the component that was not found."),
-    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, 0),
+    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
     SD_VARLINK_FIELD_COMMENT("The version that was not found, if only one version was asked for."),
     SD_VARLINK_DEFINE_FIELD(version, SD_VARLINK_STRING, SD_VARLINK_NULLABLE));
 
 static SD_VARLINK_DEFINE_ERROR(
-    ComponentInUse,
-    SD_VARLINK_FIELD_COMMENT("Identifier of the component that is in use."),
-    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, 0),
-    SD_VARLINK_FIELD_COMMENT("Identifier of an installed component that builds on it."),
-    SD_VARLINK_DEFINE_FIELD(usedBy, SD_VARLINK_STRING, 0));
+    InvalidBundle,
+    MF_ERROR_MESSAGE_FIELD);
 
 static SD_VARLINK_DEFINE_ERROR(
     WrongArchitecture,
+    MF_ERROR_MESSAGE_FIELD,
     SD_VARLINK_FIELD_COMMENT("Identifier of the component that was built for another architecture."),
-    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, 0),
+    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
     SD_VARLINK_FIELD_COMMENT("The architecture the component was built for."),
-    SD_VARLINK_DEFINE_FIELD(architecture, SD_VARLINK_STRING, 0),
+    SD_VARLINK_DEFINE_FIELD(architecture, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
     SD_VARLINK_FIELD_COMMENT("The architecture of this system."),
-    SD_VARLINK_DEFINE_FIELD(hostArchitecture, SD_VARLINK_STRING, 0));
+    SD_VARLINK_DEFINE_FIELD(hostArchitecture, SD_VARLINK_STRING, SD_VARLINK_NULLABLE));
+
+static SD_VARLINK_DEFINE_ERROR(
+    VerificationFailed,
+    MF_ERROR_MESSAGE_FIELD);
+
+static SD_VARLINK_DEFINE_ERROR(
+    MissingBase,
+    MF_ERROR_MESSAGE_FIELD,
+    SD_VARLINK_FIELD_COMMENT("Identifier of the component that is missing its base."),
+    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("Identifier of the base that is missing."),
+    SD_VARLINK_DEFINE_FIELD(baseId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("Version of the base that is missing."),
+    SD_VARLINK_DEFINE_FIELD(baseVersion, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("The identity hash an image would have to have to be the base."),
+    SD_VARLINK_DEFINE_FIELD(identity, SD_VARLINK_STRING, SD_VARLINK_NULLABLE));
+
+static SD_VARLINK_DEFINE_ERROR(
+    AlreadyInstalled,
+    MF_ERROR_MESSAGE_FIELD,
+    SD_VARLINK_FIELD_COMMENT("Identifier of the component that is installed already."),
+    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("The version that is installed already."),
+    SD_VARLINK_DEFINE_FIELD(version, SD_VARLINK_STRING, SD_VARLINK_NULLABLE));
+
+static SD_VARLINK_DEFINE_ERROR(
+    ComponentInUse,
+    MF_ERROR_MESSAGE_FIELD,
+    SD_VARLINK_FIELD_COMMENT("Identifier of the component that is in use."),
+    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("Identifier of an installed component that builds on it."),
+    SD_VARLINK_DEFINE_FIELD(usedBy, SD_VARLINK_STRING, SD_VARLINK_NULLABLE));
+
+static SD_VARLINK_DEFINE_ERROR(
+    InvalidManifest,
+    MF_ERROR_MESSAGE_FIELD);
+
+static SD_VARLINK_DEFINE_ERROR(
+    Revoked,
+    MF_ERROR_MESSAGE_FIELD);
 
 static SD_VARLINK_DEFINE_ERROR(
     IdConflict,
+    MF_ERROR_MESSAGE_FIELD,
     SD_VARLINK_FIELD_COMMENT("Identifier of the component that can not be installed."),
-    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, 0),
+    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
     SD_VARLINK_FIELD_COMMENT("The kind of the component that is installed with this identifier."),
-    SD_VARLINK_DEFINE_FIELD_BY_TYPE(kind, ComponentKind, 0),
+    SD_VARLINK_DEFINE_FIELD_BY_TYPE(kind, ComponentKind, SD_VARLINK_NULLABLE),
     SD_VARLINK_FIELD_COMMENT("Whether the component that is installed with this identifier is an SDK."),
-    SD_VARLINK_DEFINE_FIELD(sdk, SD_VARLINK_BOOL, 0));
+    SD_VARLINK_DEFINE_FIELD(sdk, SD_VARLINK_BOOL, SD_VARLINK_NULLABLE));
 
 static SD_VARLINK_DEFINE_ERROR(
     FileConflict,
-    SD_VARLINK_FIELD_COMMENT("Which file is in the way, and who it belongs to."),
-    SD_VARLINK_DEFINE_FIELD(message, SD_VARLINK_STRING, 0));
+    MF_ERROR_MESSAGE_FIELD);
 
 SD_VARLINK_DEFINE_INTERFACE(
     org_freedesktop_manifold,
@@ -271,23 +296,91 @@ SD_VARLINK_DEFINE_INTERFACE(
 
     SD_VARLINK_SYMBOL_COMMENT("The operation failed."),
     &vl_error_Failed,
+    SD_VARLINK_SYMBOL_COMMENT("The service does not implement what was asked for."),
+    &vl_error_NotImplemented,
+    SD_VARLINK_SYMBOL_COMMENT("The component, or something else the operation needs, was not found."),
+    &vl_error_NotFound,
     SD_VARLINK_SYMBOL_COMMENT("The file is not a Manifold bundle."),
     &vl_error_InvalidBundle,
+    SD_VARLINK_SYMBOL_COMMENT("The component architecture and that of the current system are incompatible."),
+    &vl_error_WrongArchitecture,
     SD_VARLINK_SYMBOL_COMMENT("The contents of the bundle do not match what its index and manifests say."),
     &vl_error_VerificationFailed,
     SD_VARLINK_SYMBOL_COMMENT("The base a component builds on is not installed."),
     &vl_error_MissingBase,
     SD_VARLINK_SYMBOL_COMMENT("This version of the component is installed already."),
     &vl_error_AlreadyInstalled,
-    SD_VARLINK_SYMBOL_COMMENT("The component is not installed."),
-    &vl_error_NoSuchComponent,
     SD_VARLINK_SYMBOL_COMMENT("An installed component builds on this component."),
     &vl_error_ComponentInUse,
-    SD_VARLINK_SYMBOL_COMMENT("The component architecture and that of the current system are incompatible."),
-    &vl_error_WrongArchitecture,
+    SD_VARLINK_SYMBOL_COMMENT("The manifest of a component is not valid, or describes a component that can not be installed."),
+    &vl_error_InvalidManifest,
+    SD_VARLINK_SYMBOL_COMMENT("The component was revoked and must not be used anymore."),
+    &vl_error_Revoked,
     SD_VARLINK_SYMBOL_COMMENT("Another kind of component is installed with the identifier of this component."),
     &vl_error_IdConflict,
     SD_VARLINK_SYMBOL_COMMENT("A file on the host is in the way of a file of the component."),
     &vl_error_FileConflict);
 
 /* clang-format on */
+
+/* the Varlink error each #MfError is sent as */
+static const struct {
+    MfError code;
+    const char *error_id;
+} VARLINK_ERRORS[] = {
+    {MF_ERROR_FAILED,              MF_INTERFACE ".Failed"            },
+    {MF_ERROR_NOT_IMPLEMENTED,     MF_INTERFACE ".NotImplemented"    },
+    {MF_ERROR_NOT_FOUND,           MF_INTERFACE ".NotFound"          },
+    {MF_ERROR_PERMISSION_DENIED,   SD_VARLINK_ERROR_PERMISSION_DENIED},
+    {MF_ERROR_INVALID_BUNDLE,      MF_INTERFACE ".InvalidBundle"     },
+    {MF_ERROR_WRONG_ARCHITECTURE,  MF_INTERFACE ".WrongArchitecture" },
+    {MF_ERROR_VERIFICATION_FAILED, MF_INTERFACE ".VerificationFailed"},
+    {MF_ERROR_MISSING_BASE,        MF_INTERFACE ".MissingBase"       },
+    {MF_ERROR_ALREADY_INSTALLED,   MF_INTERFACE ".AlreadyInstalled"  },
+    {MF_ERROR_COMPONENT_IN_USE,    MF_INTERFACE ".ComponentInUse"    },
+    {MF_ERROR_INVALID_MANIFEST,    MF_INTERFACE ".InvalidManifest"   },
+    {MF_ERROR_REVOKED,             MF_INTERFACE ".Revoked"           },
+    {MF_ERROR_ID_CONFLICT,         MF_INTERFACE ".IdConflict"        },
+    {MF_ERROR_FILE_CONFLICT,       MF_INTERFACE ".FileConflict"      },
+};
+
+/**
+ * mf_error_to_varlink_id:
+ * @code: an #MfError
+ *
+ * Get the name of the Varlink error that @code is sent as.
+ *
+ * Returns: the name of the Varlink error
+ */
+const char *
+mf_error_to_varlink_id(MfError code)
+{
+    for (size_t i = 0; i < G_N_ELEMENTS(VARLINK_ERRORS); i++) {
+        if (VARLINK_ERRORS[i].code == code)
+            return VARLINK_ERRORS[i].error_id;
+    }
+
+    return MF_INTERFACE ".Failed";
+}
+
+/**
+ * mf_error_from_varlink_id:
+ * @error_id: the name of a Varlink error
+ * @ret_code: (out): the #MfError that @error_id stands for
+ *
+ * Find the #MfError a Varlink error was sent for.
+ *
+ * Returns: %TRUE if @error_id is an error of the service
+ */
+gboolean
+mf_error_from_varlink_id(const char *error_id, MfError *ret_code)
+{
+    for (size_t i = 0; i < G_N_ELEMENTS(VARLINK_ERRORS); i++) {
+        if (g_strcmp0(VARLINK_ERRORS[i].error_id, error_id) == 0) {
+            *ret_code = VARLINK_ERRORS[i].code;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}

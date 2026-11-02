@@ -246,82 +246,75 @@ mf_parameter_string(sd_json_variant *parameters, const gchar *key, const gchar *
 }
 
 /**
- * mf_set_error_from_service:
+ * mf_set_error_from_service_details:
+ * @code: the #MfError the service replied with
+ * @component_id: the component the error is about
  *
- * Turn an error the service replied with into a #GError that says what
- * happened, without the caller having to know the service.
+ * Set the error for a reply of the service that has the details of the
+ * component it is about, translated into the current locale.
+ *
+ * Returns: %TRUE if @code has a message for these details and @error was set
  */
-static void
-mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant *parameters)
+static gboolean
+mf_set_error_from_service_details(GError **error,
+                                  MfError code,
+                                  const gchar *component_id,
+                                  sd_json_variant *parameters)
 {
-    const gchar *message = mf_parameter_string(parameters, "message", _("unknown error"));
-
-    if (g_strcmp0(error_id, MF_VARLINK_ERROR_INVALID_BUNDLE) == 0) {
-        g_set_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE, _("Not a valid bundle: %s"), message);
-    } else if (g_strcmp0(error_id, MF_VARLINK_ERROR_VERIFICATION_FAILED) == 0) {
+    switch (code) {
+    case MF_ERROR_MISSING_BASE:
         g_set_error(error,
                     MF_ERROR,
-                    MF_ERROR_VERIFICATION_FAILED,
-                    _("The bundle could not be verified: %s"),
-                    message);
-    } else if (g_strcmp0(error_id, MF_VARLINK_ERROR_MISSING_BASE) == 0) {
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_MISSING_BASE,
+                    code,
                     /* TRANSLATORS: the component, and the identifier and version of its base */
                     _("Component %s needs base %s %s, which is not installed"),
-                    mf_parameter_string(parameters, "componentId", "?"),
+                    component_id,
                     mf_parameter_string(parameters, "baseId", "?"),
                     mf_parameter_string(parameters, "baseVersion", "?"));
-    } else if (g_strcmp0(error_id, MF_VARLINK_ERROR_ALREADY_INSTALLED) == 0) {
+        return TRUE;
+    case MF_ERROR_ALREADY_INSTALLED:
         g_set_error(error,
                     MF_ERROR,
-                    MF_ERROR_ALREADY_INSTALLED,
+                    code,
                     /* TRANSLATORS: a component and its version */
                     _("Component %s %s is installed already"),
-                    mf_parameter_string(parameters, "componentId", "?"),
+                    component_id,
                     mf_parameter_string(parameters, "version", "?"));
-    } else if (g_strcmp0(error_id, MF_VARLINK_ERROR_NO_SUCH_COMPONENT) == 0) {
-        const char *component_id = mf_parameter_string(parameters, "componentId", "?");
+        return TRUE;
+    case MF_ERROR_NOT_FOUND: {
         const char *version = mf_parameter_string(parameters, "version", NULL);
 
         if (version != NULL)
-            g_set_error(error,
-                        MF_ERROR,
-                        MF_ERROR_NOT_FOUND,
-                        _("Component %s %s is not installed"),
-                        component_id,
-                        version);
+            g_set_error(error, MF_ERROR, code, _("Component %s %s is not installed"), component_id, version);
         else
-            g_set_error(error,
-                        MF_ERROR,
-                        MF_ERROR_NOT_FOUND,
-                        _("Component %s is not installed"),
-                        component_id);
-    } else if (g_strcmp0(error_id, MF_VARLINK_ERROR_COMPONENT_IN_USE) == 0) {
+            g_set_error(error, MF_ERROR, code, _("Component %s is not installed"), component_id);
+        return TRUE;
+    }
+    case MF_ERROR_COMPONENT_IN_USE:
         g_set_error(error,
                     MF_ERROR,
-                    MF_ERROR_COMPONENT_IN_USE,
+                    code,
                     _("Component %s is used by the installed component %s"),
-                    mf_parameter_string(parameters, "componentId", "?"),
+                    component_id,
                     mf_parameter_string(parameters, "usedBy", "?"));
-    } else if (g_strcmp0(error_id, MF_VARLINK_ERROR_WRONG_ARCHITECTURE) == 0) {
+        return TRUE;
+    case MF_ERROR_WRONG_ARCHITECTURE:
         g_set_error(error,
                     MF_ERROR,
-                    MF_ERROR_WRONG_ARCHITECTURE,
+                    code,
                     /* TRANSLATORS: the component, its architecture, and that of this system */
                     _("Component %s is built for %s, but this system is %s"),
-                    mf_parameter_string(parameters, "componentId", "?"),
+                    component_id,
                     mf_parameter_string(parameters, "architecture", "?"),
                     mf_parameter_string(parameters, "hostArchitecture", "?"));
-    } else if (g_strcmp0(error_id, MF_VARLINK_ERROR_ID_CONFLICT) == 0) {
-        const char *component_id = mf_parameter_string(parameters, "componentId", "?");
+        return TRUE;
+    case MF_ERROR_ID_CONFLICT: {
         const char *kind = mf_parameter_string(parameters, "kind", "?");
 
         if (sd_json_variant_boolean(sd_json_variant_by_key(parameters, "sdk")))
             g_set_error(error,
                         MF_ERROR,
-                        MF_ERROR_ID_CONFLICT,
+                        code,
                         /* TRANSLATORS: the component, and the kind it is installed as, like "app" */
                         _("Component %s is installed already as another kind of component (%s SDK)"),
                         component_id,
@@ -329,13 +322,59 @@ mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant
         else
             g_set_error(error,
                         MF_ERROR,
-                        MF_ERROR_ID_CONFLICT,
+                        code,
                         /* TRANSLATORS: the component, and the kind it is installed as, like "app" */
                         _("Component %s is installed already as another kind of component (%s)"),
                         component_id,
                         kind);
-    } else if (g_strcmp0(error_id, MF_VARLINK_ERROR_FILE_CONFLICT) == 0) {
-        g_set_error(error, MF_ERROR, MF_ERROR_FILE_CONFLICT, _("File conflict: %s"), message);
+        return TRUE;
+    }
+    default:
+        return FALSE;
+    }
+}
+
+/**
+ * mf_set_error_from_service:
+ *
+ * Turn an error the service replied with into a #GError that says what
+ * happened, without the caller having to know the service.
+ *
+ * Errors of the service keep their #MfError code. We use our own translated error string
+ * where the reply has the details of the component it is about, and the message of the
+ * service otherwise.
+ */
+static void
+mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant *parameters)
+{
+    const gchar *message = mf_parameter_string(parameters, "message", _("unknown error"));
+    const gchar *component_id = mf_parameter_string(parameters, "componentId", NULL);
+    MfError code;
+
+    if (mf_error_from_varlink_id(error_id, &code)) {
+        if (component_id != NULL && mf_set_error_from_service_details(error, code, component_id, parameters))
+            return;
+
+        switch (code) {
+        case MF_ERROR_PERMISSION_DENIED:
+            g_set_error_literal(error, MF_ERROR, code, _("Not permitted to change the installed components"));
+            break;
+        case MF_ERROR_INVALID_BUNDLE:
+            g_set_error(error, MF_ERROR, code, _("Not a valid bundle: %s"), message);
+            break;
+        case MF_ERROR_INVALID_MANIFEST:
+            g_set_error(error, MF_ERROR, code, _("Not a valid manifest: %s"), message);
+            break;
+        case MF_ERROR_VERIFICATION_FAILED:
+            g_set_error(error, MF_ERROR, code, _("The bundle could not be verified: %s"), message);
+            break;
+        case MF_ERROR_FILE_CONFLICT:
+            g_set_error(error, MF_ERROR, code, _("File conflict: %s"), message);
+            break;
+        default:
+            g_set_error_literal(error, MF_ERROR, code, message);
+            break;
+        }
     } else if (g_strcmp0(error_id, SD_VARLINK_ERROR_DISCONNECTED) == 0) {
         /* sd-varlink reports a connection closed during the call as a reply */
         g_set_error_literal(error,
@@ -343,16 +382,11 @@ mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant
                             MF_ERROR_NO_SERVICE,
                             _("Lost the Manifold service: the connection was closed"));
     } else if (g_strcmp0(error_id, SD_VARLINK_ERROR_TIMEOUT) == 0) {
-        /* ... and a call that took longer than CALL_TIMEOUT_USEC as well */
+        /* sd-varlink also reports a call that took longer than CALL_TIMEOUT_USEC as a reply */
         g_set_error_literal(error,
                             MF_ERROR,
                             MF_ERROR_NO_SERVICE,
                             _("The Manifold service did not reply in time"));
-    } else if (g_strcmp0(error_id, SD_VARLINK_ERROR_PERMISSION_DENIED) == 0) {
-        g_set_error_literal(error,
-                            MF_ERROR,
-                            MF_ERROR_PERMISSION_DENIED,
-                            _("Not permitted to change the installed components"));
     } else if (g_strcmp0(error_id, SD_VARLINK_ERROR_METHOD_NOT_IMPLEMENTED) == 0 ||
                g_strcmp0(error_id, SD_VARLINK_ERROR_METHOD_NOT_FOUND) == 0) {
         g_set_error_literal(error,
@@ -365,8 +399,6 @@ mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant
                     MF_ERROR_FAILED,
                     _("The Manifold service rejected the parameter %s"),
                     mf_parameter_string(parameters, "parameter", "?"));
-    } else if (g_strcmp0(error_id, MF_VARLINK_ERROR_FAILED) == 0) {
-        g_set_error_literal(error, MF_ERROR, MF_ERROR_FAILED, message);
     } else {
         g_set_error(error,
                     MF_ERROR,

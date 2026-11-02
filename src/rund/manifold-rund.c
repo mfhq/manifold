@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <glib.h>
 #include <libcryptsetup.h>
+#include <locale.h>
 #include <systemd/sd-event.h>
 
 #include "mf-sdautoptr-private.h"
@@ -65,6 +66,8 @@ main(int argc, char **argv)
         {"version", 0, 0, G_OPTION_ARG_NONE,     &show_version, "Show the program version",     NULL  },
         G_OPTION_ENTRY_NULL,
     };
+
+    setlocale(LC_ALL, "");
 
     context = g_option_context_new("- Manifold mount tree composer");
     g_option_context_set_description(context, "The default socket is " MF_RUN_SOCKET_PATH);
