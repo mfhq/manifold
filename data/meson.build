@@ -44,6 +44,34 @@ configure_file(
 )
 
 #
+# Shell/environment integration with the host
+#
+exports_conf = configuration_data()
+exports_conf.set('MF_EXPORTS_DIR', mf_storage_dir / 'exports')
+
+configure_file(
+    input: 'manifold-profile.sh.in',
+    output: 'manifold.sh',
+    configuration: exports_conf,
+    install: true,
+    install_dir: get_option('profile-dir'),
+)
+configure_file(
+    input: 'manifold.fish.in',
+    output: 'manifold.fish',
+    configuration: exports_conf,
+    install: true,
+    install_dir: get_option('datadir') / 'fish' / 'vendor_conf.d',
+)
+configure_file(
+    input: '990-manifold.conf.in',
+    output: '990-manifold.conf',
+    configuration: exports_conf,
+    install: true,
+    install_dir: mf_prefix / 'lib' / 'environment.d',
+)
+
+#
 # AppArmor profile
 #
 apparmor_parser_exe = find_program('apparmor_parser',
