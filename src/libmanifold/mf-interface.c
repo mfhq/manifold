@@ -98,7 +98,9 @@ static SD_VARLINK_DEFINE_STRUCT_TYPE(
     SD_VARLINK_FIELD_COMMENT("Bytes of disk space that the operation used."),
     SD_VARLINK_DEFINE_FIELD(bytesAdded, SD_VARLINK_INT, 0),
     SD_VARLINK_FIELD_COMMENT("Bytes of disk space that the operation freed."),
-    SD_VARLINK_DEFINE_FIELD(bytesFreed, SD_VARLINK_INT, 0));
+    SD_VARLINK_DEFINE_FIELD(bytesFreed, SD_VARLINK_INT, 0),
+    SD_VARLINK_FIELD_COMMENT("Problems that occurred, but did not make the operation fail."),
+    SD_VARLINK_DEFINE_FIELD(warnings, SD_VARLINK_STRING, SD_VARLINK_ARRAY));
 
 static SD_VARLINK_DEFINE_STRUCT_TYPE(
     Done,

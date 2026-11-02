@@ -66,6 +66,7 @@ mfc_print_result(MfResult *result)
 {
     GPtrArray *installed = mf_result_get_installed(result);
     GPtrArray *removed = mf_result_get_removed(result);
+    GPtrArray *warnings = mf_result_get_warnings(result);
     guint n_images = mf_result_get_removed_images(result)->len;
 
     if (installed->len > 0) {
@@ -91,6 +92,13 @@ mfc_print_result(MfResult *result)
         g_autofree char *size = g_format_size(mf_result_get_bytes_freed(result));
 
         g_print(_("Disk space freed: %s\n"), size);
+    }
+    for (guint i = 0; i < warnings->len; i++) {
+        /* a warning can quote a tool of the host, which can quote a file of a bundle */
+        g_autofree char *shown = g_strescape(g_ptr_array_index(warnings, i), NULL);
+
+        /* TRANSLATORS: something went wrong, but the operation still succeeded */
+        g_printerr(_("Warning: %s\n"), shown);
     }
 }
 
