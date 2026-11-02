@@ -10,6 +10,7 @@
 
 #include <systemd/sd-varlink-idl.h>
 
+#include "mf-error.h"
 #include "mf-macros-private.h"
 
 MF_BEGIN_PRIVATE_DECLS
@@ -28,20 +29,13 @@ MF_BEGIN_PRIVATE_DECLS
 /* transaction flags */
 #define MF_VARLINK_TRANSACTION_FLAG_ALLOW_INTERACTIVE "allowInteractive"
 
-/* errors */
-#define MF_VARLINK_ERROR_FAILED              MF_INTERFACE ".Failed"
-#define MF_VARLINK_ERROR_INVALID_BUNDLE      MF_INTERFACE ".InvalidBundle"
-#define MF_VARLINK_ERROR_VERIFICATION_FAILED MF_INTERFACE ".VerificationFailed"
-#define MF_VARLINK_ERROR_MISSING_BASE        MF_INTERFACE ".MissingBase"
-#define MF_VARLINK_ERROR_ALREADY_INSTALLED   MF_INTERFACE ".AlreadyInstalled"
-#define MF_VARLINK_ERROR_NO_SUCH_COMPONENT   MF_INTERFACE ".NoSuchComponent"
-#define MF_VARLINK_ERROR_COMPONENT_IN_USE    MF_INTERFACE ".ComponentInUse"
-#define MF_VARLINK_ERROR_WRONG_ARCHITECTURE  MF_INTERFACE ".WrongArchitecture"
-#define MF_VARLINK_ERROR_ID_CONFLICT         MF_INTERFACE ".IdConflict"
-#define MF_VARLINK_ERROR_FILE_CONFLICT       MF_INTERFACE ".FileConflict"
-
 /* exported so the daemon can serve it */
 MF_INTERNAL_VISIBLE
 extern const sd_varlink_interface vl_interface_org_freedesktop_manifold;
+
+MF_INTERNAL_VISIBLE
+const char *mf_error_to_varlink_id(MfError code);
+gboolean    mf_error_from_varlink_id(const char *error_id,
+                                     MfError    *ret_code);
 
 MF_END_PRIVATE_DECLS
