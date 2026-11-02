@@ -108,6 +108,35 @@ mf_component_id_is_valid(const char *component_id)
 }
 
 /**
+ * mf_path_is_below:
+ * @path: a path
+ * @dir: a directory, without a slash at its end
+ *
+ * Check that a path leads to something below a directory. A path that only
+ * starts with the directory is not enough, as `..` would lead out of it again.
+ *
+ * Returns: %TRUE if @path is below @dir, and none of its parts below @dir is
+ *   empty, `.` or `..`
+ */
+gboolean
+mf_path_is_below(const char *path, const char *dir)
+{
+    gsize dir_len = strlen(dir);
+    g_auto(GStrv) parts = NULL;
+
+    if (strncmp(path, dir, dir_len) != 0 || path[dir_len] != '/')
+        return FALSE;
+
+    parts = g_strsplit(path + dir_len + 1, "/", -1);
+    for (guint i = 0; parts[i] != NULL; i++) {
+        if (parts[i][0] == '\0' || g_str_equal(parts[i], ".") || g_str_equal(parts[i], ".."))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
  * mf_reverse_dns_name_is_valid:
  * @name: a valid component identifier
  *

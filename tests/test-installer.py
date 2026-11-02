@@ -731,7 +731,7 @@ class HostIntegrationTest(InstallerTestCase):
         return self.app_with(
             {
                 'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY + comment},
-                'icons': {ICON_PATH: ICON},
+                'icon': {ICON_PATH: ICON},
                 'mime-package': {MIME_PATH: MIME_PACKAGE},
             },
             version=version,
@@ -904,7 +904,7 @@ class HostIntegrationTest(InstallerTestCase):
             '0.1.0',
             base=self.kit,
             integration={
-                'icons': {f'/app/share/icons/hicolor/scalable/apps/{APP_ID}.extra.svg': ICON}
+                'icon': {f'/app/share/icons/hicolor/scalable/apps/{APP_ID}.extra.svg': ICON}
             },
             aliases=ALIASES,
         )
@@ -934,6 +934,63 @@ class HostIntegrationTest(InstallerTestCase):
         self.manifold('remove', APP_ID)
         self.assertEqual(self.read_export(MIME_EXPORT), b'foreign')
 
+    def test_stored_version_is_checked_again(self):
+        self.install_core()
+        app = self.integrated_app('0.1.0')
+        self.install(self.kit, app)
+
+        # change the stored version so that it fails the integration rules, and has to be exported again
+        escaped = f'{STORE}/images/escaped.desktop'
+        manifest_path = f'{STORE}/apps/{APP_ID}/0.1.0-{app.revision}/manifest.json'
+        with open(manifest_path, encoding='utf-8') as f:
+            manifest = json.load(f)
+        manifest['integration']['desktop-entry'][0][
+            'path'
+        ] = '/app/share/applications/../../../images/escaped.desktop'
+        with open(manifest_path, 'w', encoding='utf-8') as f:
+            json.dump(manifest, f)
+        registry = self.registry()
+        del registry['version']
+        with open(REGISTRY, 'w', encoding='utf-8') as f:
+            json.dump(registry, f)
+
+        start = self.daemon.log_size()
+        self.manifold('cleanup')
+        self.assertIn(
+            f'Not installing the host files of {APP_ID} 0.1.0', self.daemon.read_log(start)
+        )
+        self.assertFalse(os.path.lexists(escaped))
+        self.assertFalse(os.path.lexists(DESKTOP_ENTRY_EXPORT))
+        self.assertFalse(os.path.exists(REGISTRY))
+
+    def test_registry_only_reaches_our_files(self):
+        self.install_core()
+        other = f'{STORE}/images/other-file'
+        directory = f'{STORE}/exports/share/applications/directory'
+        self.write_foreign_file(other)
+        os.makedirs(directory)
+        os.makedirs(os.path.dirname(REGISTRY), exist_ok=True)
+        with open(REGISTRY, 'w', encoding='utf-8') as f:
+            json.dump(
+                {
+                    'files': [
+                        {'path': other},
+                        {'path': f'{STORE}/exports/share/../../images/other-file'},
+                        {'path': directory},
+                    ]
+                },
+                f,
+            )
+
+        # the component is not installed, so the daemon removes the files its registry lists
+        start = self.daemon.log_size()
+        self.manifold('cleanup')
+        log = self.daemon.read_log(start)
+        self.assertIn(f'Ignoring {other} in the registry of {APP_ID}', log)
+        self.assertEqual(self.read_export(other), b'foreign')
+        self.assertTrue(os.path.isdir(directory))
+        self.assertIn(f'Unable to update the host files of {APP_ID}', log)
+
     def test_host_caches_follow_the_exports(self):
         update_applications = f'update-desktop-database --quiet {STORE}/exports/share/applications'
         update_mime = f'update-mime-database {STORE}/exports/share/mime'
@@ -941,7 +998,7 @@ class HostIntegrationTest(InstallerTestCase):
 
         # no application has installed a desktop entry or a MIME package yet, so the
         # directories of these files do not exist, and the tools would fail on them
-        first = self.app_with({'icons': {ICON_PATH: ICON}}, version='0.2.0')
+        first = self.app_with({'icon': {ICON_PATH: ICON}}, version='0.2.0')
         self.install(self.kit, first)
         self.assertEqual(self.host_tool_calls(), [])
 
