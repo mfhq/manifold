@@ -25,7 +25,10 @@
 /* the key of the alias list in the integration section of a manifest */
 #define ALIAS_KEY "alias"
 
-/* the directory in an image that holds everything the image can export */
+/* the directory in the exports directory that holds the alias scripts */
+#define ALIAS_DIR "bin"
+
+/* the directory in an image that holds all files that the image can export */
 #define APP_DIR "/app/"
 
 /* the directory of an image that holds the default program of an application */
@@ -310,7 +313,8 @@ struct _MfIntegrationAlias {
     GObject parent_instance;
 
     char *name;
-    char *command; /* the absolute path of the program in the image */
+    char *command;     /* the absolute path of the program in the image */
+    char *export_path; /* the path of the alias script, relative to the exports directory */
 };
 
 G_DEFINE_FINAL_TYPE(MfIntegrationAlias, mf_integration_alias, G_TYPE_OBJECT)
@@ -322,6 +326,7 @@ mf_integration_alias_finalize(GObject *object)
 
     g_free(alias->name);
     g_free(alias->command);
+    g_free(alias->export_path);
 
     G_OBJECT_CLASS(mf_integration_alias_parent_class)->finalize(object);
 }
@@ -361,6 +366,19 @@ mf_integration_alias_get_command(MfIntegrationAlias *alias)
 {
     g_return_val_if_fail(MF_IS_INTEGRATION_ALIAS(alias), NULL);
     return alias->command;
+}
+
+/**
+ * mf_integration_alias_get_export_path:
+ * @alias: an #MfIntegrationAlias
+ *
+ * Retrieve the export path of the alias, relative to the directory of exports.
+ */
+const char *
+mf_integration_alias_get_export_path(MfIntegrationAlias *alias)
+{
+    g_return_val_if_fail(MF_IS_INTEGRATION_ALIAS(alias), NULL);
+    return alias->export_path;
 }
 
 struct _MfIntegration {
@@ -523,6 +541,7 @@ mf_integration_parse_aliases(MfIntegration *integration, sd_json_variant *entrie
             mf_json_get_string_field(entry, context, "command", MF_ERROR_INVALID_MANIFEST, error));
         if (alias->command == NULL)
             return FALSE;
+        alias->export_path = g_build_filename(ALIAS_DIR, alias->name, NULL);
         g_ptr_array_add(integration->aliases, g_steal_pointer(&alias));
     }
 
@@ -1647,4 +1666,39 @@ mf_integration_file_render(MfIntegrationFile *file, MfManifest *manifest, GBytes
     default:
         g_return_val_if_reached(NULL);
     }
+}
+
+/**
+ * mf_integration_alias_render:
+ * @alias: an #MfIntegrationAlias
+ * @manifest: the manifest of @alias
+ * @error: a #GError
+ *
+ * Create the script that is installed on the host for an alias. The script
+ * runs the program of the alias in the environment of the component. We check
+ * the alias again here, as the script is added to the PATH of every user of
+ * the host.
+ *
+ * Returns: (transfer full): the script to install, or %NULL with %MF_ERROR_INVALID_MANIFEST
+ */
+GBytes *
+mf_integration_alias_render(MfIntegrationAlias *alias, MfManifest *manifest, GError **error)
+{
+    g_autofree char *wrapped = NULL;
+    gboolean runs_app;
+    char *script;
+
+    g_return_val_if_fail(MF_IS_INTEGRATION_ALIAS(alias), NULL);
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
+
+    if (!mf_integration_check_alias(alias, error))
+        return NULL;
+
+    wrapped = mf_integration_wrap_command(alias->command,
+                                          mf_manifest_get_component_id(manifest),
+                                          mf_manifest_get_command(manifest),
+                                          &runs_app);
+    script = g_strdup_printf("#!/bin/sh\nexec %s \"$@\"\n", wrapped);
+
+    return g_bytes_new_take(script, strlen(script));
 }

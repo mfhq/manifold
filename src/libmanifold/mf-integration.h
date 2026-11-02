@@ -63,6 +63,10 @@ G_DECLARE_FINAL_TYPE(MfIntegrationAlias, mf_integration_alias, MF, INTEGRATION_A
 
 const char *mf_integration_alias_get_name(MfIntegrationAlias *alias);
 const char *mf_integration_alias_get_command(MfIntegrationAlias *alias);
+const char *mf_integration_alias_get_export_path(MfIntegrationAlias *alias);
+GBytes     *mf_integration_alias_render(MfIntegrationAlias *alias,
+                                        MfManifest         *manifest,
+                                        GError            **error);
 
 #define MF_TYPE_INTEGRATION (mf_integration_get_type())
 G_DECLARE_FINAL_TYPE(MfIntegration, mf_integration, MF, INTEGRATION, GObject)
