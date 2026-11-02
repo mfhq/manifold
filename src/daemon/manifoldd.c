@@ -6,9 +6,11 @@
 
 #include "config.h"
 
-#include <stdlib.h>
-#include <sys/stat.h>
+#include <locale.h>
 #include <glib.h>
+#include <glib/gi18n-lib.h>
+
+#include <sys/stat.h>
 #include <systemd/sd-event.h>
 
 #include "mf-sdautoptr-private.h"
@@ -56,6 +58,12 @@ main(int argc, char **argv)
         {"version", 0, 0, G_OPTION_ARG_NONE,     &show_version, "Show the program version",     NULL  },
         G_OPTION_ENTRY_NULL,
     };
+
+    /* bind locale */
+    setlocale(LC_ALL, "");
+    bindtextdomain(GETTEXT_PACKAGE, LOCALEDIR);
+    bind_textdomain_codeset(GETTEXT_PACKAGE, "UTF-8");
+    textdomain(GETTEXT_PACKAGE);
 
     context = g_option_context_new("- Manifold management daemon");
     g_option_context_set_description(context, "The default socket is " MF_SOCKET_PATH);

@@ -247,6 +247,8 @@ mfd_error_is_about_request(const GError *error)
  * @detail: (nullable): what the manager told about the error
  *
  * Reply with the error of the interface that corresponds to a #GError.
+ * The reply always has the message of @error, and the details of the
+ * component it is about if @detail has them.
  *
  * Returns: The result of sd_varlink_error(), which is a negative errno
  *   even if the reply was sent.
@@ -254,7 +256,8 @@ mfd_error_is_about_request(const GError *error)
 static int
 mfd_service_reply_error(sd_varlink *link, const GError *error, const MfdErrorDetail *detail)
 {
-    const char *error_id = MF_VARLINK_ERROR_FAILED;
+    MfError code = error->domain == MF_ERROR ? error->code : MF_ERROR_FAILED;
+    const char *error_id = mf_error_to_varlink_id(code);
 
     /* we only warn about failures of our own, not about requests we can not fulfill */
     if (mfd_error_is_about_request(error))
@@ -262,28 +265,36 @@ mfd_service_reply_error(sd_varlink *link, const GError *error, const MfdErrorDet
     else
         g_warning("%s", error->message);
 
-    if (error->domain == MF_ERROR && detail != NULL && detail->component_id != NULL) {
-        switch (error->code) {
+    /* the standard Varlink error has no parameters */
+    if (code == MF_ERROR_PERMISSION_DENIED)
+        return sd_varlink_error(link, error_id, NULL);
+
+    if (detail != NULL && detail->component_id != NULL) {
+        switch (code) {
         case MF_ERROR_MISSING_BASE:
             return sd_varlink_errorbo(link,
-                                      MF_VARLINK_ERROR_MISSING_BASE,
+                                      error_id,
+                                      SD_JSON_BUILD_PAIR_STRING("message", error->message),
                                       SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
                                       SD_JSON_BUILD_PAIR_STRING("baseId", detail->base_id),
                                       SD_JSON_BUILD_PAIR_STRING("baseVersion", detail->base_version),
                                       SD_JSON_BUILD_PAIR_STRING("identity", detail->identity));
         case MF_ERROR_ALREADY_INSTALLED:
             return sd_varlink_errorbo(link,
-                                      MF_VARLINK_ERROR_ALREADY_INSTALLED,
+                                      error_id,
+                                      SD_JSON_BUILD_PAIR_STRING("message", error->message),
                                       SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
                                       SD_JSON_BUILD_PAIR_STRING("version", detail->version));
         case MF_ERROR_COMPONENT_IN_USE:
             return sd_varlink_errorbo(link,
-                                      MF_VARLINK_ERROR_COMPONENT_IN_USE,
+                                      error_id,
+                                      SD_JSON_BUILD_PAIR_STRING("message", error->message),
                                       SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
                                       SD_JSON_BUILD_PAIR_STRING("usedBy", detail->used_by));
         case MF_ERROR_NOT_FOUND:
             return sd_varlink_errorbo(link,
-                                      MF_VARLINK_ERROR_NO_SUCH_COMPONENT,
+                                      error_id,
+                                      SD_JSON_BUILD_PAIR_STRING("message", error->message),
                                       SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
                                       SD_JSON_BUILD_PAIR_CONDITION(detail->version != NULL,
                                                                    "version",
@@ -291,35 +302,19 @@ mfd_service_reply_error(sd_varlink *link, const GError *error, const MfdErrorDet
         case MF_ERROR_WRONG_ARCHITECTURE:
             return sd_varlink_errorbo(
                 link,
-                MF_VARLINK_ERROR_WRONG_ARCHITECTURE,
+                error_id,
+                SD_JSON_BUILD_PAIR_STRING("message", error->message),
                 SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
                 SD_JSON_BUILD_PAIR_STRING("architecture", detail->architecture),
                 SD_JSON_BUILD_PAIR_STRING("hostArchitecture", mf_get_host_architecture()));
         case MF_ERROR_ID_CONFLICT:
             return sd_varlink_errorbo(
                 link,
-                MF_VARLINK_ERROR_ID_CONFLICT,
+                error_id,
+                SD_JSON_BUILD_PAIR_STRING("message", error->message),
                 SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
                 SD_JSON_BUILD_PAIR_STRING("kind", mf_component_kind_to_string(detail->kind)),
                 SD_JSON_BUILD_PAIR_BOOLEAN("sdk", detail->sdk));
-        default:
-            break;
-        }
-    }
-
-    if (error->domain == MF_ERROR) {
-        switch (error->code) {
-        case MF_ERROR_INVALID_BUNDLE:
-        case MF_ERROR_INVALID_MANIFEST:
-            /* a manifest is only ever installed as part of a bundle */
-            error_id = MF_VARLINK_ERROR_INVALID_BUNDLE;
-            break;
-        case MF_ERROR_VERIFICATION_FAILED:
-            error_id = MF_VARLINK_ERROR_VERIFICATION_FAILED;
-            break;
-        case MF_ERROR_FILE_CONFLICT:
-            error_id = MF_VARLINK_ERROR_FILE_CONFLICT;
-            break;
         default:
             break;
         }
@@ -668,7 +663,7 @@ mfd_service_refuse_request(MfdService *service, MfdRequest *request, const GErro
                   request->method,
                   error->message);
         r = sd_varlink_errorbo(request->link,
-                               MF_VARLINK_ERROR_FAILED,
+                               mf_error_to_varlink_id(MF_ERROR_FAILED),
                                SD_JSON_BUILD_PAIR_STRING("message", error->message));
     } else {
         g_message("Denied call of %s by user %u: not authorized for %s",
@@ -915,7 +910,7 @@ mfd_varlink_method_install_file(sd_varlink *link,
         return sd_varlink_error_invalid_parameter_name(link, "bundleFileDescriptor");
     if (fstat(request->bundle_fd, &st) < 0 || !S_ISREG(st.st_mode))
         return sd_varlink_errorbo(link,
-                                  MF_VARLINK_ERROR_INVALID_BUNDLE,
+                                  mf_error_to_varlink_id(MF_ERROR_INVALID_BUNDLE),
                                   SD_JSON_BUILD_PAIR_STRING("message", "Not a regular file"));
 
     /*

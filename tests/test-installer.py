@@ -707,7 +707,7 @@ class HostIntegrationTest(InstallerTestCase):
         path = '/app/share/applications/org.example.Other.desktop'
         app = self.app_with({'desktop-entry': {path: DESKTOP_ENTRY}})
         out = self.install(self.kit, app, expect=1)
-        self.assertIn('Not a valid bundle', out)
+        self.assertIn('Not a valid manifest', out)
         self.assertIn(f'is not named like {APP_ID}', out)
         self.assertEqual(self.stored_images(), images)
         # file names are only printed after they passed the checks
