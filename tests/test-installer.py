@@ -668,7 +668,10 @@ class HostIntegrationTest(InstallerTestCase):
             }
         )
         self.install_core()
-        self.install(self.kit, app)
+        out = self.install(self.kit, app)
+        self.assertIn(f'system service: {service} (privileged)\n', out)
+        self.assertIn(f'user service: {service}\n', out)
+        self.assertIn('Privileged items can gain full access', out)
 
         exports = f'{STORE}/apps/{APP_ID}/0.1.0-{app.revision}/exports'
         for path, content in (
@@ -688,6 +691,8 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertIn('Not a valid bundle', out)
         self.assertIn(f'is not named like {APP_ID}', out)
         self.assertEqual(self.stored_images(), images)
+        # file names are only printed after they passed the checks
+        self.assertNotIn('will install this', out)
 
     def test_integration_file_has_to_match_its_manifest(self):
         self.install_core()
@@ -731,7 +736,16 @@ class HostIntegrationTest(InstallerTestCase):
     def test_current_version_is_exported(self):
         self.install_core()
         app = self.integrated_app('0.1.0')
-        self.install(self.kit, app)
+        out = self.install(self.kit, app)
+        self.assertIn(
+            f'{APP_ID} will install this on the system:\n'
+            f'  menu entry: {APP_ID}.desktop\n'
+            f'  file types: {APP_ID}.xml\n'
+            '  icons: 1\n'
+            '  command: app-cli\n',
+            out,
+        )
+        self.assertNotIn('rivileged', out)
 
         entry = self.read_export(DESKTOP_ENTRY_EXPORT)
         self.assertIn(b'/mfrun com.example.app\n', entry)
