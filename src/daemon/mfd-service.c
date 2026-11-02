@@ -225,6 +225,7 @@ mfd_error_is_about_request(const GError *error)
     case MF_ERROR_INVALID_MANIFEST:
     case MF_ERROR_REVOKED:
     case MF_ERROR_ID_CONFLICT:
+    case MF_ERROR_FILE_CONFLICT:
         return TRUE;
     default:
         return FALSE;
@@ -305,6 +306,9 @@ mfd_service_reply_error(sd_varlink *link, const GError *error, const MfdErrorDet
             break;
         case MF_ERROR_VERIFICATION_FAILED:
             error_id = MF_VARLINK_ERROR_VERIFICATION_FAILED;
+            break;
+        case MF_ERROR_FILE_CONFLICT:
+            error_id = MF_VARLINK_ERROR_FILE_CONFLICT;
             break;
         default:
             break;

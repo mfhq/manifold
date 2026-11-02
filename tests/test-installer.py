@@ -14,6 +14,7 @@ Usage: mf-test-sandbox test-installer.py --daemon manifoldd --client manifold
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -42,6 +43,17 @@ SOCKET = f'{RUNTIME_DIR}/test-manifoldd.sock'
 
 DESKTOP_ENTRY_PATH = f'/app/share/applications/{APP_ID}.desktop'
 DESKTOP_ENTRY = b'[Desktop Entry]\nType=Application\nName=App\nExec=app\n'
+DESKTOP_ENTRY_EXPORT = f'{STORE}/exports/share/applications/{APP_ID}.desktop'
+ICON_PATH = f'/app/share/icons/hicolor/scalable/apps/{APP_ID}.svg'
+ICON = b'<svg xmlns="http://www.w3.org/2000/svg"/>'
+ICON_EXPORT = f'{STORE}/exports/share/icons/hicolor/scalable/apps/{APP_ID}.svg'
+MIME_PATH = f'/app/share/mime/packages/{APP_ID}.xml'
+MIME_PACKAGE = (
+    b'<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">'
+    b'<mime-type type="application/x-app"><glob pattern="*.appfile"/></mime-type></mime-info>'
+)
+MIME_EXPORT = f'{STORE}/exports/share/mime/packages/{APP_ID}.xml'
+REGISTRY = f'{STORE}/integrations/{APP_ID}.json'
 
 ARGS = None
 
@@ -656,6 +668,215 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertIn('does not match its hashes in the manifest', out)
         self.assertNotIn(app.verity_hash, self.stored_images())
         self.assertNotIn(APP_ID, [component for component, _, _ in self.installed()])
+
+    def integrated_app(self, version, comment=b''):
+        """Make a version of the app with a desktop entry, an icon and a MIME package. The
+        comment is added to the desktop entry, so that the desktop entries of two versions
+        differ."""
+        return self.app_with(
+            {
+                'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY + comment},
+                'icons': {ICON_PATH: ICON},
+                'mime-package': {MIME_PATH: MIME_PACKAGE},
+            },
+            version=version,
+        )
+
+    def registry(self):
+        with open(REGISTRY, encoding='utf-8') as f:
+            return json.load(f)
+
+    def read_export(self, path):
+        with open(path, 'rb') as f:
+            return f.read()
+
+    def write_foreign_file(self, path):
+        """Create a file that does not belong to any component."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'wb') as f:
+            f.write(b'foreign')
+
+    def test_current_version_is_exported(self):
+        self.install_core()
+        app = self.integrated_app('0.1.0')
+        self.install(self.kit, app)
+
+        entry = self.read_export(DESKTOP_ENTRY_EXPORT)
+        self.assertIn(b'/mfrun com.example.app\n', entry)
+        self.assertNotIn(b'Exec=app', entry)
+        self.assertIn(b'"*.appfile"', self.read_export(MIME_EXPORT))
+        # desktop sessions run as ordinary users, so everyone has to be able to read the exports
+        self.assertEqual(os.stat(DESKTOP_ENTRY_EXPORT).st_mode & 0o777, 0o644)
+
+        current = f'{STORE}/apps/{APP_ID}/current/exports'
+        self.assertEqual(os.readlink(ICON_EXPORT), current + ICON_PATH[len('/app') :])
+        self.assertEqual(self.read_export(ICON_EXPORT), ICON)
+
+        registry = self.registry()
+        self.assertEqual(registry['version'], f'0.1.0-{app.revision}')
+        self.assertEqual(
+            sorted(f['path'] for f in registry['files']),
+            sorted([DESKTOP_ENTRY_EXPORT, ICON_EXPORT, MIME_EXPORT]),
+        )
+
+    def test_exports_follow_the_current_version(self):
+        self.install_core()
+        old = self.integrated_app('0.2.0', b'Comment=Old\n')
+        new = self.app_with(
+            {'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY + b'Comment=New\n'}},
+            version='0.3.0',
+        )
+        self.install(self.kit, old)
+        self.manifold('mark', 'manual', APP_ID)
+
+        # the new version has neither an icon nor a MIME package
+        self.install(self.kit, new)
+        self.assertIn(b'Comment=New', self.read_export(DESKTOP_ENTRY_EXPORT))
+        self.assertFalse(os.path.lexists(ICON_EXPORT))
+        self.assertFalse(os.path.lexists(MIME_EXPORT))
+
+        # an older version does not become current
+        older = self.integrated_app('0.1.0', b'Comment=Older\n')
+        self.install(self.kit, older)
+        self.assertIn(b'Comment=New', self.read_export(DESKTOP_ENTRY_EXPORT))
+        self.assertEqual(self.registry()['version'], f'0.3.0-{new.revision}')
+
+        # falling back to a version does not need its image, as the version keeps its own
+        # copies of the files in its exports directory
+        with open(f'{STORE}/images/by-verity/{old.verity_hash}.raw', 'r+b') as f:
+            f.truncate(0)
+        self.manifold('remove', APP_ID, '0.3.0')
+        self.assertIn(b'Comment=Old\n', self.read_export(DESKTOP_ENTRY_EXPORT))
+        self.assertEqual(self.read_export(ICON_EXPORT), ICON)
+        self.assertEqual(self.registry()['version'], f'0.2.0-{old.revision}')
+
+    def test_removal_leaves_no_exports(self):
+        self.install_core()
+        self.install(self.kit, self.integrated_app('0.1.0'))
+
+        self.manifold('remove', APP_ID)
+        self.assertFalse(os.path.lexists(DESKTOP_ENTRY_EXPORT))
+        self.assertFalse(os.path.lexists(ICON_EXPORT))
+        self.assertFalse(os.path.lexists(MIME_EXPORT))
+        self.assertFalse(os.path.exists(REGISTRY))
+
+    def test_changed_exports_are_replaced(self):
+        self.install_core()
+        self.install(self.kit, self.integrated_app('0.1.0'))
+        with open(DESKTOP_ENTRY_EXPORT, 'ab') as f:
+            f.write(b'Comment=Edited by the admin\n')
+        os.unlink(ICON_EXPORT)
+        self.write_foreign_file(ICON_EXPORT)
+
+        new = self.integrated_app('0.2.0', b'Comment=New\n')
+        self.install(self.kit, new)
+        self.assertNotIn(b'Edited by the admin', self.read_export(DESKTOP_ENTRY_EXPORT))
+        self.assertEqual(self.read_export(ICON_EXPORT), ICON)
+
+        with open(DESKTOP_ENTRY_EXPORT, 'ab') as f:
+            f.write(b'Comment=Edited by the admin\n')
+        self.manifold('remove', APP_ID)
+        self.assertFalse(os.path.lexists(DESKTOP_ENTRY_EXPORT))
+
+    def test_foreign_file_refuses_installation(self):
+        self.install_core()
+        self.write_foreign_file(MIME_EXPORT)
+        app = self.integrated_app('0.1.0')
+
+        out = self.install(self.kit, app, expect=1)
+        self.assertIn('File conflict', out)
+        self.assertIn('does not belong to any component', out)
+        self.assertNotIn(app.verity_hash, self.stored_images())
+        self.assertEqual(self.read_export(MIME_EXPORT), b'foreign')
+        self.assertFalse(os.path.exists(DESKTOP_ENTRY_EXPORT))
+
+        # a symbolic link that points nowhere is a conflict too
+        os.unlink(MIME_EXPORT)
+        os.symlink('/nonexistent', MIME_EXPORT)
+        self.install(self.kit, app, expect=1)
+        self.assertEqual(os.readlink(MIME_EXPORT), '/nonexistent')
+
+    def test_file_of_another_component_refuses_installation(self):
+        self.install_core()
+        path = f'/app/share/applications/{APP_ID}.extra.desktop'
+        first = self.app_with({'desktop-entry': {path: DESKTOP_ENTRY}})
+        second = Image(
+            APP_ID + '.extra',
+            'app',
+            '0.1.0',
+            base=self.kit,
+            integration={'desktop-entry': {path: DESKTOP_ENTRY + b'Comment=Second\n'}},
+        )
+
+        # two images of one bundle want to install the same file
+        out = self.install(self.kit, first, second, expect=1)
+        self.assertIn(f'that file belongs to {APP_ID}', out)
+        self.assertNotIn(first.verity_hash, self.stored_images())
+        self.assertNotIn(second.verity_hash, self.stored_images())
+
+        # an installed component owns the file
+        self.install(self.kit, first)
+        out = self.install(self.kit, second, expect=1)
+        self.assertIn(f'that file belongs to {APP_ID}', out)
+        self.assertNotIn(second.verity_hash, self.stored_images())
+
+        # an installed component owns the file, even if the file was deleted from the host
+        os.unlink(f'{STORE}/exports/share/applications/{APP_ID}.extra.desktop')
+        out = self.install(self.kit, second, expect=1)
+        self.assertIn(f'that file belongs to {APP_ID}', out)
+
+    def test_foreign_file_survives_falling_back(self):
+        self.install_core()
+        new = self.app_with({'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY}}, version='0.2.0')
+        self.install(self.kit, new)
+
+        # installing an older version does not change the host, so the foreign file is no conflict yet
+        self.write_foreign_file(MIME_EXPORT)
+        older = self.integrated_app('0.1.0')
+        self.install(self.kit, older)
+        self.assertEqual(self.registry()['version'], f'0.2.0-{new.revision}')
+
+        self.manifold('remove', APP_ID, '0.2.0')
+        self.assertEqual(self.registry()['version'], f'0.1.0-{older.revision}')
+        self.assertEqual(self.read_export(ICON_EXPORT), ICON)
+        self.assertEqual(self.read_export(MIME_EXPORT), b'foreign')
+        self.assertNotIn(MIME_EXPORT, [f['path'] for f in self.registry()['files']])
+
+        self.manifold('remove', APP_ID)
+        self.assertEqual(self.read_export(MIME_EXPORT), b'foreign')
+
+    def test_interrupted_integration_is_finished(self):
+        self.install_core()
+        app = self.integrated_app('0.1.0')
+        self.install(self.kit, app)
+
+        # pretend that we crashed before installing the files, and also damage the store by
+        # deleting the copy of the desktop entry that the version keeps
+        kept = f'{STORE}/apps/{APP_ID}/0.1.0-{app.revision}/exports/share/applications/{APP_ID}.desktop'
+        registry = self.registry()
+        del registry['version']
+        with open(REGISTRY, 'w', encoding='utf-8') as f:
+            json.dump(registry, f)
+        os.unlink(DESKTOP_ENTRY_EXPORT)
+        os.unlink(kept)
+
+        self.manifold('cleanup')
+        self.assertEqual(self.registry()['version'], f'0.1.0-{app.revision}')
+        self.assertIn(b'/mfrun com.example.app\n', self.read_export(DESKTOP_ENTRY_EXPORT))
+        self.assertEqual(self.read_export(kept), DESKTOP_ENTRY)
+
+    def test_first_installation_is_finished_after_a_crash(self):
+        self.install_core()
+        self.install(self.kit, self.integrated_app('0.1.0'))
+
+        # pretend that we crashed right after recording the version, before we wrote the
+        # registry. At that point, no file was installed on the host yet.
+        os.unlink(REGISTRY)
+        for path in (DESKTOP_ENTRY_EXPORT, ICON_EXPORT, MIME_EXPORT):
+            os.unlink(path)
+
+        self.manifold('cleanup')
+        self.assertTrue(os.path.exists(DESKTOP_ENTRY_EXPORT))
 
 
 class RemovalTest(InstallerTestCase):

@@ -40,6 +40,10 @@ gboolean        mfd_store_writer_install_component(MfdStoreWriter   *writer,
                                                    GHashTable       *exports,
                                                    MfInstallMode     mode,
                                                    GError          **error);
+gboolean        mfd_store_writer_write_exports(MfdStoreWriter *writer,
+                                               MfComponent    *component,
+                                               GHashTable     *exports,
+                                               GError        **error);
 gboolean        mfd_store_writer_remove_component(MfdStoreWriter *writer,
                                                   MfComponent    *component,
                                                   GError        **error);

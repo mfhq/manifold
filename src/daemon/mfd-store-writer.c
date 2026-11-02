@@ -339,11 +339,11 @@ mfd_store_writer_write_files(const char *version_dir, const char *subdir, GHashT
 
         if (!mfd_make_dir(dir, error))
             return FALSE;
-        if (!mfd_write_marker(dir,
-                              name,
-                              g_bytes_get_data(value, NULL),
-                              (gssize) g_bytes_get_size(value),
-                              error))
+        if (!mfd_write_contents_safe(dir,
+                                     name,
+                                     g_bytes_get_data(value, NULL),
+                                     (gssize) g_bytes_get_size(value),
+                                     error))
             return FALSE;
     }
 
@@ -409,7 +409,7 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
     if (mfd_is_directory(final_dir)) {
         if (mode != MF_INSTALL_MODE_MANUAL)
             return TRUE;
-        if (!mfd_write_word(final_dir, MF_STORE_MODE_NAME, mf_install_mode_to_string(mode), error))
+        if (!mfd_write_word_safe(final_dir, MF_STORE_MODE_NAME, mf_install_mode_to_string(mode), error))
             return FALSE;
         mf_store_invalidate(writer->store);
         return TRUE;
@@ -440,13 +440,17 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
             goto out;
     }
     manifest_data = g_bytes_get_data(mf_manifest_get_data(manifest), &manifest_size);
-    if (!mfd_write_marker(tmp_dir, MF_STORE_MANIFEST_NAME, manifest_data, (gssize) manifest_size, error))
+    if (!mfd_write_contents_safe(tmp_dir,
+                                 MF_STORE_MANIFEST_NAME,
+                                 manifest_data,
+                                 (gssize) manifest_size,
+                                 error))
         goto out;
-    if (!mfd_write_marker(tmp_dir,
-                          catalog_name,
-                          g_bytes_get_data(catalog, NULL),
-                          (gssize) g_bytes_get_size(catalog),
-                          error))
+    if (!mfd_write_contents_safe(tmp_dir,
+                                 catalog_name,
+                                 g_bytes_get_data(catalog, NULL),
+                                 (gssize) g_bytes_get_size(catalog),
+                                 error))
         goto out;
     if (!mfd_store_writer_write_files(tmp_dir, MF_STORE_ICONS_NAME, icons, error))
         goto out;
@@ -454,9 +458,9 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
         goto out;
 
     /* TODO: every installation is local until repository support is ported from Intrafold */
-    if (!mfd_write_word(tmp_dir, MF_STORE_ORIGIN_NAME, MF_STORE_LOCAL_ORIGIN, error))
+    if (!mfd_write_word_safe(tmp_dir, MF_STORE_ORIGIN_NAME, MF_STORE_LOCAL_ORIGIN, error))
         goto out;
-    if (!mfd_write_word(tmp_dir, MF_STORE_MODE_NAME, mf_install_mode_to_string(mode), error))
+    if (!mfd_write_word_safe(tmp_dir, MF_STORE_MODE_NAME, mf_install_mode_to_string(mode), error))
         goto out;
 
     if (rename(tmp_dir, final_dir) < 0) {
@@ -487,6 +491,27 @@ out:
         g_warning("%s", cleanup_error->message);
 
     return ret;
+}
+
+/**
+ * mfd_store_writer_write_exports:
+ * @writer: the #MfdStoreWriter
+ * @component: an installed version of a component, read from the store
+ * @exports: (element-type utf8 GBytes): the integration files of the component,
+ *   by their export path
+ *
+ * Replace the files in the `exports` directory of a version.
+ */
+gboolean
+mfd_store_writer_write_exports(MfdStoreWriter *writer,
+                               MfComponent *component,
+                               GHashTable *exports,
+                               GError **error)
+{
+    return mfd_store_writer_write_files(mf_component_get_dir(component),
+                                        MF_STORE_EXPORTS_NAME,
+                                        exports,
+                                        error);
 }
 
 /**
@@ -557,7 +582,7 @@ mfd_store_writer_set_mode(MfdStoreWriter *writer, MfComponent *component, MfInst
 
     g_return_val_if_fail(version_dir != NULL, FALSE);
 
-    if (!mfd_write_word(version_dir, MF_STORE_MODE_NAME, mf_install_mode_to_string(mode), error))
+    if (!mfd_write_word_safe(version_dir, MF_STORE_MODE_NAME, mf_install_mode_to_string(mode), error))
         return FALSE;
     mf_store_invalidate(writer->store);
     return TRUE;

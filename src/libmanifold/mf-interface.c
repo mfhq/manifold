@@ -223,6 +223,11 @@ static SD_VARLINK_DEFINE_ERROR(
     SD_VARLINK_FIELD_COMMENT("Whether the component that is installed with this identifier is an SDK."),
     SD_VARLINK_DEFINE_FIELD(sdk, SD_VARLINK_BOOL, 0));
 
+static SD_VARLINK_DEFINE_ERROR(
+    FileConflict,
+    SD_VARLINK_FIELD_COMMENT("Which file is in the way, and who it belongs to."),
+    SD_VARLINK_DEFINE_FIELD(message, SD_VARLINK_STRING, 0));
+
 SD_VARLINK_DEFINE_INTERFACE(
     org_freedesktop_manifold,
     MF_INTERFACE,
@@ -279,6 +284,8 @@ SD_VARLINK_DEFINE_INTERFACE(
     SD_VARLINK_SYMBOL_COMMENT("The component architecture and that of the current system are incompatible."),
     &vl_error_WrongArchitecture,
     SD_VARLINK_SYMBOL_COMMENT("Another kind of component is installed with the identifier of this component."),
-    &vl_error_IdConflict);
+    &vl_error_IdConflict,
+    SD_VARLINK_SYMBOL_COMMENT("A file on the host is in the way of a file of the component."),
+    &vl_error_FileConflict);
 
 /* clang-format on */
