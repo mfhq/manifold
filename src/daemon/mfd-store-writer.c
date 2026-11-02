@@ -327,29 +327,35 @@ mfd_store_writer_update_current(MfdStoreWriter *writer,
  * @subdir: the directory of the version to write to
  * @files: (element-type utf8 GBytes): the files by their path relative to @subdir
  *
- * Write the files of a component into a directory of a version. The paths
- * have to be safe to use, which the caller has checked.
+ * Write the files of a component into a directory of a version. No file can
+ * end up outside of that directory, whatever its path says.
  */
 static gboolean
 mfd_store_writer_write_files(const char *version_dir, const char *subdir, GHashTable *files, GError **error)
 {
+    g_autofree char *dir = g_build_filename(version_dir, subdir, NULL);
+    glnx_autofd int dfd = -1;
     GHashTableIter iter;
     gpointer key;
     gpointer value;
 
+    if (!mfd_make_dir(dir, error) || !glnx_opendirat(AT_FDCWD, dir, TRUE, &dfd, error))
+        return FALSE;
+
     g_hash_table_iter_init(&iter, files);
     while (g_hash_table_iter_next(&iter, &key, &value)) {
-        g_autofree char *path = g_build_filename(version_dir, subdir, key, NULL);
-        g_autofree char *dir = g_path_get_dirname(path);
-        g_autofree char *name = g_path_get_basename(path);
+        g_autofree char *file_dir = g_path_get_dirname(key);
+        g_autofree char *name = g_path_get_basename(key);
+        glnx_autofd int file_dir_fd = mfd_make_dir_below(dfd, file_dir, error);
 
-        if (!mfd_make_dir(dir, error))
+        if (file_dir_fd < 0)
             return FALSE;
-        if (!mfd_write_contents_safe(dir,
-                                     name,
-                                     g_bytes_get_data(value, NULL),
-                                     (gssize) g_bytes_get_size(value),
-                                     error))
+        if (!mfd_write_file_at(file_dir_fd,
+                               name,
+                               g_bytes_get_data(value, NULL),
+                               g_bytes_get_size(value),
+                               0644,
+                               error))
             return FALSE;
     }
 

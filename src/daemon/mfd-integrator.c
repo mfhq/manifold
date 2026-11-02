@@ -7,9 +7,11 @@
 #include "config.h"
 #include "mfd-integrator.h"
 
+#include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
 #include <gio/gio.h>
+#include <libglnx.h>
 #include <systemd/sd-json.h>
 
 #include "mf-integration-private.h"
@@ -116,11 +118,13 @@ mfd_integrator_new(MfStore *store, MfdStoreWriter *writer)
  * files that were changed.
  */
 typedef struct {
-    char *path;      /* where the file is on the host */
-    char *sha256;    /* the checksum of a regular file, or %NULL for a link */
-    char *target;    /* where a link points to, or %NULL for a regular file */
-    GBytes *content; /* what to write */
-    int mode;        /* the permissions of a regular file */
+    char *path;             /* where the file is on the host */
+    char *sha256;           /* the checksum of a regular file, or %NULL for a link */
+    char *target;           /* where a link points to, or %NULL for a regular file */
+    GBytes *content;        /* what to write */
+    int mode;               /* the permissions of a regular file */
+    char *dir;              /* the directory of its kind on the host, which @path is below */
+    MfIntegrationKind kind; /* the kind of the file, %MF_INTEGRATION_KIND_UNKNOWN for an alias */
 } MfdExport;
 
 static void
@@ -130,6 +134,7 @@ mfd_export_free(MfdExport *export)
     g_free(export->sha256);
     g_free(export->target);
     g_clear_pointer(&export->content, g_bytes_unref);
+    g_free(export->dir);
     g_free(export);
 }
 
@@ -162,25 +167,44 @@ mfd_exports_add(GHashTable *exports, MfdExport *export)
 /**
  * mfd_export_install:
  *
- * Install a file on the host, replacing what is there.
+ * Install a file on the host, replacing what is there. We create the directory
+ * of each kind of file, but below it only icons get directories, for their sizes
+ * and categories. Nothing can lead out of the directory of its kind, which the
+ * kernel enforces where it can, see mfd_make_dir_below().
  */
 static gboolean
 mfd_export_install(const MfdExport *export, GError **error)
 {
-    g_autofree char *dir = g_path_get_dirname(export->path);
-    g_autofree char *name = g_path_get_basename(export->path);
+    g_autofree char *subdir = NULL;
+    g_autofree char *name = NULL;
+    glnx_autofd int dfd = -1;
+    glnx_autofd int subdir_fd = -1;
 
-    if (!mfd_make_dir(dir, error))
+    if (export->dir == NULL || !mf_path_is_below(export->path, export->dir))
+        return glnx_throw(error,
+                          "Not installing %s, as it is not in the directory of its kind",
+                          export->path);
+    subdir = g_path_get_dirname(export->path + strlen(export->dir) + 1);
+    name = g_path_get_basename(export->path);
+    if (!g_str_equal(subdir, ".") && export->kind != MF_INTEGRATION_KIND_ICON)
+        return glnx_throw(error,
+                          "Not installing %s, as only icons go into directories of their own",
+                          export->path);
+
+    if (!mfd_make_dir(export->dir, error) || !glnx_opendirat(AT_FDCWD, export->dir, TRUE, &dfd, error))
         return FALSE;
-    if (export->target != NULL)
-        return mfd_replace_link(export->target, dir, name, error);
+    subdir_fd = mfd_make_dir_below(dfd, subdir, error);
+    if (subdir_fd < 0)
+        return FALSE;
 
-    return g_file_set_contents_full(export->path,
-                                    g_bytes_get_data(export->content, NULL),
-                                    (gssize) g_bytes_get_size(export->content),
-                                    G_FILE_SET_CONTENTS_CONSISTENT,
-                                    export->mode,
-                                    error);
+    if (export->target != NULL)
+        return mfd_replace_link_at(subdir_fd, name, export->target, error);
+    return mfd_write_file_at(subdir_fd,
+                             name,
+                             g_bytes_get_data(export->content, NULL),
+                             g_bytes_get_size(export->content),
+                             export->mode,
+                             error);
 }
 
 /**
@@ -603,6 +627,20 @@ mfd_integrator_build_file_path(MfdIntegrator *integrator, MfIntegrationFile *fil
 }
 
 /**
+ * mfd_integrator_build_kind_dir:
+ *
+ * Returns: (transfer full): the directory on the host that files of a kind are
+ *   installed below
+ */
+static char *
+mfd_integrator_build_kind_dir(MfdIntegrator *integrator, MfIntegrationKind kind)
+{
+    if (mfd_kind_is_in_prefix(kind))
+        return g_build_filename(MF_INTEGRATION_PREFIX, mf_integration_kind_get_dir(kind), NULL);
+    return mfd_integrator_build_host_path(integrator, mf_integration_kind_get_dir(kind));
+}
+
+/**
  * mfd_integrator_kind_is_supported:
  *
  * Returns: %TRUE if we install this kind of file
@@ -675,7 +713,9 @@ mfd_integrator_export_new(MfdIntegrator *integrator,
     g_autoptr(MfdExport) export = g_new0(MfdExport, 1);
 
     export->path = mfd_integrator_build_file_path(integrator, file);
-    if (mf_integration_file_get_kind(file) == MF_INTEGRATION_KIND_ICON) {
+    export->kind = mf_integration_file_get_kind(file);
+    export->dir = mfd_integrator_build_kind_dir(integrator, export->kind);
+    if (export->kind == MF_INTEGRATION_KIND_ICON) {
         export->target = g_build_filename(root,
                                           mf_store_subdir_for_kind(mf_component_get_kind(component), FALSE),
                                           mf_component_get_id(component),
@@ -710,7 +750,11 @@ mfd_integrator_alias_export_new(MfdIntegrator *integrator,
 {
     g_autoptr(MfdExport) export = g_new0(MfdExport, 1);
 
+    g_autofree char *alias_dir = g_path_get_dirname(mf_integration_alias_get_export_path(alias));
+
     export->path = mfd_integrator_build_host_path(integrator, mf_integration_alias_get_export_path(alias));
+    export->kind = MF_INTEGRATION_KIND_UNKNOWN;
+    export->dir = mfd_integrator_build_host_path(integrator, alias_dir);
     export->content = mf_integration_alias_render(alias, manifest, error);
     if (export->content == NULL)
         return NULL;
