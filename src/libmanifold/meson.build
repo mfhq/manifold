@@ -82,6 +82,9 @@ manifold_lib = library('manifold',
         blake3_dep,
         appstream_dep,
     ],
+    # give every function and variable a section of its own, so the linker can drop unused ones
+    # when linking against manifold_static_lib
+    c_args: ['-ffunction-sections', '-fdata-sections'],
     include_directories: [root_inc_dir],
     install: true,
 )
@@ -95,6 +98,31 @@ manifold_dep = declare_dependency(
         glib_dep,
         gobject_dep,
         gio_dep
+    ],
+    include_directories: [mf_lib_inc],
+)
+
+# Static library for manifold-rund
+#
+# We link manifold-rund against a static copy of libmanifold with --gc-sections, so the linker
+# drops all library code the daemon does not use. That includes all code calling into AppStream,
+# blake3 or libzip, so manifold-rund loads neither these three libraries.
+# NOTE: GNU ld decides which libraries are needed before it drops unused code, so our potentially
+# unused dependencies must not be on the link line at all. We therefore build the static library
+# from the objects of the shared one to avoid Meson auto-adding them.
+manifold_static_lib = static_library('manifold-static',
+    objects: manifold_lib.extract_all_objects(recursive: false),
+)
+
+manifold_static_dep = declare_dependency(
+    link_with: manifold_static_lib,
+    link_args: ['-Wl,--gc-sections'],
+    sources: [mf_version_h],
+    dependencies: [
+        glib_dep,
+        gobject_dep,
+        gio_dep,
+        libsystemd_dep,
     ],
     include_directories: [mf_lib_inc],
 )

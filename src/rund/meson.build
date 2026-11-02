@@ -27,7 +27,7 @@ manifold_rund_lib = static_library('manifold-rund',
     c_args: hardening_c_args + ['-DG_LOG_DOMAIN="manifold-rund"'],
     include_directories: [root_inc_dir, shared_inc_dir],
     dependencies: [
-        manifold_dep,
+        manifold_static_dep,
         glib_dep,
         gobject_dep,
         libsystemd_dep,
@@ -40,7 +40,7 @@ manifold_rund_static_dep = declare_dependency(
     link_with: manifold_rund_lib,
     include_directories: [include_directories('.'), shared_inc_dir],
     dependencies: [
-        manifold_dep,
+        manifold_static_dep,
         glib_dep,
         gobject_dep,
         libsystemd_dep,
