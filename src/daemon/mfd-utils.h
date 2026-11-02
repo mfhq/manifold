@@ -7,6 +7,7 @@
 #pragma once
 
 #include <glib.h>
+#include <sys/types.h>
 #include <manifold.h>
 
 #include "mf-utils-private.h"
@@ -35,7 +36,20 @@ gboolean mfd_replace_link(const char *target,
                           const char *dir,
                           const char *name,
                           GError    **error);
+gboolean mfd_replace_link_at(int         dfd,
+                             const char *name,
+                             const char *target,
+                             GError    **error);
 
+int      mfd_make_dir_below(int         dfd,
+                            const char *subdir,
+                            GError    **error);
+gboolean mfd_write_file_at(int         dfd,
+                           const char *name,
+                           const void *content,
+                           gsize       length,
+                           mode_t      mode,
+                           GError    **error);
 gboolean mfd_write_contents_safe(const char *dir,
                                  const char *name,
                                  const char *content,

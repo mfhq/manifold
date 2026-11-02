@@ -6,7 +6,9 @@
 
 #include "config.h"
 
+#include <fcntl.h>
 #include <glib/gstdio.h>
+#include <libglnx.h>
 #include <manifold.h>
 
 #include "mf-store-private.h"
@@ -14,6 +16,7 @@
 #include "mft-utils.h"
 #include "mfd-manager.h"
 #include "mfd-store-writer.h"
+#include "mfd-utils.h"
 
 #define IMAGES   MF_STORE_IMAGES_DIR
 #define APPS     MF_STORE_APPS_DIR
@@ -803,6 +806,66 @@ test_remove(Fixture *f, gconstpointer user_data)
     g_assert_true(mf_store_has_image(store, f->core_hash));
 }
 
+static void
+test_writes_stay_below_their_directory(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autofree char *dir = g_dir_make_tmp("mft-writes-XXXXXX", &error);
+    g_autofree char *inside = g_build_filename(dir, "inside", NULL);
+    g_autofree char *outside = g_build_filename(dir, "outside", NULL);
+    g_autofree char *outside_file = g_build_filename(outside, "file", NULL);
+    g_autofree char *link = g_build_filename(inside, "link", NULL);
+    g_autofree char *up = g_build_filename(inside, "up", NULL);
+    g_autofree char *escaped = g_build_filename(dir, "escaped", NULL);
+    g_autofree char *self = g_build_filename(inside, "self", NULL);
+    g_autofree char *tmp_dir = g_build_filename(inside, MF_TMP_PREFIX "..", NULL);
+    g_autofree char *outside_sub = g_build_filename(outside, "sub", NULL);
+    glnx_autofd int inside_fd = -1;
+    glnx_autofd int sub_fd = -1;
+
+    g_assert_no_error(error);
+    g_assert_cmpint(g_mkdir(inside, 0755), ==, 0);
+    g_assert_cmpint(g_mkdir(outside, 0755), ==, 0);
+
+    /* a name has no path, so it can not lead out of the directory */
+    g_assert_false(mfd_write_contents_safe(inside, "../escaped", "x", -1, &error));
+    g_clear_error(&error);
+    /* the temporary link goes next to the link, so we make room for one that would also lead out */
+    g_assert_cmpint(g_mkdir(tmp_dir, 0755), ==, 0);
+    g_assert_false(mfd_replace_link("target", inside, "../escaped", &error));
+    g_clear_error(&error);
+    g_assert_false(g_file_test(escaped, G_FILE_TEST_IS_SYMLINK));
+
+    /* a link of that name is replaced, and not written through */
+    g_assert_cmpint(symlink(outside_file, link), ==, 0);
+    g_assert_true(mfd_write_contents_safe(inside, "link", "x", -1, &error));
+    g_assert_no_error(error);
+    g_assert_false(g_file_test(outside_file, G_FILE_TEST_EXISTS));
+    g_assert_false(g_file_test(link, G_FILE_TEST_IS_SYMLINK));
+
+    /* directories below can not lead out either, by `..` or by a link */
+    g_assert_true(glnx_opendirat(AT_FDCWD, inside, TRUE, &inside_fd, &error));
+    g_assert_cmpint(mfd_make_dir_below(inside_fd, "../outside/sub", &error), ==, -1);
+    g_clear_error(&error);
+    g_assert_cmpint(symlink("../outside", up), ==, 0);
+    g_assert_cmpint(mfd_make_dir_below(inside_fd, "up/sub", &error), ==, -1);
+    g_clear_error(&error);
+    g_assert_false(g_file_test(outside_sub, G_FILE_TEST_EXISTS));
+
+    /* and no link at all, even if it stays inside */
+    g_assert_cmpint(symlink(".", self), ==, 0);
+    g_assert_cmpint(mfd_make_dir_below(inside_fd, "self/sub", &error), ==, -1);
+    g_clear_error(&error);
+
+    sub_fd = mfd_make_dir_below(inside_fd, "48x48/apps", &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(sub_fd, >=, 0);
+    g_assert_true(mfd_write_file_at(sub_fd, "icon.png", "png", 3, 0644, &error));
+    g_assert_no_error(error);
+
+    g_assert_true(glnx_shutil_rm_rf_at(AT_FDCWD, dir, NULL, &error));
+}
+
 /**
  * main:
  */
@@ -829,6 +892,7 @@ main(int argc, char **argv)
     add_test("newest-app-stays", test_newest_app_stays);
     add_test("remove", test_remove);
 #undef add_test
+    g_test_add_func("/store/writes-stay-below-their-directory", test_writes_stay_below_their_directory);
 
     return g_test_run();
 }
