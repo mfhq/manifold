@@ -81,6 +81,34 @@ test_kind_strings(void)
 }
 
 static void
+test_privileged(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autoptr(MfManifest) rule = mft_manifest_new(
+        "{\"udev-rule\": [{\"path\": \"/app/lib/udev/rules.d/60-com.example.app.rules\", " HASHES "}]}",
+        &error);
+    g_autoptr(MfManifest) unit = NULL;
+
+    g_assert_no_error(error);
+    g_assert_true(mf_integration_is_privileged(mf_manifest_get_integration(rule)));
+
+    /* a user unit only runs as a user */
+    unit = mft_manifest_new(
+        "{\"systemd-unit-user\": [{\"path\": \"/app/lib/systemd/user/com.example.app.service\", " HASHES
+        "}]}",
+        &error);
+    g_assert_no_error(error);
+    g_assert_false(mf_integration_is_privileged(mf_manifest_get_integration(unit)));
+
+    g_assert_true(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM));
+    g_assert_true(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_UDEV_RULE));
+    g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER));
+    g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_DESKTOP_ENTRY));
+    g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_UNKNOWN));
+    g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_LAST));
+}
+
+static void
 test_section(void)
 {
     g_autoptr(GError) error = NULL;
@@ -1147,6 +1175,7 @@ main(int argc, char **argv)
     g_test_init(&argc, &argv, NULL);
 
     g_test_add_func("/integration/kind-strings", test_kind_strings);
+    g_test_add_func("/integration/privileged", test_privileged);
     g_test_add_func("/integration/section", test_section);
     g_test_add_func("/integration/no-section", test_no_section);
     g_test_add_func("/integration/malformed-section", test_malformed_section);

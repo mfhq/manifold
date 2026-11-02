@@ -487,9 +487,8 @@ mfd_integrator_kind_is_supported(MfIntegrationKind kind)
     case MF_INTEGRATION_KIND_MIME_PACKAGE:
         return TRUE;
     default:
-        /* TODO: Install systemd units and udev rules once admins can approve them.
-         * We must not install them without approval, as they can give an image root
-         * access to the host. */
+        /* TODO: Install systemd units and udev rules. A caller already needs a polkit
+         * action of its own for them, as they can give an image root access to the host. */
         return FALSE;
     }
 }

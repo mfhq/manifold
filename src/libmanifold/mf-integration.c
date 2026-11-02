@@ -48,6 +48,7 @@ static const struct {
     const char *name;            /* the key in the manifest */
     const char *dir;             /* where the files are below /app, and below the prefix on the host */
     const char *const *suffixes; /* what the names of the files may end in, %NULL terminated */
+    gboolean privileged;         /* whether a file of this kind can give an image root access to the host */
 } KINDS[MF_INTEGRATION_KIND_LAST] = {
     [MF_INTEGRATION_KIND_UNKNOWN] = {.name = "unknown"},
     [MF_INTEGRATION_KIND_DESKTOP_ENTRY] = {"desktop-entry",
@@ -56,10 +57,13 @@ static const struct {
                                      "share/icons/hicolor", (const char *const[]){".png", ".svg", ".svgz", ".jxl", NULL}},
     [MF_INTEGRATION_KIND_MIME_PACKAGE] = {"mime-package",
                                      "share/mime/packages", (const char *const[]){".xml", NULL}},
-    [MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM] = {"systemd-unit-system", "lib/systemd/system", UNIT_SUFFIXES},
+    [MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM] = {"systemd-unit-system",
+                                     "lib/systemd/system", UNIT_SUFFIXES,
+                                     TRUE},
     [MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER] = {"systemd-unit-user", "lib/systemd/user", UNIT_SUFFIXES},
     [MF_INTEGRATION_KIND_UDEV_RULE] = {"udev-rule",
-                                     "lib/udev/rules.d", (const char *const[]){".rules", NULL}},
+                                     "lib/udev/rules.d", (const char *const[]){".rules", NULL},
+                                     TRUE},
 };
 
 /* Aliases come last in the PATH, so an alias can not replace a command the host has. On a
@@ -183,6 +187,21 @@ mf_integration_kind_get_dir(MfIntegrationKind kind)
     if (kind <= MF_INTEGRATION_KIND_UNKNOWN || kind >= MF_INTEGRATION_KIND_LAST)
         return NULL;
     return KINDS[kind].dir;
+}
+
+/**
+ * mf_integration_kind_is_privileged:
+ * @kind: a #MfIntegrationKind
+ *
+ * Returns: %TRUE if files of this kind can give an image root access to the
+ *   host, so that an admin has to approve them
+ */
+gboolean
+mf_integration_kind_is_privileged(MfIntegrationKind kind)
+{
+    if (kind <= MF_INTEGRATION_KIND_UNKNOWN || kind >= MF_INTEGRATION_KIND_LAST)
+        return FALSE;
+    return KINDS[kind].privileged;
 }
 
 /**
@@ -451,6 +470,28 @@ mf_integration_get_unknown_kinds(MfIntegration *integration)
 {
     g_return_val_if_fail(MF_IS_INTEGRATION(integration), NULL);
     return integration->unknown_kinds;
+}
+
+/**
+ * mf_integration_is_privileged:
+ * @integration: an #MfIntegration
+ *
+ * Returns: %TRUE if an admin has to approve any file of @integration,
+ *   see mf_integration_kind_is_privileged()
+ */
+gboolean
+mf_integration_is_privileged(MfIntegration *integration)
+{
+    g_return_val_if_fail(MF_IS_INTEGRATION(integration), FALSE);
+
+    for (guint i = 0; i < integration->files->len; i++) {
+        MfIntegrationFile *file = g_ptr_array_index(integration->files, i);
+
+        if (mf_integration_kind_is_privileged(mf_integration_file_get_kind(file)))
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 /**
