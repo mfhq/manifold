@@ -90,7 +90,8 @@ class InstallerTest(unittest.TestCase):
     @classmethod
     def stub_host_tools(cls):
         """Put scripts in front of the tools of the host that the installer runs. The
-        scripts log how they were called, and fail if the fail_host_tools file exists.
+        scripts log how they were called, and if the fail_host_tools file exists they
+        print a terminal escape and fail, like a tool that quotes a file of a bundle.
         Disabling a unit whose file is gone logs that as well, as systemd needs the file."""
         cls.host_tools_log = os.path.join(cls.work, 'host-tools.log')
         cls.fail_host_tools = os.path.join(cls.work, 'fail-host-tools')
@@ -103,7 +104,7 @@ class InstallerTest(unittest.TestCase):
                     f'echo "{tool} $*" >> {cls.host_tools_log}\n'
                     f'[ "$1" != disable ] || [ -e "{cls.system_units}/$4" ] '
                     f'|| echo "$4 is gone" >> {cls.host_tools_log}\n'
-                    f'test ! -e {cls.fail_host_tools}\n'
+                    f'if [ -e {cls.fail_host_tools} ]; then printf "\\033[2J"; exit 1; fi\n'
                 )
             os.chmod(os.path.join(stubs, tool), 0o755)
         os.environ['PATH'] = stubs + os.pathsep + os.environ['PATH']
@@ -980,7 +981,8 @@ class InstallerTest(unittest.TestCase):
         self.manifold('install', self.bundle('older', [self.kit, older]))
         self.assertEqual(self.registry()['version'], f'0.2.0-{new.revision}')
 
-        self.manifold('remove', APP_ID, '0.2.0')
+        _, err = self.manifold_streams('remove', APP_ID, '0.2.0')
+        self.assertIn(f'Warning: Skipping a file: {APP_ID} needs to install', err)
         self.assertEqual(self.registry()['version'], f'0.1.0-{older.revision}')
         self.assertEqual(self.read_export(ICON_EXPORT), ICON)
         self.assertEqual(self.read_export(MIME_EXPORT), b'foreign')
@@ -1129,9 +1131,34 @@ class InstallerTest(unittest.TestCase):
         self.addCleanup(os.unlink, self.fail_host_tools)
         start = self.daemon.log_size()
 
-        self.manifold('install', self.bundle('integrated', [self.kit, app]))
+        _, err = self.manifold_streams('install', self.bundle('integrated', [self.kit, app]))
         self.assertEqual(self.registry()['version'], f'0.1.0-{app.revision}')
         self.assertIn('update-mime-database failed', self.daemon.read_log(start))
+        self.assertIn('Warning: update-mime-database failed', err)
+        self.assertNotIn('\x1b', err)
+
+    def test_export_that_fails_does_not_fail_the_installation(self):
+        self.manifold('install', self.core_bundle)
+        app = self.integrated_app('0.1.0')
+        self.write_foreign_file(f'{STORE}/exports/share')
+
+        _, err = self.manifold_streams('install', self.bundle('integrated', [self.kit, app]))
+        self.assertIn(f'Warning: Unable to update the host files of {APP_ID}', err)
+        self.assertIn(app.verity_hash, self.stored_images())
+        self.assertNotIn('version', self.registry())
+
+        # the next operation finishes the job, and has nothing to report
+        os.unlink(f'{STORE}/exports/share')
+        _, err = self.manifold_streams('cleanup')
+        self.assertNotIn('Warning', err)
+        self.assertEqual(self.registry()['version'], f'0.1.0-{app.revision}')
+
+        # a removal stands as well if its exports can not be removed
+        shutil.rmtree(f'{STORE}/exports/share')
+        self.write_foreign_file(f'{STORE}/exports/share')
+        _, err = self.manifold_streams('remove', APP_ID)
+        self.assertIn(f'Warning: Unable to update the host files of {APP_ID}', err)
+        self.assertNotIn(APP_ID, [component for component, _, _ in self.installed()])
 
     def test_interrupted_integration_is_finished(self):
         self.manifold('install', self.core_bundle)

@@ -793,6 +793,7 @@ mfd_integrator_check_conflicts(MfdIntegrator *integrator, GPtrArray *manifests, 
 
 /**
  * mfd_integrator_drop_conflicts:
+ * @result: (nullable): where to report a file we leave out
  * @component_id: the component that wants to install the files
  * @wanted: (element-type utf8 MfdExport): the files to install
  *
@@ -805,6 +806,7 @@ mfd_integrator_check_conflicts(MfdIntegrator *integrator, GPtrArray *manifests, 
  */
 static gboolean
 mfd_integrator_drop_conflicts(MfdIntegrator *integrator,
+                              MfResult *result,
                               const char *component_id,
                               GHashTable *wanted,
                               GError **error)
@@ -822,7 +824,7 @@ mfd_integrator_drop_conflicts(MfdIntegrator *integrator,
 
         if (mfd_owners_check_path(owners, path, component_id, &conflict))
             continue;
-        g_warning("Skipping a file: %s", conflict->message);
+        mfd_emit_warning(result, "Skipping a file: %s", conflict->message);
         g_hash_table_iter_remove(&iter);
     }
 
@@ -844,13 +846,14 @@ mfd_host_tool_child_setup(gpointer user_data)
 /**
  * mfd_host_tool_run:
  * @argv: the name of the tool, followed by its arguments
+ * @result: (nullable): where to report a failure of the tool
  *
  * Run a tool of the host if it is installed, and warn if it fails. A server
  * usually does not have these tools at all, so a missing tool is fine, and a tool
  * that fails must not fail the operation that changed the files.
  */
 static void
-mfd_host_tool_run(const char *const *argv)
+mfd_host_tool_run(const char *const *argv, MfResult *result)
 {
     g_autofree char *tool = g_find_program_in_path(argv[0]);
     g_autofree char *output = NULL;
@@ -868,11 +871,11 @@ mfd_host_tool_run(const char *const *argv)
     g_subprocess_launcher_set_child_setup(launcher, mfd_host_tool_child_setup, NULL, NULL);
     proc = g_subprocess_launcher_spawnv(launcher, argv, &error);
     if (proc == NULL || !g_subprocess_communicate_utf8(proc, NULL, NULL, &output, NULL, &error)) {
-        g_warning("Unable to run %s: %s", argv[0], error->message);
+        mfd_emit_warning(result, "Unable to run %s: %s", argv[0], error->message);
         return;
     }
     if (!g_subprocess_get_successful(proc))
-        g_warning("%s failed: %s", argv[0], g_strstrip(output));
+        mfd_emit_warning(result, "%s failed: %s", argv[0], g_strstrip(output));
 }
 
 /**
@@ -937,6 +940,7 @@ mfd_unit_build_pattern(const char *unit)
  * mfd_systemctl_run:
  * @command: the command of systemctl and its options, %NULL terminated
  * @units: (element-type utf8): the units to act on
+ * @result: (nullable): where to report a failure of systemctl
  *
  * Run a command for some units, if there are any. We do not wait for the units
  * to change their state, as a service can take longer for that than we allow
@@ -944,7 +948,7 @@ mfd_unit_build_pattern(const char *unit)
  * Systemd finishes the job even if the file of the unit is gone by then.
  */
 static void
-mfd_systemctl_run(const char *const *command, GPtrArray *units)
+mfd_systemctl_run(const char *const *command, GPtrArray *units, MfResult *result)
 {
     g_autoptr(GPtrArray) argv = g_ptr_array_new();
 
@@ -959,29 +963,31 @@ mfd_systemctl_run(const char *const *command, GPtrArray *units)
         g_ptr_array_add(argv, g_ptr_array_index(units, i));
     g_ptr_array_add(argv, NULL);
 
-    mfd_host_tool_run((const char *const *) argv->pdata);
+    mfd_host_tool_run((const char *const *) argv->pdata, result);
 }
 
 /**
  * mfd_restore_selinux_labels:
+ * @result: (nullable): where to report a failure of restorecon
  *
  * Give the files below our prefix the labels of the policy of the host. A file
  * we create gets the label of its directory, which is the wrong one if we had
  * to create that directory as well.
  */
 static void
-mfd_restore_selinux_labels(void)
+mfd_restore_selinux_labels(MfResult *result)
 {
     g_autofree char *units_dir = g_build_filename(MF_INTEGRATION_PREFIX, "lib", "systemd", NULL);
     g_autofree char *rules_dir = g_build_filename(MF_INTEGRATION_PREFIX, "lib", "udev", NULL);
     const char *const argv[] = {"restorecon", "-R", units_dir, rules_dir, NULL};
 
     if (g_file_test("/sys/fs/selinux/enforce", G_FILE_TEST_EXISTS))
-        mfd_host_tool_run(argv);
+        mfd_host_tool_run(argv, result);
 }
 
 /**
  * mfd_integrator_update_host_caches:
+ * @result: (nullable): where to report a failure of a tool
  *
  * Update the caches of the host that are built from our desktop entries and
  * MIME packages. A MIME package has no effect until update-mime-database has
@@ -994,7 +1000,7 @@ mfd_restore_selinux_labels(void)
  * the first application has installed a file of that kind.
  */
 static void
-mfd_integrator_update_host_caches(MfdIntegrator *integrator)
+mfd_integrator_update_host_caches(MfdIntegrator *integrator, MfResult *result)
 {
     const char *root = mf_store_get_path(integrator->store);
     g_autofree char *applications = g_build_filename(
@@ -1012,18 +1018,19 @@ mfd_integrator_update_host_caches(MfdIntegrator *integrator)
     if (mfd_is_directory(applications)) {
         const char *const argv[] = {"update-desktop-database", "--quiet", applications, NULL};
 
-        mfd_host_tool_run(argv);
+        mfd_host_tool_run(argv, result);
     }
     if (mfd_is_directory(packages)) {
         const char *const argv[] = {"update-mime-database", mime, NULL};
 
-        mfd_host_tool_run(argv);
+        mfd_host_tool_run(argv, result);
     }
 }
 
 /**
  * mfd_integrator_reconcile:
  * @integrator: an #MfdIntegrator
+ * @result: (nullable): where to report what goes wrong without failing this
  * @component_id: a component, which may not be installed anymore
  * @error: a #GError
  *
@@ -1041,7 +1048,10 @@ mfd_integrator_update_host_caches(MfdIntegrator *integrator)
  * Returns: %TRUE on success
  */
 gboolean
-mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GError **error)
+mfd_integrator_reconcile(MfdIntegrator *integrator,
+                         MfResult *result,
+                         const char *component_id,
+                         GError **error)
 {
     g_autoptr(MfdRegistry) registry = NULL;
     g_autoptr(MfComponent) current = NULL;
@@ -1078,7 +1088,7 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
     if (!has_registry && g_hash_table_size(wanted) == 0)
         return TRUE;
 
-    if (!mfd_integrator_drop_conflicts(integrator, component_id, wanted, error))
+    if (!mfd_integrator_drop_conflicts(integrator, result, component_id, wanted, error))
         return FALSE;
 
     /* add the new files to the registry before we change anything, so we can finish after a crash */
@@ -1108,7 +1118,7 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
     rules_changed = mfd_exports_have_kind(registry->exports, MF_INTEGRATION_KIND_UDEV_RULE);
 
     /* systemctl reads what enabling a unit has done from its file, so the file has to be there */
-    mfd_systemctl_run(disable_command, stale_units);
+    mfd_systemctl_run(disable_command, stale_units, result);
 
     g_hash_table_iter_init(&iter, wanted);
     while (g_hash_table_iter_next(&iter, NULL, &value)) {
@@ -1125,13 +1135,13 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
 
     /* we do this while the registry still says that we are not done, so that the next
      * operation updates the host if we crash here */
-    mfd_restore_selinux_labels();
+    mfd_restore_selinux_labels(result);
     if (units_changed)
-        mfd_host_tool_run(reload_units_argv);
-    mfd_systemctl_run(restart_command, kept_units);
+        mfd_host_tool_run(reload_units_argv, result);
+    mfd_systemctl_run(restart_command, kept_units, result);
     if (rules_changed)
-        mfd_host_tool_run(reload_rules_argv);
-    mfd_integrator_update_host_caches(integrator);
+        mfd_host_tool_run(reload_rules_argv, result);
+    mfd_integrator_update_host_caches(integrator, result);
 
     if (current == NULL || g_hash_table_size(wanted) == 0)
         return mfd_remove_if_exists(registry->path, error);
@@ -1148,7 +1158,7 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
  * look at the installed applications as well as the registries, as a crash
  * right after the first installation of an application leaves it without a
  * registry. A failure here is not the fault of the current operation, so we
- * only warn about it.
+ * only log it.
  */
 void
 mfd_integrator_reconcile_all(MfdIntegrator *integrator)
@@ -1174,7 +1184,7 @@ mfd_integrator_reconcile_all(MfdIntegrator *integrator)
     while (g_hash_table_iter_next(&iter, &key, NULL)) {
         g_autoptr(GError) reconcile_error = NULL;
 
-        if (!mfd_integrator_reconcile(integrator, key, &reconcile_error))
+        if (!mfd_integrator_reconcile(integrator, NULL, key, &reconcile_error))
             g_warning("Unable to update the host files of %s: %s",
                       (const char *) key,
                       reconcile_error->message);

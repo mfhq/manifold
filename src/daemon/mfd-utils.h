@@ -7,10 +7,15 @@
 #pragma once
 
 #include <glib.h>
+#include <manifold.h>
 
 #include "mf-utils-private.h"
 
 G_BEGIN_DECLS
+
+void     mfd_emit_warning(MfResult   *result,
+                          const char *format,
+                          ...) G_GNUC_PRINTF(2, 3);
 
 gboolean mfd_is_directory(const char *path);
 gboolean mfd_is_symlink(const char *path);
