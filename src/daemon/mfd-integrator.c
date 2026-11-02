@@ -540,10 +540,11 @@ mfd_integrator_build_file_path(MfdIntegrator *integrator, MfIntegrationFile *fil
 {
     const char *export_path = mf_integration_file_get_export_path(file);
 
-    /* the search paths of systemd are fixed, so units can not stay in our store */
+    /* the search paths of systemd and udev are fixed, so their files can not stay in our store */
     switch (mf_integration_file_get_kind(file)) {
     case MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM:
     case MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER:
+    case MF_INTEGRATION_KIND_UDEV_RULE:
         return g_build_filename(MF_INTEGRATION_PREFIX, export_path, NULL);
     default:
         return mfd_integrator_build_host_path(integrator, export_path);
@@ -564,10 +565,9 @@ mfd_integrator_kind_is_supported(MfIntegrationKind kind)
     case MF_INTEGRATION_KIND_MIME_PACKAGE:
     case MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM:
     case MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER:
+    case MF_INTEGRATION_KIND_UDEV_RULE:
         return TRUE;
     default:
-        /* TODO: Install udev rules. A caller already needs a polkit action of its own
-         * for them, as they can give an image root access to the host. */
         return FALSE;
     }
 }
@@ -876,21 +876,44 @@ mfd_host_tool_run(const char *const *argv)
 }
 
 /**
- * mfd_path_get_system_unit:
+ * mfd_path_get_name_of_kind:
  * @path: where a file is on the host
+ * @kind: a kind of file that we install below our prefix
  *
- * Returns: (nullable): the name of the unit, which is a part of @path, if the
- *   file is a unit of the system manager
+ * Returns: (nullable): the name of the file, which is a part of @path, if the
+ *   file is of this kind
  */
 static const char *
-mfd_path_get_system_unit(const char *path)
+mfd_path_get_name_of_kind(const char *path, MfIntegrationKind kind)
 {
     g_autofree char *dir = g_strconcat(MF_INTEGRATION_PREFIX "/",
-                                       mf_integration_kind_get_dir(MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM),
+                                       mf_integration_kind_get_dir(kind),
                                        "/",
                                        NULL);
 
     return g_str_has_prefix(path, dir) ? path + strlen(dir) : NULL;
+}
+
+/**
+ * mfd_exports_have_kind:
+ * @exports: (element-type utf8 MfdExport): a table of files
+ * @kind: a kind of file that we install below our prefix
+ *
+ * Returns: %TRUE if a file of this kind is among @exports
+ */
+static gboolean
+mfd_exports_have_kind(GHashTable *exports, MfIntegrationKind kind)
+{
+    GHashTableIter iter;
+    gpointer path;
+
+    g_hash_table_iter_init(&iter, exports);
+    while (g_hash_table_iter_next(&iter, &path, NULL)) {
+        if (mfd_path_get_name_of_kind(path, kind) != NULL)
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 /**
@@ -949,8 +972,9 @@ mfd_systemctl_run(const char *const *command, GPtrArray *units)
 static void
 mfd_restore_selinux_labels(void)
 {
-    g_autofree char *dir = g_build_filename(MF_INTEGRATION_PREFIX, "lib", "systemd", NULL);
-    const char *const argv[] = {"restorecon", "-R", dir, NULL};
+    g_autofree char *units_dir = g_build_filename(MF_INTEGRATION_PREFIX, "lib", "systemd", NULL);
+    g_autofree char *rules_dir = g_build_filename(MF_INTEGRATION_PREFIX, "lib", "udev", NULL);
+    const char *const argv[] = {"restorecon", "-R", units_dir, rules_dir, NULL};
 
     if (g_file_test("/sys/fs/selinux/enforce", G_FILE_TEST_EXISTS))
         mfd_host_tool_run(argv);
@@ -1010,7 +1034,9 @@ mfd_integrator_update_host_caches(MfdIntegrator *integrator)
  *
  * Services of a unit that goes away are stopped, and those of a unit that stays
  * are restarted, so that they run the current version. User managers find out
- * about new units with the next session of a user.
+ * about new units with the next session of a user. We reload the rules of udev,
+ * which applies them to devices that are added from then on: we do not trigger
+ * events for existing devices, as that would change the state of running devices.
  *
  * Returns: %TRUE on success
  */
@@ -1025,8 +1051,10 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
     g_autoptr(GPtrArray) kept_units = g_ptr_array_new_with_free_func(g_free);
     const char *const disable_command[] = {"disable", "--now", NULL};
     const char *const restart_command[] = {"try-restart", NULL};
-    const char *const reload_argv[] = {"systemctl", "daemon-reload", NULL};
+    const char *const reload_units_argv[] = {"systemctl", "daemon-reload", NULL};
+    const char *const reload_rules_argv[] = {"udevadm", "control", "--reload", NULL};
     gboolean units_changed;
+    gboolean rules_changed;
     gboolean has_registry;
     GHashTableIter iter;
     gpointer value;
@@ -1058,7 +1086,7 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
     g_hash_table_iter_init(&iter, registry->exports);
     while (g_hash_table_iter_next(&iter, NULL, &value)) {
         MfdExport *export = value;
-        const char *unit = mfd_path_get_system_unit(export->path);
+        const char *unit = mfd_path_get_name_of_kind(export->path, MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM);
 
         if (g_hash_table_contains(wanted, export->path)) {
             if (unit != NULL)
@@ -1069,16 +1097,15 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
         if (unit != NULL)
             g_ptr_array_add(stale_units, g_strdup(unit));
     }
-    units_changed = stale_units->len > 0;
     g_hash_table_iter_init(&iter, wanted);
-    while (g_hash_table_iter_next(&iter, NULL, &value)) {
-        MfdExport *export = value;
-
-        units_changed = units_changed || mfd_path_get_system_unit(export->path) != NULL;
-        mfd_exports_add(registry->exports, mfd_export_copy(export));
-    }
+    while (g_hash_table_iter_next(&iter, NULL, &value))
+        mfd_exports_add(registry->exports, mfd_export_copy(value));
     if (!mfd_registry_save(registry, error))
         return FALSE;
+
+    /* the registry now lists the files of both versions, some of which we are about to remove */
+    units_changed = mfd_exports_have_kind(registry->exports, MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM);
+    rules_changed = mfd_exports_have_kind(registry->exports, MF_INTEGRATION_KIND_UDEV_RULE);
 
     /* systemctl reads what enabling a unit has done from its file, so the file has to be there */
     mfd_systemctl_run(disable_command, stale_units);
@@ -1100,8 +1127,10 @@ mfd_integrator_reconcile(MfdIntegrator *integrator, const char *component_id, GE
      * operation updates the host if we crash here */
     mfd_restore_selinux_labels();
     if (units_changed)
-        mfd_host_tool_run(reload_argv);
+        mfd_host_tool_run(reload_units_argv);
     mfd_systemctl_run(restart_command, kept_units);
+    if (rules_changed)
+        mfd_host_tool_run(reload_rules_argv);
     mfd_integrator_update_host_caches(integrator);
 
     if (current == NULL || g_hash_table_size(wanted) == 0)
