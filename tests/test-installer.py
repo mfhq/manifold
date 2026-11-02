@@ -66,6 +66,7 @@ class InstallerTest(unittest.TestCase):
         cls.work = tempfile.mkdtemp(prefix='manifold-test-')
         cls.system_units = f'{ARGS.integration_prefix}/lib/systemd/system'
         cls.user_units = f'{ARGS.integration_prefix}/lib/systemd/user'
+        cls.udev_rules = f'{ARGS.integration_prefix}/lib/udev/rules.d'
         cls.stub_host_tools()
         cls.daemon = Daemon(ARGS.daemon, SOCKET, os.path.join(cls.work, 'manifoldd.log'))
         cls.daemon.start()
@@ -95,7 +96,7 @@ class InstallerTest(unittest.TestCase):
         cls.fail_host_tools = os.path.join(cls.work, 'fail-host-tools')
         stubs = os.path.join(cls.work, 'bin')
         os.mkdir(stubs)
-        for tool in ('update-desktop-database', 'update-mime-database', 'systemctl'):
+        for tool in ('update-desktop-database', 'update-mime-database', 'systemctl', 'udevadm'):
             with open(os.path.join(stubs, tool), 'w', encoding='utf-8') as f:
                 f.write(
                     '#!/bin/sh\n'
@@ -127,9 +128,9 @@ class InstallerTest(unittest.TestCase):
             shutil.rmtree(os.path.join(STORE, name))
         for name in ('images/by-verity', 'apps', 'plugins', 'runtimes'):
             os.makedirs(os.path.join(STORE, name))
-        units = os.path.dirname(self.system_units)
-        for name in os.listdir(units):
-            shutil.rmtree(os.path.join(units, name))
+        for directory in (os.path.dirname(self.system_units), os.path.dirname(self.udev_rules)):
+            for name in os.listdir(directory):
+                shutil.rmtree(os.path.join(directory, name))
         self.host_tool_calls()
 
     def host_tool_calls(self):
@@ -280,6 +281,13 @@ class InstallerTest(unittest.TestCase):
         self.assertIn(f'core     {CORE_ID} ', out)
         self.assertIn('sdk current manual', out)
         self.assertIn('Nothing is installed', self.manifold('list', '--kind', 'app'))
+
+    def test_finished_call_leaves_no_request_behind(self):
+        start = self.daemon.log_size()
+        self.manifold('install', self.core_bundle)
+        # the daemon sees the first client leave before it replies to this one
+        self.manifold('cleanup')
+        self.assertNotIn('disconnected before', self.daemon.read_log(start))
 
     def test_app_needs_its_core(self):
         self.assertIn(
@@ -1066,6 +1074,32 @@ class InstallerTest(unittest.TestCase):
         self.manifold('remove', APP_ID)
         self.assertEqual(self.host_tool_calls(), [])
         self.assertEqual(os.listdir(self.user_units), [])
+
+    def test_udev_rules_follow_the_current_version(self):
+        self.manifold('install', self.core_bundle)
+        name = f'60-{APP_ID}.rules'
+        rule = b'KERNEL=="null", TAG+="app"\n'
+        with_rule = Image(
+            APP_ID,
+            'app',
+            '0.1.0',
+            base=self.kit,
+            integration={'udev-rule': {f'/app/lib/udev/rules.d/{name}': rule}},
+        )
+
+        # existing devices are left alone, so nothing triggers them
+        self.manifold('install', self.bundle('with-rule', [self.kit, with_rule]))
+        self.assertEqual(self.host_tool_calls(), ['udevadm control --reload'])
+        self.assertEqual(self.read_export(f'{self.udev_rules}/{name}'), rule)
+        self.assertEqual(os.stat(f'{self.udev_rules}/{name}').st_mode & 0o777, 0o644)
+
+        without_rule = self.integrated_app('0.2.0')
+        self.manifold('install', self.bundle('without-rule', [self.kit, without_rule]))
+        self.assertIn('udevadm control --reload', self.host_tool_calls())
+        self.assertEqual(os.listdir(self.udev_rules), [])
+
+        self.manifold('remove', APP_ID)
+        self.assertNotIn('udevadm control --reload', self.host_tool_calls())
 
     def test_unit_of_the_host_refuses_installation(self):
         self.manifold('install', self.core_bundle)
