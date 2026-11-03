@@ -23,6 +23,7 @@
 #include <mf-progress.h>
 #include <mf-result.h>
 #include <mf-manager.h>
+#include <mf-zchunk.h>
 
 #undef __MANIFOLD_H_INSIDE__
 

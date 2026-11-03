@@ -64,6 +64,15 @@ test('signer',
     suite: 'unit',
 )
 
+test('zchunk',
+    executable('test-zchunk',
+        ['test-zchunk.c'],
+        include_directories: [root_inc_dir],
+        dependencies: [manifold_dep, mft_test_utils_dep, blake3_dep, zck_dep, zstd_dep],
+    ),
+    suite: 'unit',
+)
+
 test('store-read',
     executable('test-store-read',
         ['test-store-read.c'],
