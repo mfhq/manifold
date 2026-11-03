@@ -70,4 +70,10 @@ gboolean       mf_bundle_verify_image(MfBundle          *bundle,
                                       gpointer           user_data,
                                       GError           **error);
 
+char         **mf_bundle_list_media_files(MfBundle *bundle);
+gboolean       mf_bundle_copy_media_file(MfBundle   *bundle,
+                                         const char *name,
+                                         int         dest_fd,
+                                         GError    **error);
+
 G_END_DECLS
