@@ -914,10 +914,12 @@ test_sign_file(Fixture *f, gconstpointer user_data)
     g_autofree char *other_key = NULL;
     g_autoptr(MfSigner) signer = NULL;
     g_autoptr(MfSigner) other_signer = NULL;
+    g_autoptr(MfTrustedKeys) keys = NULL;
     g_autoptr(MfBundle) bundle = NULL;
     g_autoptr(GBytes) index = NULL;
     g_autoptr(GBytes) signature = NULL;
     g_autoptr(GBytes) new_signature = NULL;
+    g_autofree char *fingerprint = NULL;
     g_autoptr(GError) error = NULL;
 
     if (ssh_keygen == NULL) {
@@ -942,6 +944,14 @@ test_sign_file(Fixture *f, gconstpointer user_data)
     signature = mft_read_zip_entry(path, "index.json.sig");
     mft_check_signature(f->dir, "manifold.bundle", index, signature);
 
+    /* the signature is valid for the key of the signer */
+    keys = mf_trusted_keys_new();
+    g_assert_true(mf_trusted_keys_add_key(keys, mf_signer_get_public_key(signer), &error));
+    g_assert_no_error(error);
+    g_assert_true(mf_bundle_verify_signature(bundle, keys, &fingerprint, &error));
+    g_assert_no_error(error);
+    g_assert_cmpstr(fingerprint, ==, mf_signer_get_fingerprint(signer));
+
     /* signing again replaces the signature */
     other_key = mft_make_key(f->dir, "other-key");
     other_signer = mf_signer_new_for_key_file(other_key);
@@ -952,6 +962,14 @@ test_sign_file(Fixture *f, gconstpointer user_data)
     g_assert_false(g_bytes_equal(signature, new_signature));
     mft_check_signature(f->dir, "manifold.bundle", index, new_signature);
 
+    /* the other key is not trusted */
+    g_clear_object(&bundle);
+    bundle = mft_open_bundle(path, &error);
+    g_assert_no_error(error);
+    g_assert_false(mf_bundle_verify_signature(bundle, keys, NULL, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
+    g_clear_error(&error);
+
     /* a signature does not survive without a signer */
     g_assert_true(mft_sign_file(path, NULL, &error));
     g_assert_no_error(error);
@@ -959,6 +977,8 @@ test_sign_file(Fixture *f, gconstpointer user_data)
     bundle = mft_open_bundle(path, &error);
     g_assert_no_error(error);
     g_assert_false(mf_bundle_is_signed(bundle));
+    g_assert_false(mf_bundle_verify_signature(bundle, keys, NULL, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
 }
 
 /**
