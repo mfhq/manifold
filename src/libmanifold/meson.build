@@ -21,6 +21,7 @@ mflib_src = [
     'mf-trusted-keys.c',
     'mf-utils.c',
     'mf-version.c',
+    'mf-zchunk.c',
 ]
 
 mflib_pub_headers = [
@@ -38,6 +39,7 @@ mflib_pub_headers = [
     'mf-store.h',
     'mf-trusted-keys.h',
     'mf-utils.h',
+    'mf-zchunk.h',
 ]
 
 mflib_priv_headers = [
@@ -53,6 +55,7 @@ mflib_priv_headers = [
     'mf-store-private.h',
     'mf-sdautoptr-private.h',
     'mf-utils-private.h',
+    'mf-zchunk-private.h',
 ]
 
 version_parts = mf_version.split('.')
@@ -83,6 +86,8 @@ manifold_lib = library('manifold',
         libzip_dep,
         blake3_dep,
         appstream_dep,
+        zck_dep,
+        zstd_dep,
     ],
     # give every function and variable a section of its own, so the linker can drop unused ones
     # when linking against manifold_static_lib
@@ -108,7 +113,7 @@ manifold_dep = declare_dependency(
 #
 # We link manifold-rund against a static copy of libmanifold with --gc-sections, so the linker
 # drops all library code the daemon does not use. That includes all code calling into AppStream,
-# blake3 or libzip, so manifold-rund loads neither these three libraries.
+# blake3, libzip, zchunk or zstd, so manifold-rund loads none of these libraries.
 # NOTE: GNU ld decides which libraries are needed before it drops unused code, so our potentially
 # unused dependencies must not be on the link line at all. We therefore build the static library
 # from the objects of the shared one to avoid Meson auto-adding them.
