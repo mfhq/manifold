@@ -151,7 +151,24 @@ typedef struct {
     GPtrArray *images; /* of MfBundleImage */
     GBytes *index_data;
     GBytes *signature_data; /* the signature over the index, if there is one */
+    GHashTable *media;      /* name below the media directory -> MfBundleMediaFile */
 } MfBundlePrivate;
+
+/* a screenshot or video of the catalog, which we only read when it is copied out */
+typedef struct {
+    guint64 index; /* the index of the file in the archive */
+    guint64 size;
+    char *sha256;
+    char *blake3;
+} MfBundleMediaFile;
+
+static void
+mf_bundle_media_file_free(MfBundleMediaFile *file)
+{
+    g_free(file->sha256);
+    g_free(file->blake3);
+    g_free(file);
+}
 
 G_DEFINE_TYPE_WITH_PRIVATE(MfBundle, mf_bundle, G_TYPE_OBJECT)
 
@@ -167,6 +184,7 @@ mf_bundle_finalize(GObject *object)
     g_clear_pointer(&priv->images, g_ptr_array_unref);
     g_clear_pointer(&priv->index_data, g_bytes_unref);
     g_clear_pointer(&priv->signature_data, g_bytes_unref);
+    g_clear_pointer(&priv->media, g_hash_table_unref);
 
     G_OBJECT_CLASS(mf_bundle_parent_class)->finalize(object);
 }
@@ -183,6 +201,10 @@ mf_bundle_init(MfBundle *bundle)
     auto priv = GET_PRIVATE(bundle);
 
     priv->images = g_ptr_array_new_with_free_func(g_object_unref);
+    priv->media = g_hash_table_new_full(g_str_hash,
+                                        g_str_equal,
+                                        g_free,
+                                        (GDestroyNotify) mf_bundle_media_file_free);
 }
 
 void
@@ -329,6 +351,7 @@ mf_zip_read_entry(zip_t *zip, guint64 index, const char *name, guint64 *budget, 
 /**
  * mf_zip_hash_entry:
  * @size_max: we stop reading after this many bytes
+ * @dest_fd: file descriptor to write the file to, or -1 to only hash it
  *
  * Compute the size and hashes of a file of the bundle, without keeping it in memory.
  */
@@ -337,6 +360,7 @@ mf_zip_hash_entry(zip_t *zip,
                   guint64 index,
                   const char *name,
                   guint64 size_max,
+                  int dest_fd,
                   guint64 *ret_size,
                   char **ret_sha256,
                   char **ret_blake3,
@@ -369,6 +393,10 @@ mf_zip_hash_entry(zip_t *zip,
         total += (guint64) n;
         g_checksum_update(checksum, (const guchar *) buffer, (gsize) n);
         blake3_hasher_update(&hasher, buffer, (gsize) n);
+        if (dest_fd >= 0 && !mf_write_all(dest_fd, buffer, (gsize) n, error)) {
+            zip_fclose(file);
+            return FALSE;
+        }
     }
     zip_fclose(file);
 
@@ -502,6 +530,7 @@ mf_bundle_reader_verify_indexed_file(MfBundleReader *reader,
                                archive_entry->index,
                                name,
                                size,
+                               -1,
                                &actual_size,
                                &actual_sha256,
                                &actual_blake3,
@@ -523,6 +552,17 @@ mf_bundle_reader_verify_indexed_file(MfBundleReader *reader,
                     _("%s does not match what the index records"),
                     name);
         return FALSE;
+    }
+
+    /* remember where a media file is and what it has to be, so it can be checked again when it is copied */
+    if (g_str_has_prefix(name, MF_BUNDLE_CATALOG_MEDIA_PREFIX)) {
+        MfBundleMediaFile *media_file = g_new0(MfBundleMediaFile, 1);
+
+        media_file->index = archive_entry->index;
+        media_file->size = size;
+        media_file->sha256 = g_strdup(expected_sha256);
+        media_file->blake3 = g_strdup(expected_blake3);
+        g_hash_table_insert(priv->media, g_strdup(name + strlen(MF_BUNDLE_CATALOG_MEDIA_PREFIX)), media_file);
     }
 
     *ret_name = g_strdup(name);
@@ -1166,6 +1206,94 @@ mf_bundle_get_index_data(MfBundle *bundle)
     MfBundlePrivate *priv = GET_PRIVATE(bundle);
 
     return priv->index_data;
+}
+
+/**
+ * mf_bundle_list_media_files:
+ * @bundle: an #MfBundle
+ *
+ * Find the screenshots and videos of the catalog of the bundle. Their names
+ * are relative to the media directory of the catalog, which is how the
+ * catalog refers to them.
+ *
+ * Returns: (transfer full) (array zero-terminated=1): the names of the media files, sorted
+ */
+char **
+mf_bundle_list_media_files(MfBundle *bundle)
+{
+    GPtrArray *names;
+    GHashTableIter iter;
+    gpointer name;
+
+    g_return_val_if_fail(MF_IS_BUNDLE(bundle), NULL);
+
+    auto priv = GET_PRIVATE(bundle);
+
+    names = g_ptr_array_sized_new(g_hash_table_size(priv->media) + 1);
+    g_hash_table_iter_init(&iter, priv->media);
+    while (g_hash_table_iter_next(&iter, &name, NULL))
+        g_ptr_array_add(names, g_strdup(name));
+    g_ptr_array_sort_values(names, (GCompareFunc) g_strcmp0);
+    g_ptr_array_add(names, NULL);
+
+    return (char **) g_ptr_array_free(names, FALSE);
+}
+
+/**
+ * mf_bundle_copy_media_file:
+ * @bundle: an #MfBundle
+ * @name: the name of a media file, as mf_bundle_list_media_files() returns it
+ * @dest_fd: file descriptor to write the file to
+ * @error: a #GError
+ *
+ * Copy a screenshot or video out of the bundle, verifying it against the index
+ * on the way. If the verification fails, what was written is invalid and should be discarded.
+ *
+ * Returns: %TRUE if the file was copied and verified
+ */
+gboolean
+mf_bundle_copy_media_file(MfBundle *bundle, const char *name, int dest_fd, GError **error)
+{
+    g_autofree char *sha256 = NULL;
+    g_autofree char *blake3 = NULL;
+    g_autofree char *entry_name = NULL;
+    MfBundleMediaFile *media_file;
+    guint64 size;
+
+    g_return_val_if_fail(MF_IS_BUNDLE(bundle), FALSE);
+    g_return_val_if_fail(name != NULL, FALSE);
+    g_return_val_if_fail(dest_fd >= 0, FALSE);
+
+    auto priv = GET_PRIVATE(bundle);
+
+    media_file = g_hash_table_lookup(priv->media, name);
+    if (media_file == NULL) {
+        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("The bundle has no media file %s"), name);
+        return FALSE;
+    }
+
+    entry_name = g_strconcat(MF_BUNDLE_CATALOG_MEDIA_PREFIX, name, NULL);
+    if (!mf_zip_hash_entry(priv->zip,
+                           media_file->index,
+                           entry_name,
+                           media_file->size,
+                           dest_fd,
+                           &size,
+                           &sha256,
+                           &blake3,
+                           error))
+        return FALSE;
+    if (size != media_file->size || g_strcmp0(sha256, media_file->sha256) != 0 ||
+        g_strcmp0(blake3, media_file->blake3) != 0) {
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_VERIFICATION_FAILED,
+                    _("%s does not match what the index records"),
+                    entry_name);
+        return FALSE;
+    }
+
+    return TRUE;
 }
 
 /**

@@ -373,8 +373,13 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
     g_autofree char *expected_blake3 = mft_blake3_of_bytes(f->app.data);
     g_autofree char *expected_verity = mft_fake_hash(expected_sha256);
     g_autofree char *kit_identity = mft_fake_hash(TEST_KIT_ID);
+    g_autofree char *media_copy = g_build_filename(f->dir, "screenshot.jxl", NULL);
+    g_autofree char *media_data = NULL;
+    g_auto(GStrv) media = NULL;
+    gsize media_size;
     GHashTable *icons;
     GBytes *icon;
+    int fd;
 
     g_assert_no_error(error);
     g_assert_true(mf_bundle_is_signed(bundle));
@@ -425,6 +430,20 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
     g_assert_cmpuint(g_hash_table_size(mf_bundle_image_get_icons(mft_find_image(bundle, TEST_KIT_ID))),
                      ==,
                      0);
+
+    /* media files are named the way the catalog refers to them, and verified while they are copied */
+    media = mf_bundle_list_media_files(bundle);
+    g_assert_cmpuint(g_strv_length(media), ==, 1);
+    g_assert_cmpstr(media[0], ==, TEST_APP_ID "/screenshot.jxl");
+    fd = open(media_copy, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+    g_assert_cmpint(fd, >=, 0);
+    g_assert_true(mf_bundle_copy_media_file(bundle, media[0], fd, &error));
+    g_assert_no_error(error);
+    g_assert_false(mf_bundle_copy_media_file(bundle, "missing.jxl", fd, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
+    close(fd);
+    g_assert_true(g_file_get_contents(media_copy, &media_data, &media_size, NULL));
+    g_assert_cmpmem(media_data, media_size, JXL_DATA, sizeof(JXL_DATA));
 }
 
 /**
