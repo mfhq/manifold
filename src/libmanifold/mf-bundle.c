@@ -150,7 +150,7 @@ typedef struct {
     zip_t *zip;
     GPtrArray *images; /* of MfBundleImage */
     GBytes *index_data;
-    gboolean is_signed;
+    GBytes *signature_data; /* the signature over the index, if there is one */
 } MfBundlePrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE(MfBundle, mf_bundle, G_TYPE_OBJECT)
@@ -166,6 +166,7 @@ mf_bundle_finalize(GObject *object)
         zip_discard(priv->zip);
     g_clear_pointer(&priv->images, g_ptr_array_unref);
     g_clear_pointer(&priv->index_data, g_bytes_unref);
+    g_clear_pointer(&priv->signature_data, g_bytes_unref);
 
     G_OBJECT_CLASS(mf_bundle_parent_class)->finalize(object);
 }
@@ -996,9 +997,16 @@ mf_bundle_new_from_fd(int fd, GError **error)
 
     /* the index cannot list its own signature, which is made over the index */
     signature_entry = g_hash_table_lookup(reader.entries, MF_BUNDLE_SIGNATURE_NAME);
-    if (signature_entry != NULL)
+    if (signature_entry != NULL) {
         signature_entry->referenced = TRUE;
-    priv->is_signed = signature_entry != NULL;
+        priv->signature_data = mf_zip_read_entry(priv->zip,
+                                                 signature_entry->index,
+                                                 MF_BUNDLE_SIGNATURE_NAME,
+                                                 &reader.budget,
+                                                 error);
+        if (priv->signature_data == NULL)
+            return NULL;
+    }
 
     if (!mf_bundle_reader_read_index(&reader, error))
         return NULL;
@@ -1110,7 +1118,41 @@ mf_bundle_is_signed(MfBundle *bundle)
 {
     g_return_val_if_fail(MF_IS_BUNDLE(bundle), FALSE);
     auto priv = GET_PRIVATE(bundle);
-    return priv->is_signed;
+    return priv->signature_data != NULL;
+}
+
+/**
+ * mf_bundle_verify_signature:
+ * @bundle: an #MfBundle
+ * @keys: the keys that are trusted to sign the bundle
+ * @fingerprint: (out) (optional) (transfer full): the fingerprint of the key that signed the bundle
+ * @error: a #GError
+ *
+ * Check that one of @keys signed the bundle. The signature covers the index,
+ * and through the hashes in the index and in the manifests, everything else
+ * in the bundle.
+ *
+ * Returns: %TRUE if a trusted key signed the bundle
+ */
+gboolean
+mf_bundle_verify_signature(MfBundle *bundle, MfTrustedKeys *keys, char **fingerprint, GError **error)
+{
+    g_return_val_if_fail(MF_IS_BUNDLE(bundle), FALSE);
+    g_return_val_if_fail(MF_IS_TRUSTED_KEYS(keys), FALSE);
+
+    auto priv = GET_PRIVATE(bundle);
+
+    if (priv->signature_data == NULL) {
+        g_set_error_literal(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED, _("The bundle is not signed"));
+        return FALSE;
+    }
+
+    return mf_trusted_keys_verify(keys,
+                                  MF_SIGNATURE_SCOPE_BUNDLE,
+                                  priv->index_data,
+                                  priv->signature_data,
+                                  fingerprint,
+                                  error);
 }
 
 /**
