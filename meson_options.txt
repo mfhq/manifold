@@ -3,7 +3,7 @@
 #
 option('gir',
        type : 'feature',
-       value : 'auto',
+       value : 'enabled',
        description : 'Generate GObject introspection data for libmanifold'
 )
 option('apparmor',

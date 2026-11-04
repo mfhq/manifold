@@ -12,6 +12,7 @@
 #include <glib/gi18n-lib.h>
 #include <systemd/sd-json.h>
 
+#include "mf-component-private.h"
 #include "mf-error.h"
 #include "mf-integration-private.h"
 #include "mf-json-private.h"
@@ -76,6 +77,7 @@ typedef struct {
     char *content_hash;
 
     char *base_id; /* NULL for a core */
+    MfComponentKind base_kind;
     char *base_version;
     guint64 base_revision;
     char *base_identity;
@@ -211,11 +213,39 @@ mf_manifest_json_get_version(sd_json_variant *object, const char *section, GErro
 }
 
 /**
+ * mf_manifest_json_get_kind:
+ *
+ * Get a field that holds the kind of a component, and check that we know it.
+ *
+ * Returns: the kind, or %MF_COMPONENT_KIND_UNKNOWN on error
+ */
+static MfComponentKind
+mf_manifest_json_get_kind(sd_json_variant *object, const char *section, GError **error)
+{
+    const char *value = FIELD_STRING(object, section, "kind", error);
+    g_autofree char *shown = NULL;
+    g_autofree char *message = NULL;
+    MfComponentKind kind;
+
+    if (value == NULL)
+        return MF_COMPONENT_KIND_UNKNOWN;
+    kind = mf_component_kind_from_string(value);
+    if (kind != MF_COMPONENT_KIND_UNKNOWN)
+        return kind;
+
+    shown = g_strescape(value, NULL);
+    /* TRANSLATORS: "kind" is a field of the manifest, and not translated, %s is its value */
+    message = g_strdup_printf(_("kind %s is not known"), shown);
+    mf_set_error_invalid_manifest(error, "%s%s%s", section ? section : "", section ? ": " : "", message);
+    return MF_COMPONENT_KIND_UNKNOWN;
+}
+
+/**
  * mf_manifest_json_parse_base:
  *
  * Parse the base section of a manifest, which names what the image was built
  * on: by its identity, and by its ID, version and revision, which an exact
- * base link names.
+ * base link names. Its kind tells what the base is before anyone has found it.
  */
 static gboolean
 mf_manifest_json_parse_base(sd_json_variant *manifest, MfManifestPrivate *priv, GError **error)
@@ -235,6 +265,9 @@ mf_manifest_json_parse_base(sd_json_variant *manifest, MfManifestPrivate *priv, 
         return FALSE;
     priv->base_id = mf_manifest_json_get_component_id(base, "base", error);
     if (priv->base_id == NULL)
+        return FALSE;
+    priv->base_kind = mf_manifest_json_get_kind(base, "base", error);
+    if (priv->base_kind == MF_COMPONENT_KIND_UNKNOWN)
         return FALSE;
     priv->base_version = mf_manifest_json_get_version(base, "base", error);
     if (priv->base_version == NULL)
@@ -309,7 +342,6 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
     sd_json_variant *app;
     sd_json_variant *integration;
     const char *data;
-    const char *value;
     guint64 format;
     gsize size;
 
@@ -335,17 +367,9 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
     if (priv->component_id == NULL)
         return FALSE;
 
-    value = FIELD_STRING(jo, NULL, "kind", error);
-    if (value == NULL)
+    priv->kind = mf_manifest_json_get_kind(jo, NULL, error);
+    if (priv->kind == MF_COMPONENT_KIND_UNKNOWN)
         return FALSE;
-    priv->kind = mf_component_kind_from_string(value);
-    if (priv->kind == MF_COMPONENT_KIND_UNKNOWN) {
-        g_autofree char *shown = g_strescape(value, NULL);
-
-        /* TRANSLATORS: "kind" is a field of the manifest, and not translated, %s is its value */
-        mf_set_error_invalid_manifest(error, _("kind %s is not known"), shown);
-        return FALSE;
-    }
 
     priv->version = mf_manifest_json_get_version(jo, NULL, error);
     if (priv->version == NULL)
@@ -380,6 +404,21 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
                                       /* TRANSLATORS: %s is the kind of the component, like "app" or "kit" */
                                       _("a %s must name the layer it is built on"),
                                       mf_component_kind_to_string(priv->kind));
+        return FALSE;
+    }
+    /* we do not read whether the base is an SDK, which only matters for an SDK on its own
+     * kind, and that extends a component that is no SDK */
+    if (priv->base_id != NULL &&
+        !mf_component_kind_can_build_on(priv->kind, priv->sdk, priv->base_kind, FALSE)) {
+        mf_set_error_invalid_manifest(
+            error,
+            /* TRANSLATORS: the kind and ID of the component, then the kind and ID of its base */
+            _("%s%s %s can not build on %s %s"),
+            mf_component_kind_to_string(priv->kind),
+            priv->sdk ? " SDK" : "",
+            priv->component_id,
+            mf_component_kind_to_string(priv->base_kind),
+            priv->base_id);
         return FALSE;
     }
 
@@ -631,6 +670,21 @@ mf_manifest_get_base_id(MfManifest *manifest)
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
     auto priv = GET_PRIVATE(manifest);
     return priv->base_id;
+}
+
+/**
+ * mf_manifest_get_base_kind:
+ * @manifest: an #MfManifest
+ *
+ * Returns: the kind of the component the image was built on,
+ *          or %MF_COMPONENT_KIND_UNKNOWN if the image is a core
+ */
+MfComponentKind
+mf_manifest_get_base_kind(MfManifest *manifest)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), MF_COMPONENT_KIND_UNKNOWN);
+    auto priv = GET_PRIVATE(manifest);
+    return priv->base_kind;
 }
 
 /**

@@ -222,17 +222,20 @@ mft_manifest_json(const MftTestManifest *m)
     if (m->base_id != NULL) {
         g_autofree char *base_identity = mft_fake_hash(m->base_id);
 
+        g_assert_nonnull(m->base_kind);
         /* clang-format off */
         base = g_strdup_printf(
             ",\n"
             "   \"base\": {\n"
             "      \"component\": \"%s\",\n"
+            "      \"kind\": \"%s\",\n"
             "      \"version\": \"%s\",\n"
             "      \"revision\": %" G_GUINT64_FORMAT ",\n"
             "      \"identity\": \"%s\",\n"
             "      \"content-hash\": \"%s\"\n"
             "   }",
             m->base_id,
+            m->base_kind,
             m->base_version != NULL ? m->base_version : "1",
             m->base_revision != 0 ? m->base_revision : 1,
             base_identity,
