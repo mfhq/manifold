@@ -668,6 +668,66 @@ mf_bundle_image_collect_icons(MfBundleImage *image,
 }
 
 /**
+ * mf_bundle_image_check_media_url:
+ *
+ * Check that a screenshot or video URL names one of the media files of the bundle.
+ */
+static gboolean
+mf_bundle_image_check_media_url(MfBundleImage *image, const char *url, GHashTable *media, GError **error)
+{
+    g_autofree char *shown = NULL;
+
+    if (url != NULL && g_hash_table_contains(media, url))
+        return TRUE;
+
+    shown = g_strescape(url != NULL ? url : "", NULL);
+    g_set_error(error,
+                MF_ERROR,
+                MF_ERROR_INVALID_BUNDLE,
+                /* TRANSLATORS: the URL of a screenshot, and the component it belongs to */
+                _("The screenshot %s of %s is not in the bundle"),
+                shown,
+                mf_manifest_get_component_id(image->manifest));
+    return FALSE;
+}
+
+/**
+ * mf_bundle_image_check_media:
+ * @media: the media files of the bundle, by their name below the media directory
+ *
+ * Check that the screenshots and videos of the component of an image are files
+ * of the bundle. The catalog refers to them relative to its media directory,
+ * and wherever the catalog ends up names that directory, so a URL that points
+ * anywhere else does not work.
+ */
+static gboolean
+mf_bundle_image_check_media(MfBundleImage *image, AsComponent *component, GHashTable *media, GError **error)
+{
+    GPtrArray *screenshots = as_component_get_screenshots_all(component);
+
+    for (guint i = 0; i < screenshots->len; i++) {
+        AsScreenshot *screenshot = g_ptr_array_index(screenshots, i);
+        GPtrArray *images = as_screenshot_get_images_all(screenshot);
+        GPtrArray *videos = as_screenshot_get_videos_all(screenshot);
+
+        for (guint j = 0; j < images->len; j++) {
+            AsImage *media_image = g_ptr_array_index(images, j);
+
+            if (!mf_bundle_image_check_media_url(image, as_image_get_url(media_image), media, error))
+                return FALSE;
+        }
+        for (guint j = 0; j < videos->len; j++) {
+            AsVideo *video = g_ptr_array_index(videos, j);
+
+            if (!mf_bundle_image_check_media_url(image, as_video_get_url(video), media, error))
+                return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+/**
  * mf_bundle_image_make_catalog:
  *
  * Write the component of an image as catalog XML of its own, with the
@@ -704,8 +764,9 @@ mf_bundle_image_make_catalog(MfBundleImage *image, AsComponent *component, GErro
  * @contents: the files the index lists, by name
  *
  * Parse the catalog of the bundle, and give every image its component and
- * icons. A component names its image with the ID of its Manifold bundle,
- * and every image has exactly one component.
+ * icons, after checking that its screenshots are in the bundle. A component
+ * names its image with the ID of its Manifold bundle, and every image has
+ * exactly one component.
  */
 static gboolean
 mf_bundle_reader_read_catalog(MfBundleReader *reader, GHashTable *contents, GError **error)
@@ -726,6 +787,8 @@ mf_bundle_reader_read_catalog(MfBundleReader *reader, GHashTable *contents, GErr
     }
     as_metadata_set_locale(metadata, "ALL");
     as_metadata_set_format_style(metadata, AS_FORMAT_STYLE_CATALOG);
+    /* screenshots are relative to the media directory, whatever base URL the catalog names */
+    as_metadata_set_parse_flags(metadata, AS_PARSE_FLAG_IGNORE_MEDIABASEURL);
     if (!as_metadata_parse_bytes(metadata, catalog, AS_FORMAT_KIND_XML, &local_error)) {
         g_set_error(error,
                     MF_ERROR,
@@ -784,6 +847,8 @@ mf_bundle_reader_read_catalog(MfBundleReader *reader, GHashTable *contents, GErr
         }
 
         if (!mf_bundle_image_collect_icons(image, component, contents, error))
+            return FALSE;
+        if (!mf_bundle_image_check_media(image, component, priv->media, error))
             return FALSE;
         image->catalog = mf_bundle_image_make_catalog(image, component, error);
         if (image->catalog == NULL)
