@@ -48,6 +48,8 @@ typedef struct {
     gboolean corrupt_media;
     /* the URL the catalog gives the screenshot of the app, instead of its file */
     const char *screenshot_url;
+    /* another icon element for the app */
+    const char *extra_icon;
 } BundleFlaws;
 
 /* the start of a JPEG XL codestream */
@@ -202,10 +204,13 @@ mft_write_catalog(zip_t *zip, GString *index, const TestImage *const *images, co
 
             extra = g_strdup_printf(
                 "<icon type=\"cached\" width=\"64\" height=\"64\">%s.jxl</icon>"
+                "<icon type=\"stock\">%s</icon>%s"
                 "<screenshots><screenshot type=\"default\">"
                 "<image type=\"source\">%s</image>"
                 "</screenshot></screenshots>",
                 image->component_id,
+                image->component_id,
+                flaws->extra_icon != NULL ? flaws->extra_icon : "",
                 flaws->screenshot_url != NULL ? flaws->screenshot_url : screenshot_url);
             if (flaws->bad_icon)
                 mft_add_file(zip, index, icon_name, "not an image", strlen("not an image"));
@@ -740,30 +745,40 @@ test_bad_icon(Fixture *f, gconstpointer user_data)
 }
 
 /**
- * test_media_elsewhere:
+ * test_refers_elsewhere:
  *
- * A catalog may only refer to screenshots of the bundle.
+ * A catalog may only refer to icons and screenshots of the bundle.
  */
 static void
-test_media_elsewhere(Fixture *f, gconstpointer user_data)
+test_refers_elsewhere(Fixture *f, gconstpointer user_data)
 {
-    static const char *const urls[] = {"https://example.org/screenshot.jxl", TEST_APP_ID "/missing.jxl"};
+    static const struct {
+        BundleFlaws flaws;
+        const char *message;
+    } cases[] = {
+        {{.screenshot_url = "https://example.org/screenshot.jxl"},
+         "The screenshot https://example.org/screenshot.jxl of " TEST_APP_ID " is not in the bundle"    },
+        {{.screenshot_url = TEST_APP_ID "/missing.jxl"},
+         "The screenshot " TEST_APP_ID "/missing.jxl of " TEST_APP_ID " is not in the bundle"           },
+        {{.extra_icon =
+              "<icon type=\"remote\" width=\"64\" height=\"64\">https://example.org/icon.png</icon>"},
+         TEST_APP_ID " has an icon of the type remote, but bundles can only have cached and stock icons"},
+        {{.extra_icon = "<icon type=\"local\">/usr/share/pixmaps/app.png</icon>"},
+         TEST_APP_ID " has an icon of the type local, but bundles can only have cached and stock icons" },
+    };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(urls); i++) {
-        g_autofree char *name = g_strdup_printf("media-elsewhere-%" G_GSIZE_FORMAT ".manifold", i);
+    for (gsize i = 0; i < G_N_ELEMENTS(cases); i++) {
+        g_autofree char *name = g_strdup_printf("elsewhere-%" G_GSIZE_FORMAT ".manifold", i);
         g_autofree char *path = mft_write_bundle(f,
                                                  name,
                                                  (const TestImage *[]){&f->kit, &f->app, NULL},
-                                                 &(BundleFlaws){.screenshot_url = urls[i]});
-        g_autofree char *expected = g_strdup_printf("The screenshot %s of %s is not in the bundle",
-                                                    urls[i],
-                                                    TEST_APP_ID);
+                                                 &cases[i].flaws);
         g_autoptr(GError) error = NULL;
         g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
 
         g_assert_null(bundle);
         g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-        g_assert_cmpstr(error->message, ==, expected);
+        g_assert_cmpstr(error->message, ==, cases[i].message);
     }
 }
 
@@ -1335,7 +1350,7 @@ main(int argc, char **argv)
     add_test("misdescribed-image", test_misdescribed_image);
     add_test("bad-icon", test_bad_icon);
     add_test("corrupt-media", test_corrupt_media);
-    add_test("media-elsewhere", test_media_elsewhere);
+    add_test("refers-elsewhere", test_refers_elsewhere);
     add_test("kit-without-base", test_kit_without_base);
     add_test("one-id-two-kinds", test_one_id_two_kinds);
     add_test("not-a-bundle", test_not_a_bundle);
