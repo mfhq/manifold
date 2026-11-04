@@ -65,6 +65,8 @@ case " $ID ${ID_LIKE:-} " in
             libcurl4-openssl-dev
             libappstream-dev
             libzip-dev
+            libzck-dev
+            libzstd-dev
             libcryptsetup-dev
             libelf-dev
             gobject-introspection
@@ -113,6 +115,8 @@ case " $ID ${ID_LIKE:-} " in
             'pkgconfig(systemd)'
             'pkgconfig(udev)'
             'pkgconfig(libzip)'
+            'pkgconfig(zck)'
+            'pkgconfig(libzstd)'
             'pkgconfig(libcryptsetup)'
             'pkgconfig(libelf)'
             'pkgconfig(gobject-introspection-1.0)'
@@ -157,6 +161,8 @@ case " $ID ${ID_LIKE:-} " in
             appstream
             systemd
             libzip
+            zchunk
+            zstd
             cryptsetup
             libelf
             gobject-introspection
