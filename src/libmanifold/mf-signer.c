@@ -413,7 +413,7 @@ mf_signer_compare_names(gconstpointer a, gconstpointer b)
  *
  * Find the signing keys in the key directory of the user, sorted by name.
  *
- * Returns: (transfer full) (element-type MfSigner): the keys, or %NULL on error
+ * Returns: (transfer container) (element-type MfSigner): the keys, or %NULL on error
  */
 GPtrArray *
 mf_signer_list_keys(GError **error)

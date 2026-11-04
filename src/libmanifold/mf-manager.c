@@ -1175,7 +1175,7 @@ mf_manager_mark_component_async(MfManager *manager,
  * @result: the result passed to the callback
  * @error: a #GError
  *
- * Returns: (transfer full) (element-type MfComponent): the marked versions, or %NULL on failure
+ * Returns: (transfer container) (element-type MfComponent): the marked versions, or %NULL on failure
  */
 GPtrArray *
 mf_manager_mark_component_finish(MfManager *manager, GAsyncResult *result, GError **error)
@@ -1203,7 +1203,7 @@ mf_manager_mark_component_finish(MfManager *manager, GAsyncResult *result, GErro
  * Mark versions of a component, see mf_manager_mark_component_async().
  * This blocks until they are marked, or marking failed.
  *
- * Returns: (transfer full) (element-type MfComponent): the marked versions, or %NULL on failure
+ * Returns: (transfer container) (element-type MfComponent): the marked versions, or %NULL on failure
  */
 GPtrArray *
 mf_manager_mark_component(MfManager *manager,
