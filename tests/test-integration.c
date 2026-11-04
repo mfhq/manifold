@@ -29,6 +29,7 @@ mft_app_manifest(const char *integration)
         .kind = "app",
         .version = "1.0",
         .base_id = "net.example.core",
+        .base_kind = "core",
         .integration = integration,
     };
 }
@@ -462,7 +463,15 @@ static void
 test_check_component(void)
 {
     static const char *const refused_ids[] = {"ssh", "com.example", "com..example", "com.example."};
-    static const char *const refused_kinds[] = {"kit", "platform", "plugin"};
+    /* only applications may install files on the host; every other kind sits on a base it can build on */
+    static const struct {
+        const char *kind;
+        const char *base_kind;
+    } refused_kinds[] = {
+        {"kit",      "core"},
+        {"platform", "core"},
+        {"plugin",   "app" }
+    };
     MftTestManifest m = mft_app_manifest("{}");
 
     for (gsize i = 0; i < G_N_ELEMENTS(refused_ids); i++) {
@@ -473,8 +482,9 @@ test_check_component(void)
 
     m = mft_app_manifest("{}");
     for (gsize i = 0; i < G_N_ELEMENTS(refused_kinds); i++) {
-        m.kind = refused_kinds[i];
-        g_test_message("%s", refused_kinds[i]);
+        m.kind = refused_kinds[i].kind;
+        m.base_kind = refused_kinds[i].base_kind;
+        g_test_message("%s", refused_kinds[i].kind);
         g_assert_false(mft_passes_check(&m));
     }
 
@@ -494,11 +504,13 @@ test_manifest_messages(void)
         mft_app_manifest(NULL),
         mft_app_manifest(NULL),
         mft_app_manifest(NULL),
+        mft_app_manifest(NULL),
     };
 
     manifests[0].kind = "\\u001b[2J";
     manifests[1].command = "\\u001b[2J";
     manifests[2].architecture = "\\u001b[2J";
+    manifests[3].base_kind = "\\u001b[2J";
 
     /* a manifest must not be able to control the terminal of the admin */
     for (gsize i = 0; i < G_N_ELEMENTS(manifests); i++) {

@@ -66,6 +66,7 @@ const char     *mf_manifest_get_identity(MfManifest *manifest);
 const char     *mf_manifest_get_content_hash(MfManifest *manifest);
 
 const char     *mf_manifest_get_base_id(MfManifest *manifest);
+MfComponentKind mf_manifest_get_base_kind(MfManifest *manifest);
 const char     *mf_manifest_get_base_version(MfManifest *manifest);
 guint64         mf_manifest_get_base_revision(MfManifest *manifest);
 const char     *mf_manifest_get_base_identity(MfManifest *manifest);

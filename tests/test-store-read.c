@@ -65,7 +65,8 @@ mft_setup(Fixture *f, gconstpointer user_data)
                                          .kind = "core",
                                          .version = "13.4",
                                          .sdk = TRUE,
-                                         .base_id = TEST_CORE_ID},
+                                         .base_id = TEST_CORE_ID,
+                                         .base_kind = "core"},
                       "13.4-1",
                       "manual");
     mft_write_runtime(f,
@@ -73,7 +74,8 @@ mft_setup(Fixture *f, gconstpointer user_data)
                                          .kind = "platform",
                                          .version = "13.8",
                                          .revision = 22910001,
-                                         .base_id = TEST_CORE_ID},
+                                         .base_id = TEST_CORE_ID,
+                                         .base_kind = "core"},
                       "13.8-22810000",
                       "auto");
     mft_write_version(f->dir,
@@ -81,7 +83,8 @@ mft_setup(Fixture *f, gconstpointer user_data)
                       &(MftTestManifest){.component_id = TEST_APP_ID,
                                          .kind = "app",
                                          .version = "0.1.0",
-                                         .base_id = TEST_PLATFORM_ID},
+                                         .base_id = TEST_PLATFORM_ID,
+                                         .base_kind = "platform"},
                       NULL,
                       NULL);
 }
@@ -259,7 +262,8 @@ test_sdk_app_is_a_runtime(Fixture *f, gconstpointer user_data)
                                          .kind = "app",
                                          .version = "0.1.0",
                                          .sdk = TRUE,
-                                         .base_id = TEST_APP_ID},
+                                         .base_id = TEST_APP_ID,
+                                         .base_kind = "app"},
                       NULL,
                       "manual");
     sdk = mf_store_get_component(f->store, TEST_APP_SDK_ID, NULL, &error);

@@ -252,6 +252,7 @@ class Image:
     def reference(self):
         return {
             'component': self.component,
+            'kind': self.kind,
             'version': self.version,
             'revision': self.revision,
             'identity': self.identity,

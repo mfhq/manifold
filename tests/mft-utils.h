@@ -69,6 +69,7 @@ typedef struct {
     const char *content_hash; /* default: the identity */
 
     const char *base_id;       /* default: none */
+    const char *base_kind;     /* required if there is a base */
     const char *base_version;  /* default: "1" */
     guint64     base_revision; /* default: 1 */
 

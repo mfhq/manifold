@@ -115,6 +115,7 @@ mft_image_manifest_json(const TestImage *image, gboolean wrong_blake3)
         .revision = image->revision,
         .content_hash = content_hash,
         .base_id = base != NULL ? base->component_id : NULL,
+        .base_kind = base != NULL ? base->kind : NULL,
         .base_version = base != NULL ? base->version : NULL,
         .base_revision = base != NULL ? base->revision : 0,
         .image_file = file_name,
@@ -401,6 +402,7 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
     g_assert_cmpuint(mf_manifest_get_data_offset(manifest), ==, 20480);
     g_assert_cmpuint(mf_manifest_get_hash_offset(manifest), ==, 24576);
     g_assert_cmpstr(mf_manifest_get_base_id(manifest), ==, TEST_KIT_ID);
+    g_assert_cmpint(mf_manifest_get_base_kind(manifest), ==, MF_COMPONENT_KIND_KIT);
     g_assert_cmpstr(mf_manifest_get_base_version(manifest), ==, "20260112T0238");
     g_assert_cmpuint(mf_manifest_get_base_revision(manifest), ==, 22910051);
     g_assert_cmpstr(mf_manifest_get_base_identity(manifest), ==, kit_identity);
@@ -466,6 +468,7 @@ test_core_has_no_base(Fixture *f, gconstpointer user_data)
     core = mft_find_manifest(bundle, TEST_CORE_ID);
     g_assert_cmpint(mf_manifest_get_kind(core), ==, MF_COMPONENT_KIND_CORE);
     g_assert_null(mf_manifest_get_base_id(core));
+    g_assert_cmpint(mf_manifest_get_base_kind(core), ==, MF_COMPONENT_KIND_UNKNOWN);
     g_assert_null(mf_manifest_get_base_identity(core));
 }
 

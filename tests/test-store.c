@@ -103,14 +103,16 @@ mft_install_usual(Fixture *f)
                                    .kind = "kit",
                                    .version = "20260112T0238",
                                    .verity_root_hash = f->kit_hash,
-                                   .base_id = TEST_CORE_ID},
+                                   .base_id = TEST_CORE_ID,
+                                   .base_kind = "core"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
                                    .kind = "app",
                                    .version = "0.1.0",
                                    .verity_root_hash = f->app_hash,
-                                   .base_id = TEST_KIT_ID},
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
 }
@@ -266,7 +268,8 @@ test_install_app_with_dependency(Fixture *f, gconstpointer user_data)
                                    .version = "13.4",
                                    .sdk = TRUE,
                                    .verity_root_hash = sdk_hash,
-                                   .base_id = TEST_CORE_ID},
+                                   .base_id = TEST_CORE_ID,
+                                   .base_kind = "core"},
                 "13.4-1",
                 MF_INSTALL_MODE_MANUAL);
 
@@ -311,7 +314,8 @@ test_install_again(Fixture *f, gconstpointer user_data)
                                    .kind = "kit",
                                    .version = "20260112T0238",
                                    .verity_root_hash = f->kit_hash,
-                                   .base_id = TEST_CORE_ID},
+                                   .base_id = TEST_CORE_ID,
+                                   .base_kind = "core"},
                 NULL,
                 MF_INSTALL_MODE_MANUAL);
     mode = mft_read_file(RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1/mode");
@@ -320,7 +324,8 @@ test_install_again(Fixture *f, gconstpointer user_data)
                                    .kind = "kit",
                                    .version = "20260112T0238",
                                    .verity_root_hash = f->kit_hash,
-                                   .base_id = TEST_CORE_ID},
+                                   .base_id = TEST_CORE_ID,
+                                   .base_kind = "core"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     g_clear_pointer(&mode, g_free);
@@ -334,7 +339,8 @@ test_install_again(Fixture *f, gconstpointer user_data)
                                    .kind = "app",
                                    .version = "0.1.0",
                                    .verity_root_hash = f->app_hash,
-                                   .base_id = TEST_KIT_ID},
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     g_assert_cmpuint(mft_count_versions(TEST_APP_ID), ==, 1);
@@ -419,7 +425,8 @@ test_current_is_newest(Fixture *f, gconstpointer user_data)
                                    .kind = "app",
                                    .version = "0.2.0",
                                    .verity_root_hash = v2_hash,
-                                   .base_id = TEST_KIT_ID},
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     mft_assert_link(APPS "/" TEST_APP_ID "/current", "0.2.0-1");
@@ -429,7 +436,8 @@ test_current_is_newest(Fixture *f, gconstpointer user_data)
                                    .kind = "app",
                                    .version = "0.10.0",
                                    .verity_root_hash = v10_hash,
-                                   .base_id = TEST_KIT_ID},
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     mft_assert_link(APPS "/" TEST_APP_ID "/current", "0.10.0-1");
@@ -437,7 +445,8 @@ test_current_is_newest(Fixture *f, gconstpointer user_data)
                                    .kind = "app",
                                    .version = "0.3.0",
                                    .verity_root_hash = f->app_hash,
-                                   .base_id = TEST_KIT_ID},
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     mft_assert_link(APPS "/" TEST_APP_ID "/current", "0.10.0-1");
@@ -447,7 +456,8 @@ test_current_is_newest(Fixture *f, gconstpointer user_data)
                                    .version = "0.10.0",
                                    .revision = 22910000,
                                    .verity_root_hash = v10_hash,
-                                   .base_id = TEST_KIT_ID},
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
@@ -455,7 +465,8 @@ test_current_is_newest(Fixture *f, gconstpointer user_data)
                                    .version = "0.10.0",
                                    .revision = 22910119,
                                    .verity_root_hash = v10_hash,
-                                   .base_id = TEST_KIT_ID},
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     mft_assert_link(APPS "/" TEST_APP_ID "/current", "0.10.0-22910119");
@@ -569,7 +580,8 @@ test_exact_base_stays(Fixture *f, gconstpointer user_data)
                                    .version = "13.4",
                                    .sdk = TRUE,
                                    .verity_root_hash = sdk_hash,
-                                   .base_id = TEST_CORE_ID},
+                                   .base_id = TEST_CORE_ID,
+                                   .base_kind = "core"},
                 "13.4-1",
                 MF_INSTALL_MODE_MANUAL);
 
@@ -602,7 +614,8 @@ test_shared_dependency_stays(Fixture *f, gconstpointer user_data)
                                    .kind = "app",
                                    .version = "1.0",
                                    .verity_root_hash = other_hash,
-                                   .base_id = TEST_KIT_ID},
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
 
@@ -629,7 +642,8 @@ test_old_dependency_goes(Fixture *f, gconstpointer user_data)
                                    .kind = "kit",
                                    .version = "20261101T0000",
                                    .verity_root_hash = kit2_hash,
-                                   .base_id = TEST_CORE_ID},
+                                   .base_id = TEST_CORE_ID,
+                                   .base_kind = "core"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
 
@@ -667,14 +681,16 @@ test_dependency_chain_removal(Fixture *f, gconstpointer user_data)
                                    .kind = "kit",
                                    .version = "20251201T0000",
                                    .verity_root_hash = old_kit_hash,
-                                   .base_id = TEST_CORE_ID},
+                                   .base_id = TEST_CORE_ID,
+                                   .base_kind = "core"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
                                    .kind = "app",
                                    .version = "0.0.1",
                                    .verity_root_hash = old_app_hash,
-                                   .base_id = TEST_CORE_ID ".0123456789abcdef"},
+                                   .base_id = TEST_CORE_ID ".0123456789abcdef",
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
 
@@ -713,14 +729,16 @@ test_newest_app_stays(Fixture *f, gconstpointer user_data)
                                    .kind = "app",
                                    .version = "0.2.0",
                                    .verity_root_hash = v2_hash,
-                                   .base_id = TEST_KIT_ID},
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
                                    .kind = "app",
                                    .version = "0.3.0",
                                    .verity_root_hash = v3_hash,
-                                   .base_id = TEST_KIT_ID},
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit"},
                 NULL,
                 MF_INSTALL_MODE_AUTO);
     mft_write_file(APPS "/" TEST_APP_ID "/0.1.0-1/mode", "manual\n");

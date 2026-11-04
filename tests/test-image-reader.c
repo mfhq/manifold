@@ -168,6 +168,7 @@ mft_manifest_new(const char *entries, const char *verity_hash)
         .kind = "app",
         .version = "1.0",
         .base_id = "net.example.core",
+        .base_kind = "core",
         .integration = section,
         .verity_root_hash = verity_hash,
         .data_offset = DATA_OFFSET,

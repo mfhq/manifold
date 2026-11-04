@@ -32,7 +32,8 @@ mft_write_usual_store(void)
                       &(MftTestManifest){.component_id = TEST_PLATFORM_ID,
                                          .kind = "platform",
                                          .version = "13.4",
-                                         .base_id = TEST_CORE_ID},
+                                         .base_id = TEST_CORE_ID,
+                                         .base_kind = "core"},
                       NULL,
                       NULL);
     mft_write_version(MF_STORAGE_DIR,
@@ -40,7 +41,8 @@ mft_write_usual_store(void)
                       &(MftTestManifest){.component_id = TEST_PLATFORM_KIT_ID,
                                          .kind = "kit",
                                          .version = "20260114T0238",
-                                         .base_id = TEST_PLATFORM_ID},
+                                         .base_id = TEST_PLATFORM_ID,
+                                         .base_kind = "platform"},
                       NULL,
                       NULL);
     mft_write_version(MF_STORAGE_DIR,
@@ -48,7 +50,8 @@ mft_write_usual_store(void)
                       &(MftTestManifest){.component_id = TEST_APP_ID,
                                          .kind = "app",
                                          .version = "0.1.0",
-                                         .base_id = TEST_PLATFORM_KIT_ID},
+                                         .base_id = TEST_PLATFORM_KIT_ID,
+                                         .base_kind = "kit"},
                       NULL,
                       NULL);
 }
@@ -204,7 +207,8 @@ test_sdk_is_not_supported_yet(Fixture *fixture, gconstpointer user_data)
                                          .kind = "kit",
                                          .version = "20260114T0238",
                                          .sdk = TRUE,
-                                         .base_id = TEST_PLATFORM_KIT_ID},
+                                         .base_id = TEST_PLATFORM_KIT_ID,
+                                         .base_kind = "kit"},
                       NULL,
                       NULL);
     mft_replace_link("../../../runtimes/" TEST_PLATFORM_KIT_ID ".sdk/current",
