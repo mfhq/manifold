@@ -887,7 +887,7 @@ mf_store_ensure_loaded(MfStore *store, GError **error)
  * List every installed version of the filtered component: applications
  * first and cores last, then ordered by ID and version (oldest first).
  *
- * Returns: (transfer full) (element-type MfComponent): the components
+ * Returns: (transfer container) (element-type MfComponent): the components
  */
 GPtrArray *
 mf_store_list_components(MfStore *store, const char *component_id, MfComponentKind kind, GError **error)
