@@ -610,6 +610,9 @@ mf_bytes_are_jxl(GBytes *bytes)
  * Collect the cached icons of the component of an image. We only accept JXL
  * files named after the component, so that the icons of all components can
  * share one directory per size once they are installed.
+ *
+ * Other than cached icons, only stock icons are allowed, as remote and local
+ * icons point to files outside of the bundle.
  */
 static gboolean
 mf_bundle_image_collect_icons(MfBundleImage *image,
@@ -627,8 +630,18 @@ mf_bundle_image_collect_icons(MfBundleImage *image,
         g_autofree char *path = NULL;
         GBytes *data;
 
-        if (as_icon_get_kind(icon) != AS_ICON_KIND_CACHED)
+        if (as_icon_get_kind(icon) == AS_ICON_KIND_STOCK)
             continue;
+        if (as_icon_get_kind(icon) != AS_ICON_KIND_CACHED) {
+            g_set_error(error,
+                        MF_ERROR,
+                        MF_ERROR_INVALID_BUNDLE,
+                        /* TRANSLATORS: the component, and the type of one of its icons, like "remote" */
+                        _("%s has an icon of the type %s, but bundles can only have cached and stock icons"),
+                        component_id,
+                        as_icon_kind_to_string(as_icon_get_kind(icon)));
+            return FALSE;
+        }
         if (g_strcmp0(as_icon_get_name(icon), icon_name) != 0) {
             g_set_error(error,
                         MF_ERROR,
