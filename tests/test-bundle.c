@@ -46,6 +46,8 @@ typedef struct {
     gboolean bad_icon;
     /* the screenshot of the app differs from what the index records */
     gboolean corrupt_media;
+    /* the URL the catalog gives the screenshot of the app, instead of its file */
+    const char *screenshot_url;
 } BundleFlaws;
 
 /* the start of a JPEG XL codestream */
@@ -196,14 +198,15 @@ mft_write_catalog(zip_t *zip, GString *index, const TestImage *const *images, co
             g_autofree char *icon_name = g_strdup_printf("catalog/icons/64x64/%s.jxl", image->component_id);
             g_autofree char *media_name = g_strdup_printf("catalog/media/%s/screenshot.jxl",
                                                           image->component_id);
+            g_autofree char *screenshot_url = g_strdup_printf("%s/screenshot.jxl", image->component_id);
 
             extra = g_strdup_printf(
                 "<icon type=\"cached\" width=\"64\" height=\"64\">%s.jxl</icon>"
                 "<screenshots><screenshot type=\"default\">"
-                "<image type=\"source\">%s/screenshot.jxl</image>"
+                "<image type=\"source\">%s</image>"
                 "</screenshot></screenshots>",
                 image->component_id,
-                image->component_id);
+                flaws->screenshot_url != NULL ? flaws->screenshot_url : screenshot_url);
             if (flaws->bad_icon)
                 mft_add_file(zip, index, icon_name, "not an image", strlen("not an image"));
             else
@@ -734,6 +737,34 @@ test_bad_icon(Fixture *f, gconstpointer user_data)
     g_assert_null(bundle);
     g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
     g_assert_cmpstr(error->message, ==, "catalog/icons/64x64/" TEST_APP_ID ".jxl is not a JPEG XL image");
+}
+
+/**
+ * test_media_elsewhere:
+ *
+ * A catalog may only refer to screenshots of the bundle.
+ */
+static void
+test_media_elsewhere(Fixture *f, gconstpointer user_data)
+{
+    static const char *const urls[] = {"https://example.org/screenshot.jxl", TEST_APP_ID "/missing.jxl"};
+
+    for (gsize i = 0; i < G_N_ELEMENTS(urls); i++) {
+        g_autofree char *name = g_strdup_printf("media-elsewhere-%" G_GSIZE_FORMAT ".manifold", i);
+        g_autofree char *path = mft_write_bundle(f,
+                                                 name,
+                                                 (const TestImage *[]){&f->kit, &f->app, NULL},
+                                                 &(BundleFlaws){.screenshot_url = urls[i]});
+        g_autofree char *expected = g_strdup_printf("The screenshot %s of %s is not in the bundle",
+                                                    urls[i],
+                                                    TEST_APP_ID);
+        g_autoptr(GError) error = NULL;
+        g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
+
+        g_assert_null(bundle);
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
+        g_assert_cmpstr(error->message, ==, expected);
+    }
 }
 
 /**
@@ -1304,6 +1335,7 @@ main(int argc, char **argv)
     add_test("misdescribed-image", test_misdescribed_image);
     add_test("bad-icon", test_bad_icon);
     add_test("corrupt-media", test_corrupt_media);
+    add_test("media-elsewhere", test_media_elsewhere);
     add_test("kit-without-base", test_kit_without_base);
     add_test("one-id-two-kinds", test_one_id_two_kinds);
     add_test("not-a-bundle", test_not_a_bundle);
