@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
+#define _GNU_SOURCE
 #include "config.h"
 #include "mf-zchunk.h"
 #include "mf-zchunk-private.h"
@@ -29,23 +30,23 @@
  * code to write and read zchunk files.
  */
 
-/* images are split into blocks of the size the builder gives the filesystem */
+/* the block size of the filesystem of an image, as set by the builder */
 constexpr gsize BLOCK_SIZE = 4096;
 
-/* a chunk covers at most this many blocks (the cluster size the builder gives the filesystem) */
+/* the largest number of blocks in a chunk, which is the cluster size of the filesystem of an image */
 constexpr gsize CHUNK_BLOCKS_MAX = 16;
 
-/* how far we look for the end of a zstd frame */
+/* the number of bytes that we search for the end of a zstd frame */
 constexpr gsize FRAME_SIZE_MAX = 262144;
 
-/* We treat a block as incompressible if its bytes are spread even-ish over all 256 values.
+/* We treat a block as incompressible if its bytes are spread almost evenly over all 256 values.
  * To measure that, we sum up the squared count of every byte value:
  * Two random bytes are equal (a collision) with a probability of sum / BLOCK_SIZE^2.
  * The limit is BLOCK_SIZE^2 / 2^7.5, so we require at least 7.5 of 8 bits of
  * (collision) entropy per byte. */
 constexpr guint64 COLLISIONS_MAX = 92681;
 
-/* how much we decompress at a time */
+/* the number of bytes that we decompress in one step */
 constexpr gsize READ_BUFFER_SIZE = 1024 * 1024;
 
 constexpr guint8 ZSTD_FRAME_MAGIC[] = {0x28, 0xb5, 0x2f, 0xfd};
@@ -442,6 +443,413 @@ mf_zchunk_check_image(int fd, MfManifest *manifest, GError **error)
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,
                     _("The zchunk file does not hold the image %s"),
+                    mf_manifest_get_image_file(manifest));
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
+ * MfZchunkAssembly:
+ *
+ * An image that is built from a partially downloaded zchunk file and from
+ * images that are installed already. We split the installed images into
+ * chunks with the same rule that repositories use, and look up the digest of
+ * each chunk in the zchunk file. Only the chunks of the zchunk file that no
+ * installed image contains have to be downloaded.
+ */
+struct _MfZchunkAssembly {
+    zckCtx *zck;
+    GArray *chunks;     /* (element-type MfAssemblyChunk): the chunks of the image, in order */
+    GHashTable *needed; /* digest of an uncompressed chunk -> index of the first chunk with that digest */
+    GArray *source_fds; /* (element-type int): the images that chunks are copied from, owned by the caller */
+    guint64 image_size;
+};
+
+typedef struct {
+    zckChunk *chunk;
+    guint64 start; /* the offset of the compressed chunk in the zchunk file */
+    guint64 comp_size;
+    guint64 size;
+    guint64 offset; /* the offset of the chunk in the image */
+    char digest[MF_HEX_HASH_LENGTH + 1];
+    int source; /* the index of the image the chunk is copied from, or -1 if it is downloaded */
+    guint64 source_offset;
+} MfAssemblyChunk;
+
+/**
+ * mf_zchunk_assembly_free:
+ */
+void
+mf_zchunk_assembly_free(MfZchunkAssembly *assembly)
+{
+    if (assembly == NULL)
+        return;
+    g_clear_pointer(&assembly->zck, mf_zck_free);
+    g_clear_pointer(&assembly->chunks, g_array_unref);
+    g_clear_pointer(&assembly->needed, g_hash_table_unref);
+    g_clear_pointer(&assembly->source_fds, g_array_unref);
+    g_free(assembly);
+}
+
+/**
+ * mf_zchunk_assembly_new:
+ * @partial_fd: the partially downloaded zchunk file, which must contain the
+ *   complete header. The file descriptor is owned by the caller.
+ * @header_size: the size of the header, as recorded in the component index
+ * @header_sha256: the checksum of the header, as recorded in the component index
+ * @error: a #GError
+ *
+ * Create an assembly from the header of a zchunk file. The size and checksum
+ * of the header are verified before zchunk parses the header.
+ *
+ * Returns: (transfer full): the assembly, or %NULL
+ */
+MfZchunkAssembly *
+mf_zchunk_assembly_new(int partial_fd, guint64 header_size, const char *header_sha256, GError **error)
+{
+    g_autoptr(MfZchunkAssembly) assembly = g_new0(MfZchunkAssembly, 1);
+    guint64 offset = 0;
+
+    g_return_val_if_fail(partial_fd >= 0, NULL);
+    g_return_val_if_fail(header_sha256 != NULL, NULL);
+
+    assembly->chunks = g_array_new(FALSE, FALSE, sizeof(MfAssemblyChunk));
+    assembly->needed = g_hash_table_new(g_str_hash, g_str_equal);
+    assembly->source_fds = g_array_new(FALSE, FALSE, sizeof(int));
+
+    if (lseek(partial_fd, 0, SEEK_SET) < 0) {
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_FAILED,
+                    _("Unable to read the zchunk file: %s"),
+                    g_strerror(errno));
+        return NULL;
+    }
+    assembly->zck = zck_create();
+    if (assembly->zck == NULL || !zck_init_adv_read(assembly->zck, partial_fd) ||
+        !zck_set_ioption(assembly->zck, ZCK_VAL_HEADER_HASH_TYPE, ZCK_HASH_SHA256) ||
+        !zck_set_soption(assembly->zck, ZCK_VAL_HEADER_DIGEST, header_sha256, strlen(header_sha256)) ||
+        !zck_set_ioption(assembly->zck, ZCK_VAL_HEADER_LENGTH, (ssize_t) header_size) ||
+        !zck_read_lead(assembly->zck) || !zck_read_header(assembly->zck)) {
+        mf_set_error_from_zck(error,
+                              MF_ERROR_VERIFICATION_FAILED,
+                              assembly->zck,
+                              _("The header of the zchunk file does not match the component index"));
+        return NULL;
+    }
+    if (zck_get_chunk_hash_type(assembly->zck) != ZCK_HASH_SHA256) {
+        g_set_error_literal(error,
+                            MF_ERROR,
+                            MF_ERROR_VERIFICATION_FAILED,
+                            _("The chunks of the zchunk file do not have SHA-256 digests"));
+        return NULL;
+    }
+
+    for (zckChunk *chunk = zck_get_first_chunk(assembly->zck); chunk != NULL;
+         chunk = zck_get_next_chunk(chunk)) {
+        MfAssemblyChunk item = {.chunk = chunk, .source = -1};
+        char *digest;
+
+        /* the first chunk is the compression dictionary, which our images do not use */
+        if (zck_get_chunk_number(chunk) == 0 || zck_get_chunk_size(chunk) == 0)
+            continue;
+
+        digest = zck_get_chunk_digest_uncompressed(chunk);
+        if (digest == NULL || strlen(digest) != MF_HEX_HASH_LENGTH) {
+            free(digest);
+            g_set_error_literal(error,
+                                MF_ERROR,
+                                MF_ERROR_VERIFICATION_FAILED,
+                                _("The zchunk file has no digests of its uncompressed chunks"));
+            return NULL;
+        }
+        g_strlcpy(item.digest, digest, sizeof(item.digest));
+        free(digest);
+        item.start = (guint64) zck_get_chunk_start(chunk);
+        item.comp_size = (guint64) zck_get_chunk_comp_size(chunk);
+        item.size = (guint64) zck_get_chunk_size(chunk);
+        item.offset = offset;
+        offset += item.size;
+        g_array_append_val(assembly->chunks, item);
+    }
+    assembly->image_size = offset;
+
+    /* NOTE: The keys point into the array, so we only fill the table once the array is complete */
+    for (guint i = 0; i < assembly->chunks->len; i++) {
+        MfAssemblyChunk *item = &g_array_index(assembly->chunks, MfAssemblyChunk, i);
+
+        if (!g_hash_table_contains(assembly->needed, item->digest))
+            g_hash_table_insert(assembly->needed, item->digest, GUINT_TO_POINTER(i));
+    }
+
+    return g_steal_pointer(&assembly);
+}
+
+/**
+ * mf_zchunk_assembly_add_source:
+ * @image_fd: an installed image. The file descriptor is owned by the caller,
+ *   and has to stay open until the new image was written.
+ *
+ * Find the chunks of the zchunk file that an installed image contains, so
+ * they do not have to be downloaded.
+ *
+ * Returns: %TRUE if the image could be read
+ */
+gboolean
+mf_zchunk_assembly_add_source(MfZchunkAssembly *assembly, int image_fd, GError **error)
+{
+    g_autoptr(GArray) chunks = NULL;
+    struct stat st;
+    guint8 *data;
+    guint64 offset = 0;
+    int source = (int) assembly->source_fds->len;
+
+    if (fstat(image_fd, &st) < 0) {
+        g_set_error(error, MF_ERROR, MF_ERROR_FAILED, _("Unable to read the image: %s"), g_strerror(errno));
+        return FALSE;
+    }
+    if (st.st_size == 0)
+        return TRUE;
+    data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, image_fd, 0);
+    if (data == MAP_FAILED) {
+        g_set_error(error, MF_ERROR, MF_ERROR_FAILED, _("Unable to read the image: %s"), g_strerror(errno));
+        return FALSE;
+    }
+    madvise(data, st.st_size, MADV_SEQUENTIAL);
+
+    chunks = mf_zchunk_find_image_chunks(data, st.st_size);
+    for (guint i = 0; i < chunks->len; i++) {
+        guint64 size = g_array_index(chunks, guint64, i);
+        g_autofree char *digest = g_compute_checksum_for_data(G_CHECKSUM_SHA256, data + offset, size);
+        gpointer index;
+
+        if (g_hash_table_lookup_extended(assembly->needed, digest, NULL, &index)) {
+            /* every chunk with this digest will be copied from this offset of the installed image */
+            for (guint j = GPOINTER_TO_UINT(index); j < assembly->chunks->len; j++) {
+                MfAssemblyChunk *item = &g_array_index(assembly->chunks, MfAssemblyChunk, j);
+
+                if (item->source < 0 && item->size == size && g_str_equal(item->digest, digest)) {
+                    item->source = source;
+                    item->source_offset = offset;
+                }
+            }
+            g_hash_table_remove(assembly->needed, digest);
+        }
+        offset += size;
+    }
+    munmap(data, st.st_size);
+
+    g_array_append_val(assembly->source_fds, image_fd);
+    return TRUE;
+}
+
+/**
+ * mf_zchunk_assembly_get_missing:
+ * @gap_max: two ranges are merged into one range if the gap between them is at most this size
+ *
+ * Find the ranges of the zchunk file that have to be downloaded. These are
+ * the chunks that no installed image contains. A range may include chunks
+ * that we have already, if they are between two missing chunks, to keep the
+ * number of requests low.
+ *
+ * Returns: (transfer full) (element-type MfZchunkRange): the ranges, ordered by offset
+ */
+GArray *
+mf_zchunk_assembly_get_missing(MfZchunkAssembly *assembly, guint64 gap_max)
+{
+    GArray *ranges = g_array_new(FALSE, FALSE, sizeof(MfZchunkRange));
+
+    for (guint i = 0; i < assembly->chunks->len; i++) {
+        MfAssemblyChunk *item = &g_array_index(assembly->chunks, MfAssemblyChunk, i);
+        MfZchunkRange *last = ranges->len > 0 ? &g_array_index(ranges, MfZchunkRange, ranges->len - 1) : NULL;
+
+        if (item->source >= 0 || item->comp_size == 0)
+            continue;
+        if (last != NULL && item->start <= last->offset + last->length + gap_max) {
+            last->length = item->start + item->comp_size - last->offset;
+        } else {
+            MfZchunkRange range = {item->start, item->comp_size};
+
+            g_array_append_val(ranges, range);
+        }
+    }
+
+    return ranges;
+}
+
+/**
+ * mf_zchunk_assembly_get_reused_size:
+ *
+ * Returns: the number of bytes of the image that are copied from installed images
+ */
+guint64
+mf_zchunk_assembly_get_reused_size(MfZchunkAssembly *assembly)
+{
+    guint64 reused = 0;
+
+    for (guint i = 0; i < assembly->chunks->len; i++) {
+        MfAssemblyChunk *item = &g_array_index(assembly->chunks, MfAssemblyChunk, i);
+
+        if (item->source >= 0)
+            reused += item->size;
+    }
+    return reused;
+}
+
+/**
+ * mf_copy_range:
+ *
+ * Copy a part of one file into another file. If the filesystem supports it,
+ * the kernel shares the data blocks between the files instead of copying them.
+ */
+static gboolean
+mf_copy_range(int src_fd, guint64 src_offset, int dest_fd, guint64 dest_offset, guint64 size, GError **error)
+{
+    loff_t in = (loff_t) src_offset;
+    loff_t out = (loff_t) dest_offset;
+    g_autofree char *buffer = NULL;
+
+    while (size > 0) {
+        ssize_t n = copy_file_range(src_fd, &in, dest_fd, &out, size, 0);
+
+        if (n > 0) {
+            size -= (guint64) n;
+            continue;
+        }
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n == 0 || (errno != EXDEV && errno != EINVAL && errno != ENOSYS && errno != EOPNOTSUPP))
+            break;
+
+        /* the kernel can not copy between these files, so we copy the data ourselves */
+        buffer = g_malloc(size);
+        if (pread(src_fd, buffer, size, in) != (ssize_t) size ||
+            pwrite(dest_fd, buffer, size, out) != (ssize_t) size)
+            break;
+        return TRUE;
+    }
+    if (size == 0)
+        return TRUE;
+
+    g_set_error(error,
+                MF_ERROR,
+                MF_ERROR_FAILED,
+                _("Unable to copy a chunk of an image: %s"),
+                g_strerror(errno));
+    return FALSE;
+}
+
+/**
+ * mf_zchunk_assembly_write_image:
+ * @dest_fd: the file to write the image to, starting at offset 0
+ * @manifest: the manifest of the image
+ * @progress_func: (nullable) (scope call): called after every chunk, with the number of bytes written so far
+ * @user_data: passed to @progress_func
+ * @error: a #GError
+ *
+ * Write the image. Chunks that an installed image contains are copied from
+ * that image. All other chunks are decompressed from the zchunk file, so the
+ * missing ranges of the zchunk file must have been downloaded before this
+ * function is called.
+ *
+ * zchunk verifies the compressed digest of each chunk it decompresses, and
+ * we verify the uncompressed digest. At the end we verify the whole image
+ * against its manifest. If this function fails, the data that was written
+ * is invalid and has to be discarded.
+ *
+ * Returns: %TRUE if the image was written and matches its manifest
+ */
+gboolean
+mf_zchunk_assembly_write_image(MfZchunkAssembly *assembly,
+                               int dest_fd,
+                               MfManifest *manifest,
+                               MfCopyProgressFunc progress_func,
+                               gpointer user_data,
+                               GError **error)
+{
+    g_autoptr(MfHasher) hasher = mf_hasher_new();
+    g_autofree char *buffer = NULL;
+    MfFileEntry actual;
+    guint64 done = 0;
+
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), FALSE);
+
+    if (assembly->image_size != mf_manifest_get_image_size(manifest)) {
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_VERIFICATION_FAILED,
+                    _("The zchunk file does not hold the image %s"),
+                    mf_manifest_get_image_file(manifest));
+        return FALSE;
+    }
+
+    for (guint i = 0; i < assembly->chunks->len; i++) {
+        MfAssemblyChunk *item = &g_array_index(assembly->chunks, MfAssemblyChunk, i);
+        g_autofree char *digest = NULL;
+        ssize_t n;
+
+        if (item->source >= 0) {
+            if (!mf_copy_range(g_array_index(assembly->source_fds, int, item->source),
+                               item->source_offset,
+                               dest_fd,
+                               item->offset,
+                               item->size,
+                               error))
+                return FALSE;
+        } else {
+            buffer = g_realloc(buffer, item->size);
+            n = zck_get_chunk_data(item->chunk, buffer, item->size);
+            digest = n == (ssize_t) item->size
+                         ? g_compute_checksum_for_data(G_CHECKSUM_SHA256, (const guchar *) buffer, item->size)
+                         : NULL;
+            if (g_strcmp0(digest, item->digest) != 0) {
+                mf_set_error_from_zck(error,
+                                      MF_ERROR_VERIFICATION_FAILED,
+                                      assembly->zck,
+                                      _("A chunk of the zchunk file is missing or damaged"));
+                return FALSE;
+            }
+            if (pwrite(dest_fd, buffer, item->size, (off_t) item->offset) != (ssize_t) item->size) {
+                g_set_error(error,
+                            MF_ERROR,
+                            MF_ERROR_FAILED,
+                            _("Unable to write the image: %s"),
+                            g_strerror(errno));
+                return FALSE;
+            }
+        }
+
+        done += item->size;
+        if (progress_func != NULL)
+            progress_func(done, user_data);
+    }
+
+    /* the copied chunks were only matched by their digest, so we verify the complete image */
+    buffer = g_realloc(buffer, READ_BUFFER_SIZE);
+    for (guint64 offset = 0; offset < assembly->image_size;) {
+        ssize_t n = pread(dest_fd, buffer, READ_BUFFER_SIZE, (off_t) offset);
+
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0) {
+            g_set_error(error,
+                        MF_ERROR,
+                        MF_ERROR_FAILED,
+                        _("Unable to read the image: %s"),
+                        g_strerror(errno));
+            return FALSE;
+        }
+        mf_hasher_update(hasher, buffer, (gsize) n);
+        offset += (guint64) n;
+    }
+    mf_hasher_finish(hasher, &actual);
+    if (!mf_manifest_image_matches(manifest, &actual)) {
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_VERIFICATION_FAILED,
+                    _("Image %s does not match its size and hashes in the manifest"),
                     mf_manifest_get_image_file(manifest));
         return FALSE;
     }
