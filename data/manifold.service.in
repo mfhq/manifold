@@ -3,6 +3,8 @@
 [Unit]
 Description=Manifold Manager
 Requires=manifold.socket
+Wants=manifold-fetch.socket
+After=manifold-fetch.socket
 
 [Service]
 Type=notify
@@ -15,4 +17,4 @@ RestrictRealtime=yes
 ProtectHome=yes
 
 [Install]
-Also=manifold.socket
+Also=manifold.socket manifold-fetch.socket

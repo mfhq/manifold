@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
+[Unit]
+Description=Manifold Download Helper
+
+[Service]
+ExecStart=@MF_LIBEXECDIR@/manifold-fetch
+
+# NOTE: The helper only talks https, and writes to the files manifoldd passes
+# it. It needs nothing else.
+DynamicUser=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+UMask=0077
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+PrivateUsers=yes
+DevicePolicy=closed
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RemoveIPC=yes
+
+# AF_UNIX for our connection and for name resolution through systemd-resolved,
+# AF_NETLINK for the interfaces getaddrinfo() looks at
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM

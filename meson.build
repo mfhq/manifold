@@ -92,7 +92,7 @@ hardening_link_args = cc.get_supported_link_arguments([
 #
 # Dependencies
 #
-curl_dep = dependency('libcurl', version: '>= 7.62')
+curl_dep = dependency('libcurl', version: '>= 7.85')
 appstream_dep = dependency('appstream', version: '>= 1.2.2', default_options: [
     'bash-completion=false',
     'display-detection=none',
@@ -160,6 +160,9 @@ mf_interface     = 'org.freedesktop.manifold'
 mf_socket        = mf_runtimedir / mf_interface
 mf_run_interface = 'org.freedesktop.manifold.run'
 mf_run_socket    = mf_runtimedir / mf_run_interface
+# private to manifoldd and its download helper, only root may connect
+mf_fetch_interface = 'org.freedesktop.manifold.fetch'
+mf_fetch_socket    = mf_runtimedir / mf_fetch_interface
 
 #
 # Configuration
@@ -168,6 +171,8 @@ conf = configuration_data()
 conf.set_quoted('MF_VERSION', mf_version)
 conf.set_quoted('MF_RUN_INTERFACE', mf_run_interface)
 conf.set_quoted('MF_RUN_SOCKET_PATH', mf_run_socket)
+conf.set_quoted('MF_FETCH_INTERFACE', mf_fetch_interface)
+conf.set_quoted('MF_FETCH_SOCKET_PATH', mf_fetch_socket)
 conf.set_quoted('MF_INTERFACE', mf_interface)
 conf.set_quoted('MF_SOCKET_PATH', mf_socket)
 conf.set_quoted('MF_RUNTIME_DIR', mf_runtimedir)

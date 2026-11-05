@@ -101,9 +101,10 @@ where the respective newer copy wins.
 - libsystemd ≥ 257, plus the systemd and udev pkg-config files
 - libcryptsetup ≥ 2.4
 - libzip ≥ 1.7
+- zchunk ≥ 1.2 and libzstd ≥ 1.4
 - libblake3
 - AppStream
-- libcurl ≥ 7.62
+- libcurl ≥ 7.85
 - libelf ≥ 0.152
 
 Runtime:
