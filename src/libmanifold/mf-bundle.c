@@ -16,11 +16,11 @@
 #include <glib/gi18n-lib.h>
 #include <zip.h>
 #include <appstream.h>
-#include <blake3.h>
 #include <systemd/sd-json.h>
 
 #include "mf-bundle-private.h"
 #include "mf-json-private.h"
+#include "mf-manifest-private.h"
 #include "mf-sdautoptr-private.h"
 #include "mf-utils-private.h"
 
@@ -354,10 +354,7 @@ mf_zip_hash_entry(zip_t *zip,
                   GError **error)
 {
     g_autofree char *buffer = g_malloc(COPY_BUFFER_SIZE);
-    g_autoptr(GChecksum) checksum = g_checksum_new(G_CHECKSUM_SHA256);
-    guint8 blake3[BLAKE3_OUT_LEN];
-    g_autofree char *blake3_hex = NULL;
-    blake3_hasher hasher;
+    g_autoptr(MfHasher) hasher = mf_hasher_new();
     zip_file_t *file;
     guint64 total = 0;
 
@@ -367,7 +364,6 @@ mf_zip_hash_entry(zip_t *zip,
         return FALSE;
     }
 
-    blake3_hasher_init(&hasher);
     while (total <= size_max) {
         zip_int64_t n = zip_fread(file, buffer, COPY_BUFFER_SIZE);
 
@@ -379,8 +375,7 @@ mf_zip_hash_entry(zip_t *zip,
         if (n == 0)
             break;
         total += (guint64) n;
-        g_checksum_update(checksum, (const guchar *) buffer, (gsize) n);
-        blake3_hasher_update(&hasher, buffer, (gsize) n);
+        mf_hasher_update(hasher, buffer, (gsize) n);
         if (dest_fd >= 0 && !mf_write_all(dest_fd, buffer, (gsize) n, error)) {
             zip_fclose(file);
             return FALSE;
@@ -388,11 +383,7 @@ mf_zip_hash_entry(zip_t *zip,
     }
     zip_fclose(file);
 
-    blake3_hasher_finalize(&hasher, blake3, sizeof(blake3));
-    blake3_hex = mf_hash_to_hex(blake3, sizeof(blake3));
-    ret_entry->size = total;
-    g_strlcpy(ret_entry->sha256, g_checksum_get_string(checksum), sizeof(ret_entry->sha256));
-    g_strlcpy(ret_entry->blake3, blake3_hex, sizeof(ret_entry->blake3));
+    mf_hasher_finish(hasher, ret_entry);
     return TRUE;
 }
 
@@ -1349,10 +1340,8 @@ mf_bundle_copy_image(MfBundle *bundle,
                      GError **error)
 {
     g_autofree char *buffer = g_malloc(COPY_BUFFER_SIZE);
-    g_autoptr(GChecksum) checksum = g_checksum_new(G_CHECKSUM_SHA256);
-    g_autofree char *blake3 = NULL;
-    guint8 hash[BLAKE3_OUT_LEN];
-    blake3_hasher hasher;
+    g_autoptr(MfHasher) hasher = mf_hasher_new();
+    MfFileEntry actual;
     MfBundlePrivate *priv;
     const char *image_name;
     guint64 image_size;
@@ -1366,7 +1355,6 @@ mf_bundle_copy_image(MfBundle *bundle,
     priv = GET_PRIVATE(bundle);
     image_name = mf_manifest_get_image_file(image->manifest);
     image_size = mf_manifest_get_image_size(image->manifest);
-    blake3_hasher_init(&hasher);
 
     file = zip_fopen_index(priv->zip, image->image_index, 0);
     if (file == NULL) {
@@ -1384,12 +1372,12 @@ mf_bundle_copy_image(MfBundle *bundle,
         if (n == 0)
             break;
 
+        /* an image that is larger than its manifest records can not match, so we stop writing it */
         total += (guint64) n;
+        mf_hasher_update(hasher, buffer, (gsize) n);
         if (total > image_size)
             break;
 
-        g_checksum_update(checksum, (const guchar *) buffer, (gsize) n);
-        blake3_hasher_update(&hasher, buffer, (gsize) n);
         if (dest_fd >= 0 && !mf_write_all(dest_fd, buffer, (gsize) n, error))
             goto out;
         if (progress_func != NULL)
@@ -1398,12 +1386,8 @@ mf_bundle_copy_image(MfBundle *bundle,
 
     /* TODO: Also check that the dm-verity hash tree of the image produces its
      * root hash, before the image is ever mounted. */
-    blake3_hasher_finalize(&hasher, hash, sizeof(hash));
-    blake3 = mf_hash_to_hex(hash, sizeof(hash));
-    if (total != image_size ||
-        g_strcmp0(g_checksum_get_string(checksum),
-                  mf_manifest_get_image_checksum(image->manifest, MF_CHECKSUM_KIND_SHA256)) != 0 ||
-        g_strcmp0(blake3, mf_manifest_get_image_checksum(image->manifest, MF_CHECKSUM_KIND_BLAKE3)) != 0) {
+    mf_hasher_finish(hasher, &actual);
+    if (!mf_manifest_image_matches(image->manifest, &actual)) {
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,
