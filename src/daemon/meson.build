@@ -5,6 +5,8 @@
 manifoldd_src = [
     'mfd-image-reader.c',
     'mfd-image-reader.h',
+    'mfd-install-set.c',
+    'mfd-install-set.h',
     'mfd-integrator.c',
     'mfd-integrator.h',
     'mfd-manager.c',

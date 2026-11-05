@@ -17,6 +17,7 @@
 #include "mf-utils-private.h"
 
 #include "mfd-image-reader.h"
+#include "mfd-install-set.h"
 #include "mfd-integrator.h"
 #include "mfd-store-writer.h"
 #include "mfd-utils.h"
@@ -240,7 +241,7 @@ mfd_progress_split_last_item(MfdProgressTracker *tracker, guint n_items)
 /**
  * mfd_on_copy_progress:
  *
- * Report the progress of copying an image out of its bundle.
+ * Report the progress of writing an image into the store.
  */
 static void
 mfd_on_copy_progress(guint64 bytes_copied, gpointer user_data)
@@ -255,34 +256,32 @@ mfd_on_copy_progress(guint64 bytes_copied, gpointer user_data)
     mfd_progress_report(tracker);
 }
 
-/* the arguments of mfd_write_bundle_image() */
+/* the arguments of mfd_write_item_image() */
 typedef struct {
-    MfBundle *bundle;
-    MfBundleImage *image;
+    MfdInstallItem *item;
     MfdProgressTracker *tracker;
-} MfdBundleImageCopy;
+} MfdItemImageWrite;
 
 /**
- * mfd_write_bundle_image:
+ * mfd_write_item_image:
  *
- * Copy an image out of its bundle into a file of the store.
+ * Write the image of an install item to a file of the store.
  */
 static gboolean
-mfd_write_bundle_image(int fd, gpointer user_data, GError **error)
+mfd_write_item_image(int fd, gpointer user_data, GError **error)
 {
-    MfdBundleImageCopy *copy = user_data;
+    MfdItemImageWrite *write = user_data;
 
-    return mf_bundle_copy_image(copy->bundle, copy->image, fd, mfd_on_copy_progress, copy->tracker, error);
+    return write->item->write_image(write->item, fd, mfd_on_copy_progress, write->tracker, error);
 }
 
 /**
  * MfdInstallPlan:
  *
- * How we install one image of a bundle as a component, once the image
- * passed every check.
+ * The result of checking one item of an install set, which says how the item will be installed.
  */
 typedef struct {
-    MfBundleImage *image; /* the image of the bundle, which outlives the plan */
+    MfdInstallItem *item; /* the item of the set, which outlives the plan */
     MfInstallMode mode;
     gboolean skip;      /* the item is installed already or is not needed, so there is nothing to do */
     gboolean add_image; /* the image has to be added to the store */
@@ -307,8 +306,8 @@ mfd_install_plan_clear(MfdInstallPlan *iplan)
 static gint
 mfd_install_plan_compare_layer(gconstpointer a, gconstpointer b)
 {
-    MfManifest *manifest_a = mf_bundle_image_get_manifest(((const MfdInstallPlan *) a)->image);
-    MfManifest *manifest_b = mf_bundle_image_get_manifest(((const MfdInstallPlan *) b)->image);
+    MfManifest *manifest_a = ((const MfdInstallPlan *) a)->item->manifest;
+    MfManifest *manifest_b = ((const MfdInstallPlan *) b)->item->manifest;
     MfComponentKind kind_a = mf_manifest_get_kind(manifest_a);
     MfComponentKind kind_b = mf_manifest_get_kind(manifest_b);
 
@@ -486,19 +485,20 @@ mfd_manager_becomes_current(MfdManager *manager, MfManifest *manifest)
 }
 
 /**
- * mfd_check_if_bundle_image_wins:
- * @manifest: the manifest of an image of the bundle that provides an identity
- * @installed: (nullable): what provides the identity in the store
+ * mfd_check_if_item_wins:
+ * @manifest: the manifest of an item of the set that provides an identity
+ * @installed: (nullable): the installed component that provides the same identity, or %NULL
  *
- * Check whether we use the image of the bundle that provides an identity, rather
- * than what provides the identity in the store. The image of the bundle wins if the
- * store has nothing that provides the identity, if that is another component, or if
- * it is an older version of the same component.
+ * Check whether we use an item of the set to provide an identity, instead of
+ * the installed component that provides the same identity. The item wins if
+ * no installed component provides the identity, if the installed component
+ * has a different ID, or if the installed component is an older version of
+ * the item.
  *
- * Returns: %TRUE if the image of the bundle wins
+ * Returns: %TRUE if the item of the set wins
  */
 static gboolean
-mfd_check_if_bundle_image_wins(MfManifest *manifest, MfComponent *installed)
+mfd_check_if_item_wins(MfManifest *manifest, MfComponent *installed)
 {
     return installed == NULL ||
            g_strcmp0(mf_component_get_id(installed), mf_manifest_get_component_id(manifest)) != 0 ||
@@ -515,28 +515,28 @@ mfd_check_if_bundle_image_wins(MfManifest *manifest, MfComponent *installed)
  * @ret_sdk: (out): whether the component that provides the identity is an SDK
  *
  * Find the component that provides the identity a component needs as its
- * base, in the bundle or in the store, and make it the base of @iplan.
+ * base, in the set or in the store, and make it the base of @iplan.
  *
  * The base link follows the `current` version of that component if the
- * version we found will be the current one once the bundle is installed.
+ * version we found will be the current one once the set is installed.
  * Otherwise, it names the exact version we found.
  *
  * Returns: %TRUE if we found a component that provides the identity
  */
 static gboolean
 mfd_manager_resolve_dependency(MfdManager *manager,
-                               MfBundle *bundle,
+                               MfdInstallSet *set,
                                const char *identity,
                                MfdInstallPlan *iplan,
                                MfComponentKind *ret_kind,
                                gboolean *ret_sdk)
 {
-    MfBundleImage *image = mf_bundle_find_image_for_identity(bundle, identity);
+    MfdInstallItem *item = mfd_install_set_find_identity(set, identity);
     g_autoptr(MfComponent) installed = mf_store_find_identity(manager->store, identity, NULL);
     gboolean current;
 
-    if (image != NULL && mfd_check_if_bundle_image_wins(mf_bundle_image_get_manifest(image), installed)) {
-        MfManifest *manifest = mf_bundle_image_get_manifest(image);
+    if (item != NULL && mfd_check_if_item_wins(item->manifest, installed)) {
+        MfManifest *manifest = item->manifest;
         const char *component_id = mf_manifest_get_component_id(manifest);
         g_autofree char *version_name = NULL;
 
@@ -561,31 +561,6 @@ mfd_manager_resolve_dependency(MfdManager *manager,
         mf_component_get_id(installed),
         mf_component_is_current(installed) ? NULL : mf_component_get_full_version(installed));
     return TRUE;
-}
-
-/**
- * mfd_bundle_is_dependency_of_app:
- *
- * A kit that arrives in the same bundle as an application that runs on it
- * was not installed on purpose, it just came along.
- */
-static gboolean
-mfd_bundle_is_dependency_of_app(MfBundle *bundle, MfManifest *manifest)
-{
-    GPtrArray *images = mf_bundle_get_images(bundle);
-
-    if (mf_manifest_get_kind(manifest) != MF_COMPONENT_KIND_KIT || mf_manifest_is_sdk(manifest))
-        return FALSE;
-
-    for (guint i = 0; i < images->len; i++) {
-        MfManifest *app = mf_bundle_image_get_manifest(g_ptr_array_index(images, i));
-
-        if (mf_manifest_get_kind(app) == MF_COMPONENT_KIND_APP && !mf_manifest_is_sdk(app) &&
-            g_strcmp0(mf_manifest_get_base_identity(app), mf_manifest_get_identity(manifest)) == 0)
-            return TRUE;
-    }
-
-    return FALSE;
 }
 
 /**
@@ -641,29 +616,6 @@ mfd_manager_find_other_kind(MfdManager *manager, MfManifest *manifest)
 }
 
 /**
- * mfd_bundle_find_exact_base:
- *
- * Returns: (transfer none) (nullable): the manifest of the image in the
- *   bundle that has the component, version and revision @manifest names as its base
- */
-static MfManifest *
-mfd_bundle_find_exact_base(MfBundle *bundle, MfManifest *manifest)
-{
-    GPtrArray *images = mf_bundle_get_images(bundle);
-
-    for (guint i = 0; i < images->len; i++) {
-        MfManifest *base = mf_bundle_image_get_manifest(g_ptr_array_index(images, i));
-
-        if (g_str_equal(mf_manifest_get_component_id(base), mf_manifest_get_base_id(manifest)) &&
-            g_str_equal(mf_manifest_get_version(base), mf_manifest_get_base_version(manifest)) &&
-            mf_manifest_get_revision(base) == mf_manifest_get_base_revision(manifest))
-            return base;
-    }
-
-    return NULL;
-}
-
-/**
  * mfd_manager_resolve_exact_base:
  * @manifest: the manifest of the component whose base to find
  * @iplan: the plan whose base to set
@@ -671,7 +623,7 @@ mfd_bundle_find_exact_base(MfBundle *bundle, MfManifest *manifest)
  * @ret_sdk: (out): whether the base is an SDK
  *
  * Find the exact version of the base a component was built against, in the
- * bundle or in the store, and make it the base of @iplan. Another version
+ * set or in the store, and make it the base of @iplan. Another version
  * that provides the same identity will not do.
  *
  * Returns: %TRUE if that version is there, and provides the identity the
@@ -679,7 +631,7 @@ mfd_bundle_find_exact_base(MfBundle *bundle, MfManifest *manifest)
  */
 static gboolean
 mfd_manager_resolve_exact_base(MfdManager *manager,
-                               MfBundle *bundle,
+                               MfdInstallSet *set,
                                MfManifest *manifest,
                                MfdInstallPlan *iplan,
                                MfComponentKind *ret_kind,
@@ -688,17 +640,17 @@ mfd_manager_resolve_exact_base(MfdManager *manager,
     const char *base_id = mf_manifest_get_base_id(manifest);
     const char *base_version = mf_manifest_get_base_version(manifest);
     guint64 base_revision = mf_manifest_get_base_revision(manifest);
-    MfManifest *in_bundle = mfd_bundle_find_exact_base(bundle, manifest);
+    MfdInstallItem *in_set = mfd_install_set_find_exact_base(set, manifest);
     g_autoptr(MfComponent) installed = NULL;
     g_autofree char *version_name = NULL;
     const char *identity;
     MfComponentKind kind;
     gboolean sdk;
 
-    if (in_bundle != NULL) {
-        identity = mf_manifest_get_identity(in_bundle);
-        kind = mf_manifest_get_kind(in_bundle);
-        sdk = mf_manifest_is_sdk(in_bundle);
+    if (in_set != NULL) {
+        identity = mf_manifest_get_identity(in_set->manifest);
+        kind = mf_manifest_get_kind(in_set->manifest);
+        sdk = mf_manifest_is_sdk(in_set->manifest);
     } else {
         installed = mfd_manager_get_installed(manager, base_id, base_version, base_revision);
         if (installed == NULL)
@@ -718,31 +670,31 @@ mfd_manager_resolve_exact_base(MfdManager *manager,
 }
 
 /**
- * mfd_manager_plan_image_install:
+ * mfd_manager_plan_item_install:
  *
- * Plan how we install an image of the bundle: whether we add the image to
- * the store, whether the component is installed already or not needed at
- * all, its install mode, and what it builds on. Everything that refuses the
- * installation of the image is checked here, before anything is written.
+ * Plan how we install an item of the set: whether we add its image to the
+ * store, whether the component is installed already or not needed at all,
+ * its install mode, and what it builds on. Everything that refuses the
+ * installation of the item is checked here, before anything is written.
  *
- * Returns: %TRUE if the image can be installed
+ * Returns: %TRUE if the item can be installed
  */
 static gboolean
-mfd_manager_plan_image_install(MfdManager *manager,
-                               MfBundle *bundle,
-                               MfBundleImage *image,
-                               MfdInstallPlan *iplan,
-                               MfdErrorDetail *ret_detail,
-                               GError **error)
+mfd_manager_plan_item_install(MfdManager *manager,
+                              MfdInstallSet *set,
+                              MfdInstallItem *item,
+                              MfdInstallPlan *iplan,
+                              MfdErrorDetail *ret_detail,
+                              GError **error)
 {
-    MfManifest *manifest = mf_bundle_image_get_manifest(image);
+    MfManifest *manifest = item->manifest;
     const char *component_id = mf_manifest_get_component_id(manifest);
     const char *version = mf_manifest_get_version(manifest);
     const char *verity_hash = mf_manifest_get_verity_hash(manifest);
     const char *base_id = mf_manifest_get_base_id(manifest);
     MfComponentKind kind = mf_manifest_get_kind(manifest);
     gboolean sdk = mf_manifest_is_sdk(manifest);
-    gboolean dependency = mfd_bundle_is_dependency_of_app(bundle, manifest);
+    gboolean dependency = item->is_dependency;
     g_autoptr(MfComponent) other_kind = NULL;
     g_autoptr(MfComponent) existing = NULL;
 
@@ -761,7 +713,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
     if (!mf_manifest_check_integration(manifest, error))
         return FALSE;
 
-    iplan->image = image;
+    iplan->item = item;
     iplan->add_image = !mf_store_has_image(manager->store, verity_hash);
     iplan->mode = dependency || mf_component_kind_is_always_auto(kind, sdk) ? MF_INSTALL_MODE_AUTO
                                                                             : MF_INSTALL_MODE_MANUAL;
@@ -782,7 +734,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
             iplan->skip = TRUE;
             return TRUE;
         }
-        /* only a runtime that came along as a dependency can be installed on purpose again */
+        /* only a runtime with the install mode auto can be installed again, which makes it manual */
         if (mf_component_kind_is_always_auto(kind, sdk) ||
             mf_component_get_install_mode(existing) != MF_INSTALL_MODE_AUTO) {
             mfd_set_error_already_installed(error, ret_detail, component_id, version);
@@ -797,7 +749,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
         g_autoptr(MfComponent)
             provider = mf_store_find_identity(manager->store, mf_manifest_get_identity(manifest), NULL);
 
-        if (!mfd_check_if_bundle_image_wins(manifest, provider)) {
+        if (!mfd_check_if_item_wins(manifest, provider)) {
             g_info("%s %s is not needed, %s is installed",
                    component_id,
                    version,
@@ -816,7 +768,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
         /* a platform and an SDK need the exact version they were built against,
          * everything else builds on whatever provides the identity of its base */
         if (sdk || kind == MF_COMPONENT_KIND_PLATFORM) {
-            if (!mfd_manager_resolve_exact_base(manager, bundle, manifest, iplan, &base_kind, &base_sdk)) {
+            if (!mfd_manager_resolve_exact_base(manager, set, manifest, iplan, &base_kind, &base_sdk)) {
                 g_autofree char *base_version_name = mf_build_full_version(
                     base_version,
                     mf_manifest_get_base_revision(manifest));
@@ -825,7 +777,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
                 return FALSE;
             }
         } else if (!mfd_manager_resolve_dependency(manager,
-                                                   bundle,
+                                                   set,
                                                    mf_manifest_get_base_identity(manifest),
                                                    iplan,
                                                    &base_kind,
@@ -840,7 +792,7 @@ mfd_manager_plan_image_install(MfdManager *manager,
                         MF_ERROR,
                         MF_ERROR_INVALID_BUNDLE,
                         "%s: %s%s %s can not build on %s%s %s",
-                        mf_bundle_image_get_manifest_name(image),
+                        item->name,
                         mf_component_kind_to_string(kind),
                         sdk ? " SDK" : "",
                         component_id,
@@ -1257,7 +1209,7 @@ mfd_manager_plan_supersede(MfdManager *manager, GArray *plans, GError **error)
             continue;
         for (guint j = 0; j < plans->len; j++) {
             MfdInstallPlan *plan = &g_array_index(plans, MfdInstallPlan, j);
-            MfManifest *manifest = mf_bundle_image_get_manifest(plan->image);
+            MfManifest *manifest = plan->item->manifest;
 
             if (!plan->skip &&
                 g_str_equal(mf_component_get_id(component), mf_manifest_get_component_id(manifest)) &&
@@ -1436,14 +1388,13 @@ mfd_manager_read_exports(MfdManager *manager, MfManifest *manifest, GError **err
 
 /**
  * mfd_manager_execute_install_plan:
- * @bundle: the bundle the component is in
  * @iplan: the plan of the component
  * @tracker: the progress of the installation
  * @ret_bytes_added: (out): the size of the image if we added it to the store, or 0
  * @ret_detail: (out caller-allocates) (optional): details about the failure
  * @error: a #GError
  *
- * Install one component of a bundle: copy its image into the store, unless
+ * Install one component of a set: write its image into the store, unless
  * the store has it already, and then record the component.
  *
  * If the component can not be recorded, an image that we added is removed again.
@@ -1452,7 +1403,6 @@ mfd_manager_read_exports(MfdManager *manager, MfManifest *manifest, GError **err
  */
 static gboolean
 mfd_manager_execute_install_plan(MfdManager *manager,
-                                 MfBundle *bundle,
                                  MfdInstallPlan *iplan,
                                  MfdProgressTracker *tracker,
                                  MfResult *result,
@@ -1460,7 +1410,8 @@ mfd_manager_execute_install_plan(MfdManager *manager,
                                  MfdErrorDetail *ret_detail,
                                  GError **error)
 {
-    MfManifest *manifest = mf_bundle_image_get_manifest(iplan->image);
+    MfdInstallItem *item = iplan->item;
+    MfManifest *manifest = item->manifest;
     const char *verity_hash = mf_manifest_get_verity_hash(manifest);
     const char *component_id = mf_manifest_get_component_id(manifest);
     const char *version = mf_manifest_get_version(manifest);
@@ -1473,7 +1424,7 @@ mfd_manager_execute_install_plan(MfdManager *manager,
 
     *ret_bytes_added = 0;
     /* build the catalog data for the local origin first, as that can fail */
-    catalog = mfd_make_local_appstream_catalog(mf_bundle_image_get_catalog(iplan->image), error);
+    catalog = mfd_make_local_appstream_catalog(item->catalog, error);
     if (catalog == NULL) {
         g_prefix_error(error, "%s: ", component_id);
         return FALSE;
@@ -1482,12 +1433,12 @@ mfd_manager_execute_install_plan(MfdManager *manager,
     if (iplan->add_image)
         mfd_progress_begin_item(tracker, MF_ACTION_INSTALL, component_id, full_version, image_size);
 
-    /* another component of the bundle may have had the same image */
+    /* a component of the set that was installed before may have added the same image already */
     if (iplan->add_image && !mf_store_has_image(manager->store, verity_hash)) {
-        MfdBundleImageCopy copy = {bundle, iplan->image, tracker};
+        MfdItemImageWrite write = {item, tracker};
 
         g_info("Adding image %s of %s %s", verity_hash, component_id, version);
-        if (!mfd_store_writer_add_image(manager->writer, manifest, mfd_write_bundle_image, &copy, error))
+        if (!mfd_store_writer_add_image(manager->writer, manifest, mfd_write_item_image, &write, error))
             return FALSE;
         added = TRUE;
     } else {
@@ -1500,9 +1451,9 @@ mfd_manager_execute_install_plan(MfdManager *manager,
                                                                manifest,
                                                                iplan->base,
                                                                catalog,
-                                                               mf_bundle_image_get_icons(iplan->image),
+                                                               item->icons,
                                                                exports,
-                                                               MF_BUNDLE_CATALOG_ORIGIN,
+                                                               item->origin,
                                                                iplan->mode,
                                                                &local_error)) {
         g_autoptr(GError) remove_error = NULL;
@@ -1553,7 +1504,7 @@ mfd_manager_check_file_conflicts(MfdManager *manager, GArray *plans, GError **er
 
     for (guint i = 0; i < plans->len; i++) {
         MfdInstallPlan *plan = &g_array_index(plans, MfdInstallPlan, i);
-        MfManifest *manifest = mf_bundle_image_get_manifest(plan->image);
+        MfManifest *manifest = plan->item->manifest;
 
         if (!plan->skip && mfd_manager_becomes_current(manager, manifest))
             g_ptr_array_add(manifests, manifest);
@@ -1563,39 +1514,35 @@ mfd_manager_check_file_conflicts(MfdManager *manager, GArray *plans, GError **er
 }
 
 /**
- * mfd_manager_plan_bundle_install:
- * @ret_detail: (out caller-allocates) (optional): more about a failure
+ * mfd_manager_plan_install:
+ * @ret_detail: (out caller-allocates) (optional): details about the failure
  *
- * Plan the installation of every image of a bundle.
+ * Plan the installation of every item of a set.
  *
  * Returns: (transfer full) (element-type MfdInstallPlan): the plans, or %NULL
- *   if the bundle can not be installed
+ *   if the set can not be installed
  */
 static GArray *
-mfd_manager_plan_bundle_install(MfdManager *manager,
-                                MfBundle *bundle,
-                                MfdErrorDetail *ret_detail,
-                                GError **error)
+mfd_manager_plan_install(MfdManager *manager, MfdInstallSet *set, MfdErrorDetail *ret_detail, GError **error)
 {
-    GPtrArray *images = mf_bundle_get_images(bundle);
-    g_autoptr(GArray) plans = g_array_sized_new(FALSE, TRUE, sizeof(MfdInstallPlan), images->len);
+    GPtrArray *items = set->items;
+    g_autoptr(GArray) plans = g_array_sized_new(FALSE, TRUE, sizeof(MfdInstallPlan), items->len);
 
-    g_array_set_size(plans, images->len);
+    g_array_set_size(plans, items->len);
     g_array_set_clear_func(plans, (GDestroyNotify) mfd_install_plan_clear);
-    for (guint i = 0; i < images->len; i++) {
-        if (!mfd_manager_plan_image_install(manager,
-                                            bundle,
-                                            g_ptr_array_index(images, i),
-                                            &g_array_index(plans, MfdInstallPlan, i),
-                                            ret_detail,
-                                            error))
+    for (guint i = 0; i < items->len; i++) {
+        if (!mfd_manager_plan_item_install(manager,
+                                           set,
+                                           g_ptr_array_index(items, i),
+                                           &g_array_index(plans, MfdInstallPlan, i),
+                                           ret_detail,
+                                           error))
             return NULL;
     }
     if (!mfd_manager_check_file_conflicts(manager, plans, error))
         return NULL;
 
-    /* we install every component after the components it builds on, so if installing a
-     * component fails, the components installed before it have what they build on */
+    /* install every component after the components that it builds on */
     g_array_sort(plans, mfd_install_plan_compare_layer);
 
     return g_steal_pointer(&plans);
@@ -1606,7 +1553,7 @@ mfd_manager_plan_bundle_install(MfdManager *manager,
  * @result: where to add what was installed
  * @plans: (element-type MfdInstallPlan): the plans of the installation
  *
- * Add the components of the bundle that the installation installed to
+ * Add the components of the set that the installation installed to
  * @result, but not the dependencies that were there already.
  */
 static void
@@ -1614,7 +1561,7 @@ mfd_manager_results_add_installed(MfdManager *manager, MfResult *result, GArray 
 {
     for (guint i = 0; i < plans->len; i++) {
         MfdInstallPlan *plan = &g_array_index(plans, MfdInstallPlan, i);
-        MfManifest *manifest = mf_bundle_image_get_manifest(plan->image);
+        MfManifest *manifest = plan->item->manifest;
         g_autoptr(MfComponent) component = NULL;
 
         if (plan->skip)
@@ -1631,34 +1578,33 @@ mfd_manager_results_add_installed(MfdManager *manager, MfResult *result, GArray 
 }
 
 /**
- * mfd_manager_install_bundle:
+ * mfd_manager_install_set:
  * @manager: an #MfdManager
- * @bundle: the bundle to install
+ * @set: the components to install
  * @progress_func: (nullable): called whenever the operation progresses
  * @user_data: passed to @progress_func
- * @ret_detail: (out caller-allocates) (optional): more about a failure
+ * @ret_detail: (out caller-allocates) (optional): details about the failure
  * @error: a #GError
  *
- * Install everything a bundle contains. We refuse everything that can be
- * refused before we write anything. Then we install the components one after
- * the other, every component after the components of the bundle it builds on,
- * see mfd_manager_execute_install_plan().
+ * Install the components of a set.
  *
- * If installing a component fails, we undo only that step and stop. The
- * components that were installed before stay installed, so their images do
- * not have to be copied (or downloaded) again. Once all components are
- * installed, we remove the older versions and revisions the installation
- * supersedes, see mfd_manager_plan_supersede().
+ * We plan the installation of every item first, and then install every
+ * component after the components of the set that it builds on.
  *
- * Returns: (transfer full): what was installed, or %NULL on error
+ * If installing a component fails, we undo only the installation of that
+ * component and stop. The components that were installed before stay
+ * installed, so their images do not have to be copied (or downloaded) again.
+ * Once all components are installed, we remove the superseded versions.
+ *
+ * Returns: (transfer full): the result of the installation, or %NULL on error
  */
 MfResult *
-mfd_manager_install_bundle(MfdManager *manager,
-                           MfBundle *bundle,
-                           MfProgressFunc progress_func,
-                           gpointer user_data,
-                           MfdErrorDetail *ret_detail,
-                           GError **error)
+mfd_manager_install_set(MfdManager *manager,
+                        MfdInstallSet *set,
+                        MfProgressFunc progress_func,
+                        gpointer user_data,
+                        MfdErrorDetail *ret_detail,
+                        GError **error)
 {
     g_auto(MfdProgressTracker) tracker = {
         .func = progress_func,
@@ -1682,12 +1628,12 @@ mfd_manager_install_bundle(MfdManager *manager,
     mfd_integrator_reconcile_all(manager->integrator);
 
     /* plan installation */
-    plans = mfd_manager_plan_bundle_install(manager, bundle, ret_detail, error);
+    plans = mfd_manager_plan_install(manager, set, ret_detail, error);
     if (plans == NULL)
         return NULL;
 
-    /* every image we copy is one item of the progress, and removing what the installation
-     * supersedes is one item more */
+    /* every image that we copy is one progress item, and removing the superseded versions
+     * is one more item */
     tracker.total = 1;
     for (guint i = 0; i < plans->len; i++) {
         if (g_array_index(plans, MfdInstallPlan, i).add_image)
@@ -1701,7 +1647,6 @@ mfd_manager_install_bundle(MfdManager *manager,
         if (plan->skip)
             continue;
         if (!mfd_manager_execute_install_plan(manager,
-                                              bundle,
                                               plan,
                                               &tracker,
                                               result,
@@ -1712,7 +1657,7 @@ mfd_manager_install_bundle(MfdManager *manager,
         bytes_added += image_bytes;
     }
 
-    /* we remove what the installation supersedes, but the installation stands even if that fails */
+    /* remove the superseded versions. The installation is still successful if their removal fails. */
     rmplan = mfd_manager_plan_supersede(manager, plans, &supersede_error);
     mfd_progress_split_last_item(&tracker, rmplan != NULL ? rmplan->items->len : 0);
     if (rmplan == NULL || !mfd_manager_execute_removal(manager, rmplan, &tracker, result, &supersede_error))

@@ -93,11 +93,11 @@ struct _MfdRequest {
     MfTransactionFlags flags; /* the transaction flags of the call */
     sd_bus_slot *polkit_slot; /* the authorization check in progress, or NULL */
 
-    int bundle_fd;      /* the bundle to install, or -1 */
-    MfBundle *bundle;   /* the bundle to install, once we have read it */
-    char *component_id; /* the component to remove or mark */
-    char *version;      /* the version to remove or mark, or NULL for all of them */
-    MfInstallMode mode; /* how to mark the component */
+    int bundle_fd;              /* the bundle to install, or -1 */
+    MfdInstallSet *install_set; /* the components to install, set once the bundle was read */
+    char *component_id;         /* the component to remove or mark */
+    char *version;              /* the version to remove or mark, or NULL for all of them */
+    MfInstallMode mode;         /* how to mark the component */
 };
 
 /**
@@ -135,7 +135,7 @@ mfd_request_free(MfdRequest *request)
 {
     sd_bus_slot_unref(request->polkit_slot);
     sd_varlink_unref(request->link);
-    g_clear_object(&request->bundle);
+    g_clear_pointer(&request->install_set, mfd_install_set_free);
     if (request->bundle_fd >= 0)
         close(request->bundle_fd);
     g_free(request->component_id);
@@ -792,28 +792,6 @@ mfd_service_authorize(MfdService *service, MfdRequest *request, MfTransactionFla
 }
 
 /**
- * mfd_bundle_is_privileged:
- *
- * Returns: %TRUE if a component of @bundle can gain root access to the host,
- *   see mf_integration_is_privileged()
- */
-static gboolean
-mfd_bundle_is_privileged(MfBundle *bundle)
-{
-    GPtrArray *images = mf_bundle_get_images(bundle);
-
-    for (guint i = 0; i < images->len; i++) {
-        MfManifest *manifest = mf_bundle_image_get_manifest(g_ptr_array_index(images, i));
-        MfIntegration *integration = mf_manifest_get_integration(manifest);
-
-        if (integration != NULL && mf_integration_is_privileged(integration))
-            return TRUE;
-    }
-
-    return FALSE;
-}
-
-/**
  * mfd_service_install_bundle:
  *
  * Install all components of a bundle, and reply to the call.
@@ -832,35 +810,38 @@ mfd_service_install_bundle(MfdService *service, MfdRequest *request)
     g_autoptr(MfResult) result = NULL;
     g_autoptr(GError) error = NULL;
 
-    if (request->bundle == NULL) {
+    if (request->install_set == NULL) {
+        g_autoptr(MfBundle) bundle = NULL;
+
         g_message("User %u requested to install a bundle", (unsigned int) request->uid);
 
-        request->bundle = mf_bundle_new_from_fd(request->bundle_fd, &error);
-        if (request->bundle == NULL) {
+        bundle = mf_bundle_new_from_fd(request->bundle_fd, &error);
+        if (bundle == NULL) {
             mfd_service_reply_error(request->link, error, NULL);
             return 0;
         }
 
         /* TODO: Verify the signature against trusted keys, once a host has some. */
-        if (mf_bundle_is_signed(request->bundle))
+        if (mf_bundle_is_signed(bundle))
             g_warning(
                 "The bundle is signed, but the signature was not verified: trusted keys are not supported yet");
         else
             g_warning("The bundle is not signed");
 
-        if (!mf_peer_is_privileged(request->uid) && mfd_bundle_is_privileged(request->bundle)) {
+        request->install_set = mfd_install_set_new_for_bundle(bundle);
+        if (!mf_peer_is_privileged(request->uid) && mfd_install_set_is_privileged(request->install_set)) {
             request->action_id = MFD_POLKIT_ACTION_INSTALL_PRIVILEGED;
             mfd_service_ask_polkit(service, request);
             return MFD_REQUEST_DEFERRED;
         }
     }
 
-    result = mfd_manager_install_bundle(service->manager,
-                                        request->bundle,
-                                        request->report_progress ? mfd_service_on_progress : NULL,
-                                        request->link,
-                                        &detail,
-                                        &error);
+    result = mfd_manager_install_set(service->manager,
+                                     request->install_set,
+                                     request->report_progress ? mfd_service_on_progress : NULL,
+                                     request->link,
+                                     &detail,
+                                     &error);
     if (result == NULL) {
         mfd_service_reply_error(request->link, error, &detail);
         return 0;

@@ -10,6 +10,8 @@
 
 #include <manifold.h>
 
+#include "mfd-install-set.h"
+
 G_BEGIN_DECLS
 
 /**
@@ -81,12 +83,12 @@ G_DECLARE_FINAL_TYPE(MfdManager, mfd_manager, MFD, MANAGER, GObject)
 MfdManager     *mfd_manager_new(void);
 MfdManager     *mfd_manager_new_for_store(MfStore *store);
 
-MfResult       *mfd_manager_install_bundle(MfdManager     *manager,
-                                           MfBundle       *bundle,
-                                           MfProgressFunc  progress_func,
-                                           gpointer        user_data,
-                                           MfdErrorDetail *ret_detail,
-                                           GError        **error);
+MfResult       *mfd_manager_install_set(MfdManager     *manager,
+                                        MfdInstallSet  *set,
+                                        MfProgressFunc  progress_func,
+                                        gpointer        user_data,
+                                        MfdErrorDetail *ret_detail,
+                                        GError        **error);
 
 MfdRemovalPlan *mfd_manager_plan_removal(MfdManager     *manager,
                                          const char     *component_id,
