@@ -59,6 +59,8 @@ gboolean mf_write_all(int         fd,
 
 gboolean mf_file_name_is_valid(const char *name);
 gboolean mf_unit_file_name_is_valid(const char *name);
+MF_INTERNAL_VISIBLE
+gboolean mf_relative_path_is_valid(const char *path);
 gboolean mf_bundle_file_name_is_valid(const char *name);
 gboolean mf_program_path_is_valid(const char *path);
 gboolean mf_reverse_dns_name_is_valid(const char *name);
@@ -70,6 +72,7 @@ gboolean mf_mime_glob_is_valid(const char *pattern);
 gboolean mf_mime_weight_is_valid(const char *weight);
 gboolean mf_mime_xml_name_is_valid(const char *name);
 gboolean mf_text_is_valid(GBytes *text);
+gboolean mf_bytes_are_jxl(GBytes *bytes);
 
 MF_INTERNAL_VISIBLE
 char *mf_build_full_version(const char *version,

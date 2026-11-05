@@ -27,8 +27,8 @@ constexpr size_t FILE_NAME_LENGTH_MAX = 255;
 /* the maximum length of a component ID, which is used as a directory name */
 constexpr size_t COMPONENT_ID_LENGTH_MAX = 255;
 
-/* the longest path in a bundle */
-constexpr size_t BUNDLE_PATH_LENGTH_MAX = 1024;
+/* the longest relative path we accept, in a bundle or in a repository */
+constexpr size_t PATH_LENGTH_MAX = 1024;
 
 constexpr size_t ARCHITECTURE_LENGTH_MAX = 64;
 
@@ -278,26 +278,23 @@ mf_plain_name_is_valid(const char *name, size_t len)
 }
 
 /**
- * mf_bundle_file_name_is_valid:
+ * mf_relative_path_is_valid:
+ * @path: (nullable): a path
  *
- * The name of a file in a bundle has to be a plain name. Only the files of
- * the catalog have a relative path below %MF_BUNDLE_CATALOG_DIR.
+ * The files of bundles and repositories are referenced by paths relative to
+ * the root of the bundle or repository, and a path must never lead out of
+ * that root. So we require a path of plain names.
+ *
+ * Returns: %TRUE if @path is one or more plain names, separated by `/`
  */
 gboolean
-mf_bundle_file_name_is_valid(const char *name)
+mf_relative_path_is_valid(const char *path)
 {
-    const char *part;
-    size_t len;
+    const char *part = path;
 
-    if (name == NULL)
+    if (path == NULL || strnlen(path, PATH_LENGTH_MAX + 1) > PATH_LENGTH_MAX)
         return FALSE;
-    len = strnlen(name, BUNDLE_PATH_LENGTH_MAX + 1);
-    if (len > BUNDLE_PATH_LENGTH_MAX)
-        return FALSE;
-    if (!g_str_has_prefix(name, MF_BUNDLE_CATALOG_PREFIX))
-        return mf_plain_name_is_valid(name, len);
 
-    part = name + strlen(MF_BUNDLE_CATALOG_PREFIX);
     for (;;) {
         const char *slash = strchr(part, '/');
         size_t part_len = slash != NULL ? (size_t) (slash - part) : strlen(part);
@@ -308,6 +305,22 @@ mf_bundle_file_name_is_valid(const char *name)
             return TRUE;
         part = slash + 1;
     }
+}
+
+/**
+ * mf_bundle_file_name_is_valid:
+ *
+ * The name of a file in a bundle has to be a plain name. Only the files of
+ * the catalog have a relative path below %MF_BUNDLE_CATALOG_DIR.
+ */
+gboolean
+mf_bundle_file_name_is_valid(const char *name)
+{
+    if (name == NULL)
+        return FALSE;
+    if (g_str_has_prefix(name, MF_BUNDLE_CATALOG_PREFIX))
+        return mf_relative_path_is_valid(name);
+    return mf_plain_name_is_valid(name, strnlen(name, FILE_NAME_LENGTH_MAX + 1));
 }
 
 /**
@@ -489,6 +502,23 @@ mf_hash_to_hex_buffer(char *dest, const guint8 *hash, gsize size)
         dest[2 * i + 1] = digits[hash[i] & 0xf];
     }
     dest[2 * size] = '\0';
+}
+
+/**
+ * mf_bytes_are_jxl:
+ *
+ * Check for a JPEG XL image, as a bare codestream or in its container.
+ */
+gboolean
+mf_bytes_are_jxl(GBytes *bytes)
+{
+    static const guint8 codestream[] = {0xff, 0x0a};
+    static const guint8 container[] = {0x00, 0x00, 0x00, 0x0c, 'J', 'X', 'L', ' ', '\r', '\n', 0x87, '\n'};
+    gsize size;
+    const guint8 *data = g_bytes_get_data(bytes, &size);
+
+    return (size >= sizeof(codestream) && memcmp(data, codestream, sizeof(codestream)) == 0) ||
+           (size >= sizeof(container) && memcmp(data, container, sizeof(container)) == 0);
 }
 
 /**
