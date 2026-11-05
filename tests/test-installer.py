@@ -636,14 +636,14 @@ class InstallTest(InstallerTestCase):
     def test_catalog_is_kept_and_linked(self):
         self.install_core()
         self.install_app()
-        catalog = f'{STORE}/origins/manifold-local/xml'
+        # the catalogs of all origins share a directory, so the file names start with the origin
+        catalog = f'{STORE}/catalog/xml'
         for directory, component in (('runtimes', CORE_ID), ('apps', APP_ID)):
             name = f'{component}.xml'
+            link = f'{catalog}/manifold-local-{name}'
             self.assertTrue(os.path.isfile(f'{STORE}/{directory}/{component}/current/{name}'))
-            self.assertEqual(
-                os.readlink(f'{catalog}/{name}'), f'../../../{directory}/{component}/current/{name}'
-            )
-            with open(f'{catalog}/{name}', encoding='utf-8') as f:
+            self.assertEqual(os.readlink(link), f'../../{directory}/{component}/current/{name}')
+            with open(link, encoding='utf-8') as f:
                 data = f.read()
             self.assertIn(f'<id>{component}</id>', data)
             self.assertIn('origin="manifold-local"', data)
@@ -652,7 +652,7 @@ class InstallTest(InstallerTestCase):
             self.assertNotIn('<screenshot', data)
 
         # icons are named after their component, so all share a directory per size
-        icons = f'{STORE}/origins/manifold-local/icons/64x64'
+        icons = f'{STORE}/catalog/icons/manifold-local/64x64'
         icon = f'{APP_ID}.jxl'
         self.assertEqual(
             os.readlink(f'{icons}/{icon}'),
@@ -662,9 +662,9 @@ class InstallTest(InstallerTestCase):
             self.assertEqual(f.read(), JXL_DATA)
 
         self.manifold('remove', APP_ID)
-        self.assertFalse(os.path.lexists(f'{catalog}/{APP_ID}.xml'))
+        self.assertFalse(os.path.lexists(f'{catalog}/manifold-local-{APP_ID}.xml'))
         self.assertFalse(os.path.lexists(f'{icons}/{icon}'))
-        self.assertTrue(os.path.lexists(f'{catalog}/{CORE_ID}.xml'))
+        self.assertTrue(os.path.lexists(f'{catalog}/manifold-local-{CORE_ID}.xml'))
 
     def test_catalog_must_describe_the_component(self):
         out = self.install(
