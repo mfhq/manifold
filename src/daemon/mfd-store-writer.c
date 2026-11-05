@@ -112,27 +112,28 @@ mfd_store_writer_ensure_root(MfdStoreWriter *writer, GError **error)
 
 /**
  * mfd_store_writer_add_image:
+ * @manifest: the manifest of the image
+ * @write_func: (scope call): writes the image and checks it
  *
- * Copy an image of a bundle into the store, verifying it on the way. The
- * image is written without a name, and only gets its name after it was
- * verified completely: an interrupted copy leaves nothing behind.
+ * Add the image of @manifest to the store. The image is written without a
+ * name, and only gets its name after it was verified completely: an
+ * interrupted write leaves nothing behind.
  */
 gboolean
 mfd_store_writer_add_image(MfdStoreWriter *writer,
-                           MfBundle *bundle,
-                           MfBundleImage *image,
-                           MfCopyProgressFunc progress_func,
+                           MfManifest *manifest,
+                           MfdImageWriteFunc write_func,
                            gpointer user_data,
                            GError **error)
 {
     g_auto(GLnxTmpfile) tmpf = {0};
-    const char *verity_hash = mf_manifest_get_verity_hash(mf_bundle_image_get_manifest(image));
+    const char *verity_hash = mf_manifest_get_verity_hash(manifest);
     g_autofree char *path = mf_store_image_path_at(mf_store_get_path(writer->store), verity_hash);
     g_autofree char *images_dir = mfd_store_writer_get_path(writer, MF_STORE_IMAGES_SUBDIR, NULL);
 
     if (!glnx_open_tmpfile_linkable_at(AT_FDCWD, images_dir, O_WRONLY | O_CLOEXEC, &tmpf, error))
         return FALSE;
-    if (!mf_bundle_copy_image(bundle, image, tmpf.fd, progress_func, user_data, error))
+    if (!write_func(tmpf.fd, user_data, error))
         return FALSE;
     if (fchmod(tmpf.fd, 0644) < 0 || fsync(tmpf.fd) < 0) {
         glnx_throw_errno_prefix(error, "Unable to finish writing image %s", verity_hash);
@@ -375,6 +376,7 @@ mfd_store_writer_write_files(const char *version_dir, const char *subdir, GHashT
  * @icons: (element-type utf8 GBytes): the icons of the component by their size directory and file name
  * @exports: (nullable) (element-type utf8 GBytes): the files the component installs on the host,
  *   by their export path
+ * @origin: where the component comes from, see mf_component_get_origin()
  * @mode: whether the component is a potential target for automatic removal
  *
  * Record an installed version of a component: a directory with links to its
@@ -398,6 +400,7 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
                                    GBytes *catalog,
                                    GHashTable *icons,
                                    GHashTable *exports,
+                                   const char *origin,
                                    MfInstallMode mode,
                                    GError **error)
 {
@@ -472,8 +475,7 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
     if (exports != NULL && !mfd_store_writer_write_files(tmp_dir, MF_STORE_EXPORTS_NAME, exports, error))
         goto out;
 
-    /* TODO: every installation is local until repository support is ported from Intrafold */
-    if (!mfd_write_word_safe(tmp_dir, MF_STORE_ORIGIN_NAME, MF_BUNDLE_CATALOG_ORIGIN, error))
+    if (!mfd_write_word_safe(tmp_dir, MF_STORE_ORIGIN_NAME, origin, error))
         goto out;
     if (!mfd_write_word_safe(tmp_dir, MF_STORE_MODE_NAME, mf_install_mode_to_string(mode), error))
         goto out;

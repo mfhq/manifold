@@ -242,7 +242,7 @@ mfd_progress_split_last_item(MfdProgressTracker *tracker, guint n_items)
 /**
  * mfd_on_copy_progress:
  *
- * Report the progress of copying an image, see mfd_store_writer_add_image().
+ * Report the progress of copying an image, see mfd_write_bundle_image().
  */
 static void
 mfd_on_copy_progress(guint64 bytes_copied, gpointer user_data)
@@ -255,6 +255,26 @@ mfd_on_copy_progress(guint64 bytes_copied, gpointer user_data)
         bytes_copied == mf_item_progress_get_bytes_total(tracker->item))
         return;
     mfd_progress_report(tracker);
+}
+
+/* an image to copy out of its bundle, see mfd_write_bundle_image() */
+typedef struct {
+    MfBundle *bundle;
+    MfBundleImage *image;
+    MfdProgressTracker *tracker;
+} MfdBundleImageCopy;
+
+/**
+ * mfd_write_bundle_image:
+ *
+ * Copy an image out of its bundle into the store, see mfd_store_writer_add_image().
+ */
+static gboolean
+mfd_write_bundle_image(int fd, gpointer user_data, GError **error)
+{
+    MfdBundleImageCopy *copy = user_data;
+
+    return mf_bundle_copy_image(copy->bundle, copy->image, fd, mfd_on_copy_progress, copy->tracker, error);
 }
 
 /**
@@ -1472,13 +1492,10 @@ mfd_manager_execute_install_plan(MfdManager *manager,
 
     /* another component of the bundle may have had the same image */
     if (iplan->add_image && !mf_store_has_image(manager->store, verity_hash)) {
+        MfdBundleImageCopy copy = {bundle, iplan->image, tracker};
+
         g_info("Adding image %s of %s %s", verity_hash, component_id, version);
-        if (!mfd_store_writer_add_image(manager->writer,
-                                        bundle,
-                                        iplan->image,
-                                        mfd_on_copy_progress,
-                                        tracker,
-                                        error))
+        if (!mfd_store_writer_add_image(manager->writer, manifest, mfd_write_bundle_image, &copy, error))
             return FALSE;
         added = TRUE;
     } else {
@@ -1493,6 +1510,7 @@ mfd_manager_execute_install_plan(MfdManager *manager,
                                                                catalog,
                                                                mf_bundle_image_get_icons(iplan->image),
                                                                exports,
+                                                               MF_BUNDLE_CATALOG_ORIGIN,
                                                                iplan->mode,
                                                                &local_error)) {
         g_autoptr(GError) remove_error = NULL;
