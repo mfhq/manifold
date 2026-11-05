@@ -120,7 +120,7 @@ test_get_current(Fixture *f, gconstpointer user_data)
     g_assert_cmpstr(mf_component_get_verity_hash(core), ==, core_hash);
     g_assert_true(mf_component_is_current(core));
     g_assert_cmpint(mf_component_get_install_mode(core), ==, MF_INSTALL_MODE_MANUAL);
-    g_assert_cmpstr(mf_component_get_origin(core), ==, "local");
+    g_assert_cmpstr(mf_component_get_origin(core), ==, "manifold-local");
 
     g_assert_true(g_str_has_suffix(mf_component_get_dir(core), "/runtimes/" TEST_CORE_ID "/13.8-22810000"));
     image = mf_store_image_path_at(mf_store_get_path(f->store), mf_component_get_verity_hash(core));
@@ -457,7 +457,7 @@ mft_new_core(void)
                             core_hash,
                             TRUE,
                             MF_INSTALL_MODE_MANUAL,
-                            "local",
+                            "manifold-local",
                             NULL);
 }
 

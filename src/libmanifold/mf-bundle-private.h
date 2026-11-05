@@ -26,8 +26,8 @@ MF_BEGIN_PRIVATE_DECLS
 /**
  * MF_BUNDLE_CATALOG_ORIGIN:
  *
- * The origin of the AppStream catalog of a bundle, and of the components
- * installed from local bundles.
+ * The origin of the AppStream catalog of a bundle. Components that are
+ * installed from a bundle have the same origin in the store.
  */
 #define MF_BUNDLE_CATALOG_ORIGIN "manifold-local"
 

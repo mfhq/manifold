@@ -169,8 +169,9 @@ mfd_store_writer_remove_image(MfdStoreWriter *writer, const char *verity_hash, G
  * mfd_store_writer_update_icon_links:
  *
  * Link the icons of the current version of a component into the icon
- * directories of the "local" origin, through the `current` link of the
- * component, and remove the links to sizes the current version lacks.
+ * directories of the local origin. The links point through the `current` link
+ * of the component. We remove the links for icon sizes that the current
+ * version does not have.
  */
 static gboolean
 mfd_store_writer_update_icon_links(MfdStoreWriter *writer,
@@ -227,7 +228,7 @@ mfd_store_writer_update_icon_links(MfdStoreWriter *writer,
  * mfd_store_writer_update_catalog_links:
  *
  * Make the catalog data and icons of the current version of a component
- * available in the "local" origin, with links through the `current` link of
+ * available in the local origin, with links through the `current` link of
  * the component. We remove the links if the current version has no catalog
  * data, or if there is no current version.
  */
@@ -464,7 +465,7 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
         goto out;
 
     /* TODO: every installation is local until repository support is ported from Intrafold */
-    if (!mfd_write_word_safe(tmp_dir, MF_STORE_ORIGIN_NAME, MF_STORE_LOCAL_ORIGIN, error))
+    if (!mfd_write_word_safe(tmp_dir, MF_STORE_ORIGIN_NAME, MF_BUNDLE_CATALOG_ORIGIN, error))
         goto out;
     if (!mfd_write_word_safe(tmp_dir, MF_STORE_MODE_NAME, mf_install_mode_to_string(mode), error))
         goto out;
