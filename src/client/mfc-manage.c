@@ -14,6 +14,18 @@
 
 #include "mfc-util.h"
 
+/* the value of the --origin option of the install command */
+static char *optn_origin = NULL;
+
+static const GOptionEntry install_options[] = {
+    {"origin",
+     0, 0,
+     G_OPTION_ARG_STRING, &optn_origin,
+     N_("Install components from this origin, '<remote>-<channel>', if more than one has them."),
+     "ORIGIN"},
+    G_OPTION_ENTRY_NULL,
+};
+
 /**
  * mfc_on_progress:
  *
@@ -104,6 +116,23 @@ mfc_print_result(MfResult *result)
         /* TRANSLATORS: something went wrong, but the operation still succeeded */
         g_printerr(_("Warning: %s\n"), shown);
     }
+}
+
+/**
+ * mfc_argument_is_bundle_file:
+ *
+ * A bundle file is given as a path that starts with `/`, `./` or `../`. We do
+ * not look at what exists in the current directory, so a file there can
+ * never be installed in place of a component that has the same name.
+ *
+ * Returns: %TRUE if an argument of the install command names a bundle file,
+ *   and not the ID of a component
+ */
+static gboolean
+mfc_argument_is_bundle_file(const char *argument)
+{
+    return g_str_has_prefix(argument, "/") || g_str_has_prefix(argument, "./") ||
+           g_str_has_prefix(argument, "../");
 }
 
 /**
@@ -250,39 +279,94 @@ mfc_install_bundle(MfcContext *ctx, const char *fname)
 }
 
 /**
+ * mfc_install_component:
+ * @origin: (nullable): the origin to install from, or %NULL if only one has the component
+ *
+ * Install a component from the remotes, with the bases it needs.
+ */
+static int
+mfc_install_component(MfcContext *ctx, const char *component_id, const char *origin)
+{
+    g_autoptr(MfResult) result = NULL;
+    g_autoptr(GError) error = NULL;
+
+    result = mf_manager_install_component(mfc_context_get_manager(ctx),
+                                          component_id,
+                                          origin,
+                                          mfc_on_progress,
+                                          ctx,
+                                          NULL,
+                                          &error);
+    mfc_progress_bar_finish(ctx->progress_bar);
+    if (result == NULL) {
+        g_printerr(_("Unable to install %s: %s\n"), component_id, error->message);
+        if (g_error_matches(error, MF_ERROR, MF_ERROR_AMBIGUOUS))
+            /* TRANSLATORS: --origin is an option of the command, and not translated */
+            g_printerr("%s\n", _("Choose one of them with --origin."));
+        return MFC_EXIT_FAILURE;
+    }
+
+    mfc_print_result(result);
+
+    return MFC_EXIT_SUCCESS;
+}
+
+/**
  * mfc_run_install_command:
  *
- * Install the components of bundle files.
+ * Install the components of bundle files, and components from the remotes.
+ * An argument that is a path starting with `/`, `./` or `../` is a bundle
+ * file, and every other argument is the ID of a component.
  */
 static int
 mfc_run_install_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
 {
     g_autoptr(GOptionContext) context = NULL;
+    guint n_components = 0;
     int ret;
 
-    context = mfc_option_context_for_command(cmd, NULL);
+    context = mfc_option_context_for_command(cmd, install_options);
     ret = mfc_parse_command_options(context, cmd, &argc, &argv);
     if (ret != MFC_EXIT_SUCCESS)
         return ret;
 
     if (argc < 2) {
-        g_printerr("%s\n", _("You need to specify a bundle file to install."));
+        g_printerr("%s\n", _("You need to specify a bundle file or a component to install."));
         return MFC_EXIT_BAD_INPUT;
+    }
+
+    /* we check every argument before we install anything */
+    for (int i = 1; i < argc; i++) {
+        if (mfc_argument_is_bundle_file(argv[i]))
+            continue;
+        if (!mf_component_id_is_valid(argv[i])) {
+            g_printerr(_("%s is not a valid component identifier. To install a bundle file, give its "
+                         "path starting with ./ or /\n"),
+                       argv[i]);
+            return MFC_EXIT_BAD_INPUT;
+        }
+        n_components++;
+    }
+    if (optn_origin != NULL && n_components == 0) {
+        g_printerr("%s\n",
+                   _("An origin can only be chosen for components from the remotes, not for bundle files."));
+        return MFC_EXIT_INVALID_CMD;
     }
 
     for (int i = 1; i < argc; i++) {
         g_autoptr(GString) skipped = NULL;
 
-        ret = mfc_install_bundle(ctx, argv[i]);
+        ret = mfc_argument_is_bundle_file(argv[i]) ? mfc_install_bundle(ctx, argv[i])
+                                                   : mfc_install_component(ctx, argv[i], optn_origin);
         if (ret == MFC_EXIT_SUCCESS)
             continue;
 
-        /* we stop at the first file that fails, and list the files that were not installed */
+        /* we stop at the first argument that fails, and list the arguments that were not installed */
         if (i + 1 < argc) {
             skipped = g_string_new(argv[i + 1]);
             for (int j = i + 2; j < argc; j++)
                 g_string_append_printf(skipped, ", %s", argv[j]);
-            g_printerr(_("The remaining files were not installed: %s\n"), skipped->str);
+            g_printerr(_("The rest was not installed: %s\n"), skipped->str);
         }
         return ret;
     }
@@ -562,9 +646,9 @@ mfc_register_manage_commands(MfcContext *ctx)
 {
     mfc_context_register_command(ctx,
                                  "install",
-                                 "FILES",
+                                 "FILE|COMPONENT-ID...",
                                  /* TRANSLATORS: `manifold install` command description */
-                                 _("Install the components of bundle files."),
+                                 _("Install bundle files, or components from the remotes."),
                                  mfc_run_install_command);
     mfc_context_register_command(ctx,
                                  "remove",

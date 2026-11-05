@@ -6,8 +6,9 @@
 
 """
 End-to-end tests of remotes, in the sandbox: the manifold tool refreshes
-the metadata of a repository on a local https server. manifoldd downloads
-everything with the download helper, which it starts itself.
+the metadata of a repository on a local https server, and installs
+components from it. manifoldd downloads everything with the download
+helper, which it starts itself.
 
 Usage: mf-test-sandbox test-remote.py --daemon manifoldd --fetch-helper manifold-fetch
            --client manifold --remotes-dir DIR --zchunk-tool mf-test-zchunk
@@ -24,15 +25,19 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mftest import (  # noqa: E402
+    APP_ID,
+    CORE_ID,
     EXIT_SKIPPED,
     JXL_DATA,
     RUNTIME_DIR,
     STORE,
     Daemon,
     HttpsServer,
+    Image,
     Repository,
     host_architecture,
     zstd_available,
+    zstd_compress,
 )
 
 
@@ -47,6 +52,11 @@ class RemoteTest(unittest.TestCase):
         cls.work = tempfile.mkdtemp()
         cls.server = HttpsServer(cls.work)
         cls.key = make_key(os.path.join(cls.work, 'repo'))
+        cls.other_key = make_key(os.path.join(cls.work, 'other'))
+        cls.core = Image(CORE_ID, 'core', '13.4')
+        cls.kit = Image(CORE_ID + '.7d225c1fe79b1c5e', 'kit', '20260114T0238', base=cls.core)
+        cls.app = Image(APP_ID, 'app', '0.1.0', base=cls.kit)
+        cls.app2 = Image(APP_ID, 'app', '0.2.0', base=cls.kit)
 
     @classmethod
     def tearDownClass(cls):
@@ -118,6 +128,54 @@ class RemoteTest(unittest.TestCase):
     def refresh(self, *remotes, expect=0):
         """Run 'manifold refresh' for the given remotes, or for all remotes."""
         return self.manifold('refresh', *remotes, expect=expect)
+
+    def install(self, component_id, origin=None, expect=0):
+        """Run 'manifold install' for a component, from the given origin if there is one."""
+        options = ['--origin', origin] if origin is not None else []
+        return self.manifold('install', *options, component_id, expect=expect)
+
+    def listed(self, output, heading):
+        """Return the (ID, version) of the components that the tool listed below a heading
+        like 'Installed:' in its output. The version is returned without its revision."""
+        lines = output.splitlines()
+        if heading not in lines:
+            return []
+        rows = []
+        for line in lines[lines.index(heading) + 1 :]:
+            columns = line.split()
+            if len(columns) < 3 or columns[0] not in ('app', 'core', 'kit', 'platform'):
+                break
+            rows.append((columns[1], columns[2].rsplit('-', 1)[0]))
+        return rows
+
+    def installed(self):
+        """The installed components with their version, mode and origin, as the store records them."""
+        found = []
+        for subdir in ('apps', 'plugins', 'runtimes'):
+            for component_id in os.listdir(f'{STORE}/{subdir}'):
+                for name in os.listdir(f'{STORE}/{subdir}/{component_id}'):
+                    version_dir = f'{STORE}/{subdir}/{component_id}/{name}'
+                    if name.startswith('.') or os.path.islink(version_dir):
+                        continue
+                    with open(f'{version_dir}/mode', encoding='utf-8') as f:
+                        mode = f.read().strip()
+                    with open(f'{version_dir}/origin', encoding='utf-8') as f:
+                        origin = f.read().strip()
+                    found.append((component_id, name.rsplit('-', 1)[0], mode, origin))
+        return sorted(found)
+
+    def publish_app(self, channels=('main',)):
+        """Publish the application and the kit and core it builds on, and refresh."""
+        for channel in channels:
+            for image in (self.core, self.kit, self.app):
+                self.repo.add_image(channel, image)
+        self.repo.publish()
+        self.configure_remote(channels=list(channels))
+        self.refresh()
+
+    def image_requests(self, path):
+        """The requests for zchunk files below path."""
+        return [p for p in self.server.requests if p.startswith(path) and p.endswith('.raw.zck')]
 
     def served(self, path):
         return self.server.files[f'/example/{path}']
@@ -276,6 +334,141 @@ class RemoteTest(unittest.TestCase):
         self.assertEqual(os.listdir(xml_dir), ['manifold-local-org.example.Local.xml'])
         self.assertEqual(os.listdir(os.path.join(STORE, 'catalog', 'icons')), [])
         self.assertEqual(os.listdir(os.path.join(STORE, 'remotes')), [])
+
+    def test_install_with_bases(self):
+        self.publish_app()
+        out = self.install(APP_ID)
+
+        self.assertEqual(
+            sorted(component_id for component_id, _ in self.listed(out, 'Installed:')),
+            sorted([APP_ID, self.kit.component, CORE_ID]),
+        )
+        self.assertEqual(
+            self.installed(),
+            sorted(
+                [
+                    (APP_ID, '0.1.0', 'auto', 'example-main'),
+                    (self.kit.component, self.kit.version, 'auto', 'example-main'),
+                    (CORE_ID, '13.4', 'auto', 'example-main'),
+                ]
+            ),
+        )
+        self.assertIn('Disk space used', out)
+        self.assertEqual(len(self.image_requests('/example/pool/')), 6)
+        # the catalog of the remote describes the components, they have no catalog data of their own
+        self.assertEqual(os.listdir(f'{STORE}/catalog/xml'), ['example-main.xml.zst'])
+        self.assertFalse(os.path.exists(f'{STORE}/catalog/icons/manifold-local'))
+
+        # no image is downloaded for a component that is installed already
+        self.server.requests.clear()
+        self.assertIn('is installed already', self.install(APP_ID, expect=1))
+        self.assertEqual(self.image_requests('/'), [])
+
+    def test_install_from_the_external_location(self):
+        self.repo.image_paths['main'] = '/releases/download/images'
+        self.repo.pool_images = False
+        self.publish_app()
+        self.server.requests.clear()
+        self.install(APP_ID)
+
+        self.assertEqual(len(self.installed()), 3)
+        self.assertEqual(self.image_requests('/example/pool/'), [])
+        self.assertTrue(self.image_requests('/releases/download/images/'))
+        self.assertTrue([p for p in self.server.requests if p.startswith('/objects/')])
+
+    def test_install_falls_back_to_the_repository(self):
+        self.repo.image_paths['main'] = '/releases/download/images'
+        self.publish_app()
+        # the external copy of the core is a different image, and the external copy of the kit is gone
+        self.server.files[f'/objects/{self.core.verity_hash}'] = self.repo.zchunk_file(self.app)[0]
+        del self.server.files[f'/objects/{self.kit.verity_hash}']
+        self.server.requests.clear()
+        self.install(APP_ID)
+
+        self.assertEqual(len(self.installed()), 3)
+        fallbacks = self.image_requests('/example/pool/')
+        self.assertIn(f'/example/pool/{self.core.verity_hash}.raw.zck', fallbacks)
+        self.assertIn(f'/example/pool/{self.kit.verity_hash}.raw.zck', fallbacks)
+        self.assertNotIn(f'/example/pool/{self.app.verity_hash}.raw.zck', fallbacks)
+
+    def test_install_refreshes_once_when_the_repository_changed(self):
+        self.publish_app()
+        # the repository replaces the application with a new version, and we do not refresh
+        self.server.reset()
+        self.repo.serial += 1
+        self.repo.remove_component('main', APP_ID)
+        self.repo.add_image('main', self.app2)
+        self.repo.publish()
+        self.install(APP_ID)
+        self.assertIn((APP_ID, '0.2.0', 'auto', 'example-main'), self.installed())
+        self.assertEqual(self.server.requests.count('/example/repo-index.json.zst'), 1)
+
+        # a file that does not match while the root index stays the same is not tried again
+        app3 = Image(APP_ID, 'app', '0.3.0', base=self.kit)
+        self.repo.serial += 1
+        self.repo.add_image('main', app3)
+        self.repo.publish()
+        self.refresh()
+        path = f'/example/pool/{app3.verity_hash}.raw.zck'
+        damaged = bytearray(self.server.files[path])
+        damaged[-1] ^= 0xFF
+        self.server.files[path] = bytes(damaged)
+        self.server.requests.clear()
+        self.assertIn('Verification failed', self.install(APP_ID, expect=1))
+        self.assertEqual(self.server.requests.count('/example/repo-index.json.zst'), 1)
+        self.assertIn((APP_ID, '0.2.0', 'auto', 'example-main'), self.installed())
+
+    def test_install_needs_one_origin(self):
+        self.publish_app(channels=('main', 'beta'))
+        # several origins have the application, and the error says how to choose
+        out = self.install(APP_ID, expect=1)
+        self.assertIn('example-main, example-beta', out)
+        self.assertIn('--origin', out)
+
+        # the bases come from the same origin
+        self.install(APP_ID, origin='example-beta')
+        self.assertEqual({origin for *_, origin in self.installed()}, {'example-beta'})
+
+        # an origin without the component, and one that does not exist
+        self.install('org.example.Missing', origin='example-main', expect=1)
+        self.install(APP_ID, origin='other-main', expect=1)
+        self.assertIn(
+            'No remote has org.example.Missing', self.install('org.example.Missing', expect=1)
+        )
+
+    def test_install_tells_bundle_files_from_components(self):
+        self.publish_app()
+
+        # an argument that is not a file has to be a component, and only components have an origin
+        self.assertIn(
+            'not a valid component identifier', self.manifold('install', 'not/valid', expect=3)
+        )
+        self.manifold('install', '--origin', 'example-main', './app.manifold', expect=2)
+        # only a path that starts with ./ or / is a bundle file
+        self.assertIn(
+            'Unable to open ./app.manifold', self.manifold('install', './app.manifold', expect=3)
+        )
+        self.assertIn(
+            'No remote has app.manifold', self.manifold('install', 'app.manifold', expect=1)
+        )
+
+        # we stop at the first component that fails, and name the ones that were not installed
+        out = self.manifold('install', 'org.example.Missing', APP_ID, expect=1)
+        self.assertIn(f'The rest was not installed: {APP_ID}', out)
+
+    def test_install_checks_what_was_kept_again(self):
+        self.publish_app()
+
+        # the cached component index is not the one that the root index records
+        with open(f'{STORE}/remotes/example/main/index.json.zst', 'wb') as f:
+            f.write(zstd_compress(b'{"components": {}}'))
+        self.assertIn("run 'manifold refresh'", self.install(APP_ID, expect=1))
+        self.refresh()
+
+        # the key that signed the root index is not trusted anymore
+        self.configure_remote(key=self.other_key)
+        self.assertIn('Verification failed', self.install(APP_ID, origin='example-main', expect=1))
+        self.assertEqual(self.installed(), [])
 
 
 if __name__ == '__main__':
