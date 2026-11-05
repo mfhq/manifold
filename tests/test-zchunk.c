@@ -7,6 +7,7 @@
 #include "config.h"
 
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <glib/gstdio.h>
 #include <blake3.h>
@@ -180,6 +181,139 @@ test_write_image(void)
     mft_rm_rf(dir);
 }
 
+/**
+ * mft_open_with:
+ *
+ * Returns: a new file in @dir that holds @data, opened for reading and writing
+ */
+static int
+mft_open_with(const char *dir, const char *name, GBytes *data)
+{
+    g_autofree char *path = g_build_filename(dir, name, NULL);
+    int fd;
+
+    g_assert_true(g_file_set_contents(path, g_bytes_get_data(data, NULL), g_bytes_get_size(data), NULL));
+    fd = open(path, O_RDWR | O_CLOEXEC);
+    g_assert_cmpint(fd, >=, 0);
+    return fd;
+}
+
+/**
+ * mft_copy_ranges:
+ *
+ * Copy @ranges of the zchunk file at @zck_fd into @partial_fd, as a download would.
+ */
+static void
+mft_copy_ranges(int zck_fd, int partial_fd, GArray *ranges, guint first)
+{
+    for (guint i = first; i < ranges->len; i++) {
+        MfZchunkRange *range = &g_array_index(ranges, MfZchunkRange, i);
+        g_autofree char *buffer = g_malloc(range->length);
+
+        g_assert_cmpint(pread(zck_fd, buffer, range->length, range->offset), ==, range->length);
+        g_assert_cmpint(pwrite(partial_fd, buffer, range->length, range->offset), ==, range->length);
+    }
+}
+
+static void
+test_assembly(void)
+{
+    g_autofree char *dir = mft_make_tmp_dir("zchunk-assembly");
+    g_autoptr(GBytes) old_image = mft_image_data();
+    g_autofree guint8 *new_data = g_memdup2(g_bytes_get_data(old_image, NULL), g_bytes_get_size(old_image));
+    g_autoptr(GBytes) new_image = NULL;
+    g_autoptr(GBytes) empty = g_bytes_new_static("", 0);
+    g_autoptr(MfManifest) manifest = NULL;
+    g_autoptr(MfZchunkAssembly) assembly = NULL;
+    g_autoptr(MfZchunkAssembly) refused = NULL;
+    g_autoptr(GArray) ranges = NULL;
+    g_autoptr(GArray) joined = NULL;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *header_sha256 = NULL;
+    g_autofree char *wrong_sha256 = mft_fake_hash("header");
+    g_autofree guint8 *written = NULL;
+    guint64 header_size;
+    guint64 downloaded = 0;
+    gsize size = g_bytes_get_size(old_image);
+    struct stat st;
+    int old_fd;
+    int new_fd;
+    int zck_fd;
+    int partial_fd;
+    int dest_fd;
+
+    /* a new version changes a metadata block and some data the filesystem stored without compression */
+    new_data[3 * BS] = 'n';
+    new_data[(3 + 1 + 3 + 2) * BS] ^= 0xff;
+    new_image = g_bytes_new_take(g_steal_pointer(&new_data), size);
+    manifest = mft_manifest_for(new_image, NULL);
+    old_fd = mft_open_with(dir, "old.raw", old_image);
+    new_fd = mft_open_with(dir, "new.raw", new_image);
+    zck_fd = mft_open_with(dir, "new.raw.zck", empty);
+    g_assert_true(mf_zchunk_write_image(new_fd, zck_fd, &error));
+    g_assert_no_error(error);
+    g_assert_true(mf_zchunk_read_header(zck_fd, &header_size, &header_sha256, &error));
+    g_assert_no_error(error);
+
+    /* we start with the header alone, which has to be the one the repository records */
+    partial_fd = mft_open_with(dir, "partial.zck", empty);
+    {
+        g_autofree char *header = g_malloc(header_size);
+
+        g_assert_cmpint(pread(zck_fd, header, header_size, 0), ==, header_size);
+        g_assert_cmpint(pwrite(partial_fd, header, header_size, 0), ==, header_size);
+    }
+    refused = mf_zchunk_assembly_new(partial_fd, header_size, wrong_sha256, &error);
+    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
+    g_assert_null(refused);
+    g_clear_error(&error);
+    assembly = mf_zchunk_assembly_new(partial_fd, header_size, header_sha256, &error);
+    g_assert_no_error(error);
+
+    /* the old version has most chunks, so we only download the two that changed */
+    g_assert_true(mf_zchunk_assembly_add_source(assembly, old_fd, &error));
+    g_assert_no_error(error);
+    g_assert_cmpuint(mf_zchunk_assembly_get_reused_size(assembly), ==, size - BS - 16 * BS);
+    ranges = mf_zchunk_assembly_get_missing(assembly, 0);
+    g_assert_cmpuint(ranges->len, ==, 2);
+    for (guint i = 0; i < ranges->len; i++)
+        downloaded += g_array_index(ranges, MfZchunkRange, i).length;
+    g_assert_cmpint(fstat(zck_fd, &st), ==, 0);
+    g_assert_cmpuint(downloaded, <, (guint64) st.st_size - header_size);
+    /* ranges that are close enough become one */
+    joined = mf_zchunk_assembly_get_missing(assembly, G_MAXUINT32);
+    g_assert_cmpuint(joined->len, ==, 1);
+
+    /* without the chunks we did not download, nothing is written */
+    dest_fd = mft_open_with(dir, "dest.raw", empty);
+    mft_copy_ranges(zck_fd, partial_fd, ranges, 1);
+    g_assert_false(mf_zchunk_assembly_write_image(assembly, dest_fd, manifest, NULL, NULL, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
+    g_clear_error(&error);
+    close(dest_fd);
+
+    /* with them, the image is exactly the new version */
+    g_clear_pointer(&assembly, mf_zchunk_assembly_free);
+    mft_copy_ranges(zck_fd, partial_fd, ranges, 0);
+    assembly = mf_zchunk_assembly_new(partial_fd, header_size, header_sha256, &error);
+    g_assert_no_error(error);
+    g_assert_true(mf_zchunk_assembly_add_source(assembly, old_fd, &error));
+    g_assert_no_error(error);
+    dest_fd = mft_open_with(dir, "dest.raw", empty);
+    g_assert_true(mf_zchunk_assembly_write_image(assembly, dest_fd, manifest, NULL, NULL, &error));
+    g_assert_no_error(error);
+    written = g_malloc(size);
+    g_assert_cmpint(pread(dest_fd, written, size, 0), ==, size);
+    g_assert_cmpmem(written, size, g_bytes_get_data(new_image, NULL), size);
+
+    close(old_fd);
+    close(new_fd);
+    close(zck_fd);
+    close(partial_fd);
+    close(dest_fd);
+    mft_rm_rf(dir);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -187,6 +321,7 @@ main(int argc, char **argv)
 
     g_test_add_func("/zchunk/chunks", test_chunks);
     g_test_add_func("/zchunk/write-image", test_write_image);
+    g_test_add_func("/zchunk/assembly", test_assembly);
 
     return g_test_run();
 }
