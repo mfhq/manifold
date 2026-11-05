@@ -64,6 +64,15 @@ test('signer',
     suite: 'unit',
 )
 
+test('remote',
+    executable('test-remote',
+        ['test-remote.c'],
+        include_directories: [root_inc_dir],
+        dependencies: [manifold_dep, mft_test_utils_dep],
+    ),
+    suite: 'unit',
+)
+
 test('zchunk',
     executable('test-zchunk',
         ['test-zchunk.c'],

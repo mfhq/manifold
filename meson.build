@@ -132,6 +132,10 @@ mf_libexecdir  = mf_prefix / get_option('libexecdir')
 mf_runtimedir  = '/run/manifold'
 mf_storage_dir = '/var/lib/manifold'
 mf_cache_dir   = '/var/cache/manifold'
+# directories for data that vendors ship and for configuration of the administrator,
+# like the definitions of remotes
+mf_datadir     = mf_prefix / get_option('datadir') / 'manifold'
+mf_sysconfdir  = mf_prefix / get_option('sysconfdir') / 'manifold'
 
 # directory for the mounts of manifold-rund (in its own mount namespace), and its cache directory
 mf_run_mount_dir = mf_runtimedir / 'rund'
@@ -178,6 +182,8 @@ conf.set_quoted('MF_SOCKET_PATH', mf_socket)
 conf.set_quoted('MF_RUNTIME_DIR', mf_runtimedir)
 conf.set_quoted('MF_STORAGE_DIR', mf_storage_dir)
 conf.set_quoted('MF_CACHE_DIR', mf_cache_dir)
+conf.set_quoted('MF_DATADIR', mf_datadir)
+conf.set_quoted('MF_SYSCONFDIR', mf_sysconfdir)
 conf.set_quoted('MF_RUN_MOUNT_DIR', mf_run_mount_dir)
 conf.set_quoted('MF_RUN_CACHE_DIR', mf_run_cache_dir)
 conf.set_quoted('MF_CAPSULE_BIN_DIR', mf_capsule_bin_dir)

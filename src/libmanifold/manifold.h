@@ -18,6 +18,7 @@
 #include <mf-bundle.h>
 #include <mf-signer.h>
 #include <mf-trusted-keys.h>
+#include <mf-remote.h>
 #include <mf-bundle-writer.h>
 #include <mf-store.h>
 #include <mf-progress.h>
