@@ -55,7 +55,8 @@ static SD_VARLINK_DEFINE_STRUCT_TYPE(
     SD_VARLINK_DEFINE_FIELD(current, SD_VARLINK_BOOL, 0),
     SD_VARLINK_FIELD_COMMENT("Whether the component is a potential target for automatic removal."),
     SD_VARLINK_DEFINE_FIELD_BY_TYPE(installMode, InstallMode, 0),
-    SD_VARLINK_FIELD_COMMENT("Where the trust in the component came from: the name of a repository, or \"local\"."),
+    SD_VARLINK_FIELD_COMMENT("The origin of the component: '<remote>-<channel>' for a component from a "
+                             "remote, or 'manifold-local' for one from a bundle."),
     SD_VARLINK_DEFINE_FIELD(origin, SD_VARLINK_STRING, 0));
 
 static SD_VARLINK_DEFINE_ENUM_TYPE(
@@ -255,6 +256,10 @@ static SD_VARLINK_DEFINE_ERROR(
     FileConflict,
     MF_ERROR_MESSAGE_FIELD);
 
+static SD_VARLINK_DEFINE_ERROR(
+    InvalidRepository,
+    MF_ERROR_MESSAGE_FIELD);
+
 SD_VARLINK_DEFINE_INTERFACE(
     org_freedesktop_manifold,
     MF_INTERFACE,
@@ -319,7 +324,9 @@ SD_VARLINK_DEFINE_INTERFACE(
     SD_VARLINK_SYMBOL_COMMENT("Another kind of component is installed with the identifier of this component."),
     &vl_error_IdConflict,
     SD_VARLINK_SYMBOL_COMMENT("A file on the host is in the way of a file of the component."),
-    &vl_error_FileConflict);
+    &vl_error_FileConflict,
+    SD_VARLINK_SYMBOL_COMMENT("The data of a repository is not valid."),
+    &vl_error_InvalidRepository);
 
 /* clang-format on */
 
@@ -342,6 +349,7 @@ static const struct {
     {MF_ERROR_REVOKED,             MF_INTERFACE ".Revoked"           },
     {MF_ERROR_ID_CONFLICT,         MF_INTERFACE ".IdConflict"        },
     {MF_ERROR_FILE_CONFLICT,       MF_INTERFACE ".FileConflict"      },
+    {MF_ERROR_INVALID_REPOSITORY,  MF_INTERFACE ".InvalidRepository" },
 };
 
 /**

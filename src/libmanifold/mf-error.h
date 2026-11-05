@@ -23,7 +23,7 @@ G_BEGIN_DECLS
  * @MF_ERROR_PERMISSION_DENIED: The caller is not allowed to do this.
  * @MF_ERROR_INVALID_BUNDLE: The file is not a Manifold bundle.
  * @MF_ERROR_WRONG_ARCHITECTURE: The component was built for another architecture than this system's.
- * @MF_ERROR_VERIFICATION_FAILED: The bundle does not match what its index says.
+ * @MF_ERROR_VERIFICATION_FAILED: The bundle does not match the hashes recorded in its index.
  * @MF_ERROR_MISSING_BASE: The base of a component is not installed.
  * @MF_ERROR_ALREADY_INSTALLED: This version of the component is installed already.
  * @MF_ERROR_COMPONENT_IN_USE: An installed component builds on this component.
@@ -31,6 +31,7 @@ G_BEGIN_DECLS
  * @MF_ERROR_REVOKED: The component was revoked and must not be used anymore.
  * @MF_ERROR_ID_CONFLICT: A component of a different kind is installed with this ID.
  * @MF_ERROR_FILE_CONFLICT: A file on the host is in the way of a file of the component.
+ * @MF_ERROR_INVALID_REPOSITORY: The data of a repository is not valid.
  *
  * Errors that can happen when managing the Manifold installation of a host.
  */
@@ -50,6 +51,7 @@ typedef enum {
     MF_ERROR_REVOKED,
     MF_ERROR_ID_CONFLICT,
     MF_ERROR_FILE_CONFLICT,
+    MF_ERROR_INVALID_REPOSITORY,
     /*< private >*/
     MF_ERROR_LAST
 } MfError;

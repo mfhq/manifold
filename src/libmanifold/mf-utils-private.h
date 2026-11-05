@@ -37,8 +37,10 @@ typedef struct {
     char    blake3[MF_HEX_HASH_LENGTH + 1];
 } MfFileEntry;
 
-void      mf_file_entry_set_for_bytes(MfFileEntry *entry,
-                                      GBytes      *data);
+MF_INTERNAL_VISIBLE
+void mf_file_entry_set_for_bytes(MfFileEntry *entry,
+                                 GBytes      *data);
+MF_INTERNAL_VISIBLE
 gboolean  mf_file_entry_equal(const MfFileEntry *a,
                               const MfFileEntry *b);
 
@@ -72,6 +74,8 @@ gboolean mf_mime_glob_is_valid(const char *pattern);
 gboolean mf_mime_weight_is_valid(const char *weight);
 gboolean mf_mime_xml_name_is_valid(const char *name);
 gboolean mf_text_is_valid(GBytes *text);
+MF_INTERNAL_VISIBLE
+gboolean mf_display_text_is_valid(const char *text);
 gboolean mf_bytes_are_jxl(GBytes *bytes);
 gboolean mf_file_is_masked(const char *path);
 

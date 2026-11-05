@@ -34,6 +34,9 @@ constexpr size_t ARCHITECTURE_LENGTH_MAX = 64;
 
 constexpr gsize TEXT_FILE_SIZE_MAX = 1024 * 1024;
 
+/* the longest a text may be that we show to the user on one line */
+constexpr gsize DISPLAY_TEXT_LENGTH_MAX = 512;
+
 /* the highest glob weight and magic priority that we accept in a MIME package. 50 is the default of both. */
 constexpr guint64 MIME_WEIGHT_MAX = 50;
 
@@ -422,6 +425,35 @@ mf_text_is_valid(GBytes *text)
 
     return size <= TEXT_FILE_SIZE_MAX && memchr(data, '\0', size) == NULL &&
            memchr(data, '\r', size) == NULL && g_utf8_validate_len(data, size, NULL);
+}
+
+/**
+ * mf_display_text_is_valid:
+ * @text: a short text that is shown to the user, like a name or a summary
+ *
+ * We print display texts on terminals, and they come from metadata that is
+ * not trusted yet. A control character in such a text could hide or rewrite
+ * other text on the terminal, so we only accept a single line of printable
+ * UTF-8.
+ *
+ * Returns: %TRUE if @text is a non-empty line of printable text
+ */
+gboolean
+mf_display_text_is_valid(const char *text)
+{
+    if (text[0] == '\0' || strlen(text) > DISPLAY_TEXT_LENGTH_MAX || !g_utf8_validate(text, -1, NULL))
+        return FALSE;
+
+    for (const char *p = text; *p != '\0'; p = g_utf8_next_char(p)) {
+        gunichar c = g_utf8_get_char(p);
+
+        if (!g_unichar_isprint(c) && c != ' ')
+            return FALSE;
+        /* NOTE: Format characters include the characters that change the text direction. */
+        if (g_unichar_type(c) == G_UNICODE_FORMAT)
+            return FALSE;
+    }
+    return TRUE;
 }
 
 /**

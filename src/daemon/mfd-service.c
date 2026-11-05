@@ -238,6 +238,7 @@ mfd_error_is_about_request(const GError *error)
     case MF_ERROR_REVOKED:
     case MF_ERROR_ID_CONFLICT:
     case MF_ERROR_FILE_CONFLICT:
+    case MF_ERROR_INVALID_REPOSITORY:
         return TRUE;
     default:
         return FALSE;

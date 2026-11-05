@@ -108,7 +108,7 @@ mf_remote_id_is_valid(const char *remote_id)
  *
  * Returns: %TRUE if @channel is a valid name of a channel
  */
-static gboolean
+gboolean
 mf_remote_channel_is_valid(const char *channel)
 {
     return channel[0] != '\0' && mf_str_consists_of(channel, "abcdefghijklmnopqrstuvwxyz0123456789") &&
