@@ -28,14 +28,14 @@ MF_BEGIN_PRIVATE_DECLS
 #define MF_STORE_APPS_DIR     MF_STORAGE_DIR "/" MF_STORE_APPS_SUBDIR
 #define MF_STORE_RUNTIMES_DIR MF_STORAGE_DIR "/" MF_STORE_RUNTIMES_SUBDIR
 
-/* the AppStream catalog of what was installed from bundles */
-#define MF_STORE_LOCAL_CATALOG_SUBDIR "origins/" MF_BUNDLE_CATALOG_ORIGIN "/xml"
-#define MF_STORE_LOCAL_ICONS_SUBDIR   "origins/" MF_BUNDLE_CATALOG_ORIGIN "/icons"
+/* the AppStream catalogs of all origins */
+#define MF_STORE_CATALOG_XML_SUBDIR "catalog/xml"
+#define MF_STORE_LOCAL_ICONS_SUBDIR "catalog/icons/" MF_BUNDLE_CATALOG_ORIGIN
 
-#define MF_STORE_COMPONENT_TO_ROOT     "../../.."
-#define MF_STORE_LOCAL_CATALOG_TO_ROOT "../../.."
-#define MF_STORE_LOCAL_ICONS_TO_ROOT   "../../../.."
-#define MF_STORE_COMPONENT_TO_IMAGES   MF_STORE_COMPONENT_TO_ROOT "/images/by-verity"
+#define MF_STORE_COMPONENT_TO_ROOT   "../../.."
+#define MF_STORE_CATALOG_XML_TO_ROOT "../.."
+#define MF_STORE_LOCAL_ICONS_TO_ROOT "../../../.."
+#define MF_STORE_COMPONENT_TO_IMAGES MF_STORE_COMPONENT_TO_ROOT "/images/by-verity"
 
 #define MF_STORE_IMAGE_SUFFIX       ".raw"
 #define MF_STORE_APP_IMAGE_LINK     "app.raw"

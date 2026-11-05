@@ -236,6 +236,9 @@ mfd_store_writer_update_icon_links(MfdStoreWriter *writer,
  * available in the local origin, with links through the `current` link of
  * the component. We remove the links if the current version has no catalog
  * data, or if there is no current version.
+ *
+ * The catalog files of all origins share a directory, so the link is named
+ * after the origin as well as the component.
  */
 static gboolean
 mfd_store_writer_update_catalog_links(MfdStoreWriter *writer, const char *component_dir, GError **error)
@@ -245,9 +248,10 @@ mfd_store_writer_update_catalog_links(MfdStoreWriter *writer, const char *compon
     g_autofree char *dir_name = g_path_get_basename(parent);
     g_autofree char *file_name = g_strconcat(component_id, MF_STORE_CATALOG_SUFFIX, NULL);
     g_autofree char *current = g_build_filename(component_dir, MF_STORE_CURRENT_NAME, file_name, NULL);
-    g_autofree char *catalog_dir = mfd_store_writer_get_path(writer, MF_STORE_LOCAL_CATALOG_SUBDIR, NULL);
-    g_autofree char *link_path = g_build_filename(catalog_dir, file_name, NULL);
-    g_autofree char *target = g_build_filename(MF_STORE_LOCAL_CATALOG_TO_ROOT,
+    g_autofree char *link_name = g_strconcat(MF_BUNDLE_CATALOG_ORIGIN "-", file_name, NULL);
+    g_autofree char *catalog_dir = mfd_store_writer_get_path(writer, MF_STORE_CATALOG_XML_SUBDIR, NULL);
+    g_autofree char *link_path = g_build_filename(catalog_dir, link_name, NULL);
+    g_autofree char *target = g_build_filename(MF_STORE_CATALOG_XML_TO_ROOT,
                                                dir_name,
                                                component_id,
                                                MF_STORE_CURRENT_NAME,
@@ -260,7 +264,7 @@ mfd_store_writer_update_catalog_links(MfdStoreWriter *writer, const char *compon
     } else {
         if (!mfd_make_dir(catalog_dir, error))
             return FALSE;
-        if (!mfd_replace_link(target, catalog_dir, file_name, error))
+        if (!mfd_replace_link(target, catalog_dir, link_name, error))
             return FALSE;
     }
 
