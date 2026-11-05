@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
+[Unit]
+Description=Manifold Download Helper Socket
+
+[Socket]
+ListenStream=@MF_FETCH_SOCKET_PATH@
+FileDescriptorName=varlink
+# only manifoldd talks to the helper
+SocketMode=0600
+# start a separate helper for every connection
+Accept=yes
+MaxConnections=16
+
+[Install]
+WantedBy=sockets.target

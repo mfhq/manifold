@@ -8,11 +8,14 @@ units_conf.set('MF_RUN_INTERFACE', mf_run_interface)
 units_conf.set('MF_RUN_SOCKET_PATH', mf_run_socket)
 units_conf.set('MF_INTERFACE', mf_interface)
 units_conf.set('MF_SOCKET_PATH', mf_socket)
+units_conf.set('MF_FETCH_SOCKET_PATH', mf_fetch_socket)
 
 foreach unit : ['manifold-run.socket',
                 'manifold-run.service',
                 'manifold.socket',
-                'manifold.service']
+                'manifold.service',
+                'manifold-fetch.socket',
+                'manifold-fetch@.service']
     configure_file(
         input: unit + '.in',
         output: unit,

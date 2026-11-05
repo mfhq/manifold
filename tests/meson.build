@@ -145,6 +145,15 @@ test('installer',
     timeout: 120,
 )
 
+# downloads from a local https server; skipped without openssl, which makes its certificate
+test('fetch',
+    python_exe,
+    args: [files('test-fetch.py'), '--helper', manifold_fetch_exe.full_path()],
+    depends: [manifold_fetch_exe],
+    suite: 'e2e',
+    timeout: 60,
+)
+
 # enters the sandbox itself, for one of its halves
 test('runner',
     python_exe,
