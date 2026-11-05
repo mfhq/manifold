@@ -11,6 +11,7 @@
 
 #include "mf-error.h"
 #include "mf-macros-private.h"
+#include "mf-utils-private.h"
 
 MF_BEGIN_PRIVATE_DECLS
 
@@ -40,6 +41,11 @@ const char      *mf_json_get_hash_field(sd_json_variant *object,
                                         const char      *context,
                                         const char      *key,
                                         MfError          code,
+                                        GError         **error);
+gboolean         mf_json_get_file_entry(sd_json_variant *object,
+                                        const char      *context,
+                                        MfError          code,
+                                        MfFileEntry     *ret,
                                         GError         **error);
 
 /* more lenient readers */

@@ -56,9 +56,6 @@ static const char *const MIME_MEDIA_TYPES[] = {
     NULL,
 };
 
-/* the length of a hex encoded 256 bit hash */
-constexpr size_t HEX_HASH_LENGTH = 64;
-
 /**
  * mf_name_is_valid:
  * @name: (nullable): a string
@@ -469,15 +466,31 @@ mf_version_compare_with_rev(const char *version_a,
 gboolean
 mf_hex_hash_is_valid(const char *hash)
 {
-    if (hash == NULL || strnlen(hash, HEX_HASH_LENGTH + 1) != HEX_HASH_LENGTH)
+    if (hash == NULL || strnlen(hash, MF_HEX_HASH_LENGTH + 1) != MF_HEX_HASH_LENGTH)
         return FALSE;
 
-    for (size_t i = 0; i < HEX_HASH_LENGTH; i++) {
+    for (size_t i = 0; i < MF_HEX_HASH_LENGTH; i++) {
         if (!g_ascii_isxdigit(hash[i]) || g_ascii_isupper(hash[i]))
             return FALSE;
     }
 
     return TRUE;
+}
+
+/**
+ * mf_hash_to_hex_buffer:
+ * @dest: room for 2 * @size hex digits and the NUL
+ */
+static void
+mf_hash_to_hex_buffer(char *dest, const guint8 *hash, gsize size)
+{
+    static const char digits[] = "0123456789abcdef";
+
+    for (gsize i = 0; i < size; i++) {
+        dest[2 * i] = digits[hash[i] >> 4];
+        dest[2 * i + 1] = digits[hash[i] & 0xf];
+    }
+    dest[2 * size] = '\0';
 }
 
 /**
@@ -490,11 +503,50 @@ mf_hex_hash_is_valid(const char *hash)
 char *
 mf_hash_to_hex(const guint8 *hash, gsize size)
 {
-    GString *hex = g_string_sized_new(2 * size);
+    char *hex = g_malloc(2 * size + 1);
 
-    for (gsize i = 0; i < size; i++)
-        g_string_append_printf(hex, "%02x", hash[i]);
-    return g_string_free(hex, FALSE);
+    mf_hash_to_hex_buffer(hex, hash, size);
+    return hex;
+}
+
+/**
+ * mf_file_entry_set_for_bytes:
+ * @entry: the entry to fill in
+ * @data: the contents of a file
+ *
+ * Record the size and hashes of @data in @entry.
+ */
+void
+mf_file_entry_set_for_bytes(MfFileEntry *entry, GBytes *data)
+{
+    g_autoptr(GChecksum) checksum = g_checksum_new(G_CHECKSUM_SHA256);
+    guint8 sha256[32];
+    gsize sha256_size = sizeof(sha256);
+    guint8 blake3[BLAKE3_OUT_LEN];
+    blake3_hasher hasher;
+    gsize size;
+    gconstpointer buffer = g_bytes_get_data(data, &size);
+
+    g_checksum_update(checksum, buffer, size);
+    g_checksum_get_digest(checksum, sha256, &sha256_size);
+    blake3_hasher_init(&hasher);
+    blake3_hasher_update(&hasher, buffer, size);
+    blake3_hasher_finalize(&hasher, blake3, sizeof(blake3));
+
+    entry->size = size;
+    mf_hash_to_hex_buffer(entry->sha256, sha256, sizeof(sha256));
+    mf_hash_to_hex_buffer(entry->blake3, blake3, sizeof(blake3));
+}
+
+/**
+ * mf_file_entry_equal:
+ *
+ * Returns: %TRUE if both entries describe the same file
+ */
+gboolean
+mf_file_entry_equal(const MfFileEntry *a, const MfFileEntry *b)
+{
+    return a->size == b->size && g_str_equal(a->sha256, b->sha256) && g_str_equal(a->blake3, b->blake3);
 }
 
 /**
