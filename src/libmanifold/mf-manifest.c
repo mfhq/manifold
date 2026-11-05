@@ -6,6 +6,7 @@
 
 #include "config.h"
 #include "mf-manifest.h"
+#include "mf-manifest-private.h"
 
 #include <inttypes.h>
 #include <string.h>
@@ -785,6 +786,22 @@ mf_manifest_get_image_checksum(MfManifest *manifest, MfChecksumKind kind)
     g_return_val_if_fail(kind > MF_CHECKSUM_KIND_UNKNOWN && kind < MF_CHECKSUM_KIND_LAST, NULL);
     auto priv = GET_PRIVATE(manifest);
     return priv->image_checksums[kind];
+}
+
+/**
+ * mf_manifest_image_matches:
+ * @entry: the size and hashes of a file
+ *
+ * Returns: %TRUE if @entry describes the image of @manifest
+ */
+gboolean
+mf_manifest_image_matches(MfManifest *manifest, const MfFileEntry *entry)
+{
+    auto priv = GET_PRIVATE(manifest);
+
+    return entry->size == priv->image_size &&
+           g_str_equal(entry->sha256, priv->image_checksums[MF_CHECKSUM_KIND_SHA256]) &&
+           g_str_equal(entry->blake3, priv->image_checksums[MF_CHECKSUM_KIND_BLAKE3]);
 }
 
 /**

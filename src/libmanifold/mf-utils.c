@@ -494,19 +494,73 @@ mf_hash_to_hex_buffer(char *dest, const guint8 *hash, gsize size)
 }
 
 /**
- * mf_hash_to_hex:
- * @hash: the bytes of a hash
- * @size: the size of @hash
+ * MfHasher:
  *
- * Returns: (transfer full): the hash as lowercase hex
+ * Computes the size and both hashes of a file whose contents arrive in pieces.
  */
-char *
-mf_hash_to_hex(const guint8 *hash, gsize size)
-{
-    char *hex = g_malloc(2 * size + 1);
+struct _MfHasher {
+    guint64 size;
+    GChecksum *sha256;
+    blake3_hasher blake3;
+};
 
-    mf_hash_to_hex_buffer(hex, hash, size);
-    return hex;
+/**
+ * mf_hasher_new:
+ *
+ * Returns: (transfer full): a hasher that has seen nothing yet
+ */
+MfHasher *
+mf_hasher_new(void)
+{
+    MfHasher *hasher = g_new0(MfHasher, 1);
+
+    hasher->sha256 = g_checksum_new(G_CHECKSUM_SHA256);
+    blake3_hasher_init(&hasher->blake3);
+    return hasher;
+}
+
+/**
+ * mf_hasher_free:
+ */
+void
+mf_hasher_free(MfHasher *hasher)
+{
+    g_checksum_free(hasher->sha256);
+    g_free(hasher);
+}
+
+/**
+ * mf_hasher_update:
+ * @data: the next piece of the file
+ * @size: the size of @data
+ */
+void
+mf_hasher_update(MfHasher *hasher, const void *data, gsize size)
+{
+    hasher->size += size;
+    g_checksum_update(hasher->sha256, data, (gssize) size);
+    blake3_hasher_update(&hasher->blake3, data, size);
+}
+
+/**
+ * mf_hasher_finish:
+ * @ret: (out caller-allocates): the size and hashes of everything @hasher has seen
+ *
+ * NOTE: The hasher can not be updated any further afterwards.
+ */
+void
+mf_hasher_finish(MfHasher *hasher, MfFileEntry *ret)
+{
+    guint8 sha256[32];
+    gsize sha256_size = sizeof(sha256);
+    guint8 blake3[BLAKE3_OUT_LEN];
+
+    g_checksum_get_digest(hasher->sha256, sha256, &sha256_size);
+    blake3_hasher_finalize(&hasher->blake3, blake3, sizeof(blake3));
+
+    ret->size = hasher->size;
+    mf_hash_to_hex_buffer(ret->sha256, sha256, sha256_size);
+    mf_hash_to_hex_buffer(ret->blake3, blake3, sizeof(blake3));
 }
 
 /**
@@ -519,23 +573,12 @@ mf_hash_to_hex(const guint8 *hash, gsize size)
 void
 mf_file_entry_set_for_bytes(MfFileEntry *entry, GBytes *data)
 {
-    g_autoptr(GChecksum) checksum = g_checksum_new(G_CHECKSUM_SHA256);
-    guint8 sha256[32];
-    gsize sha256_size = sizeof(sha256);
-    guint8 blake3[BLAKE3_OUT_LEN];
-    blake3_hasher hasher;
+    g_autoptr(MfHasher) hasher = mf_hasher_new();
     gsize size;
     gconstpointer buffer = g_bytes_get_data(data, &size);
 
-    g_checksum_update(checksum, buffer, size);
-    g_checksum_get_digest(checksum, sha256, &sha256_size);
-    blake3_hasher_init(&hasher);
-    blake3_hasher_update(&hasher, buffer, size);
-    blake3_hasher_finalize(&hasher, blake3, sizeof(blake3));
-
-    entry->size = size;
-    mf_hash_to_hex_buffer(entry->sha256, sha256, sizeof(sha256));
-    mf_hash_to_hex_buffer(entry->blake3, blake3, sizeof(blake3));
+    mf_hasher_update(hasher, buffer, size);
+    mf_hasher_finish(hasher, entry);
 }
 
 /**
@@ -547,26 +590,6 @@ gboolean
 mf_file_entry_equal(const MfFileEntry *a, const MfFileEntry *b)
 {
     return a->size == b->size && g_str_equal(a->sha256, b->sha256) && g_str_equal(a->blake3, b->blake3);
-}
-
-/**
- * mf_blake3_of_bytes:
- * @bytes: the data to hash
- *
- * Returns: (transfer full): the blake3 hash of the data, as hex
- */
-char *
-mf_blake3_of_bytes(GBytes *bytes)
-{
-    guint8 hash[BLAKE3_OUT_LEN];
-    blake3_hasher hasher;
-    gsize size;
-    gconstpointer data = g_bytes_get_data(bytes, &size);
-
-    blake3_hasher_init(&hasher);
-    blake3_hasher_update(&hasher, data, size);
-    blake3_hasher_finalize(&hasher, hash, sizeof(hash));
-    return mf_hash_to_hex(hash, sizeof(hash));
 }
 
 /**

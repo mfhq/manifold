@@ -22,6 +22,9 @@ MF_BEGIN_PRIVATE_DECLS
 /* the length of a hex encoded 256 bit hash */
 #define MF_HEX_HASH_LENGTH 64
 
+/* computes a file entry for data that arrives in pieces */
+typedef struct _MfHasher MfHasher;
+
 /**
  * MfFileEntry:
  *
@@ -34,10 +37,20 @@ typedef struct {
     char    blake3[MF_HEX_HASH_LENGTH + 1];
 } MfFileEntry;
 
-void     mf_file_entry_set_for_bytes(MfFileEntry *entry,
-                                     GBytes      *data);
-gboolean mf_file_entry_equal(const MfFileEntry *a,
-                             const MfFileEntry *b);
+void      mf_file_entry_set_for_bytes(MfFileEntry *entry,
+                                      GBytes      *data);
+gboolean  mf_file_entry_equal(const MfFileEntry *a,
+                              const MfFileEntry *b);
+
+MfHasher *mf_hasher_new(void);
+void      mf_hasher_free(MfHasher *hasher);
+void      mf_hasher_update(MfHasher   *hasher,
+                           const void *data,
+                           gsize       size);
+void      mf_hasher_finish(MfHasher    *hasher,
+                           MfFileEntry *ret);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfHasher, mf_hasher_free)
 
 gboolean mf_write_all(int         fd,
                       const char *buffer,
@@ -57,10 +70,6 @@ gboolean mf_mime_glob_is_valid(const char *pattern);
 gboolean mf_mime_weight_is_valid(const char *weight);
 gboolean mf_mime_xml_name_is_valid(const char *name);
 gboolean mf_text_is_valid(GBytes *text);
-
-char    *mf_hash_to_hex(const guint8 *hash,
-                        gsize         size);
-char    *mf_blake3_of_bytes(GBytes *bytes);
 
 MF_INTERNAL_VISIBLE
 char *mf_build_full_version(const char *version,
