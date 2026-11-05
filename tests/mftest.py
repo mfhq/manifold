@@ -15,15 +15,19 @@ directories Manifold keeps its state in are empty, and we are root.
 
 import functools
 import hashlib
+import http.server
 import json
 import os
 import platform
 import re
+import shutil
 import signal
 import socket
+import ssl
 import subprocess
 import sysconfig
 import tempfile
+import threading
 import time
 import zipfile
 
@@ -87,10 +91,11 @@ class Daemon:
     """A daemon of Manifold, listening on a socket of our choosing. It logs to a
     file: a pipe that is not read while the tests run would fill up, and block it."""
 
-    def __init__(self, exe, socket_path, log_path):
+    def __init__(self, exe, socket_path, log_path, args=()):
         self.exe = exe
         self.socket_path = socket_path
         self.log_path = log_path
+        self.args = list(args)
         self.process = None
 
     def start(self):
@@ -98,7 +103,7 @@ class Daemon:
             os.unlink(self.socket_path)
         with open(self.log_path, 'wb') as log:
             self.process = subprocess.Popen(
-                [self.exe, '--socket', self.socket_path, '--verbose'],
+                [self.exe, '--socket', self.socket_path, '--verbose', *self.args],
                 stdout=log,
                 stderr=subprocess.STDOUT,
             )
@@ -363,3 +368,231 @@ def write_bundle(path, images, signed=True, corrupt_image=None, catalog_ids=None
         if signed:
             bundle.writestr('index.json.sig', 'not a signature\n')
     return path
+
+
+def zstd_compress(data):
+    """Compress data with zstd, as repositories serve their metadata."""
+    try:
+        from compression import zstd
+    except ImportError:
+        return subprocess.run(
+            ['zstd', '-q', '-c'], input=data, capture_output=True, check=True
+        ).stdout
+    return zstd.compress(data)
+
+
+def zstd_available():
+    """Whether we can compress with zstd: Python can since 3.14, before that the zstd tool does."""
+    try:
+        from compression import zstd  # noqa: F401
+    except ImportError:
+        return shutil.which('zstd') is not None
+    return True
+
+
+def file_entry(data):
+    """Return the entry that an index records for a file of a repository."""
+    return {
+        'size': len(data),
+        'sha256': hashlib.sha256(data).hexdigest(),
+        'blake3': blake3_hex(data),
+    }
+
+
+class _HttpsHandler(http.server.BaseHTTPRequestHandler):
+    """Serves files whole or one range at a time, and redirects the way GitHub does for release assets."""
+
+    def do_GET(self):
+        server = self.server
+        server.requests.append(self.path)
+        count = server.requests.count(self.path)
+
+        if self.path in server.redirects:
+            self.send_response(302)
+            self.send_header('Location', server.redirects[self.path])
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        if count in server.forbidden.get(self.path, ()):
+            self.send_error(403)
+            return
+        data = server.files.get(self.path)
+        if data is None:
+            self.send_error(404)
+            return
+
+        match = re.fullmatch(r'bytes=(\d+)-(\d+)', self.headers.get('Range', ''))
+        if match is None or self.path in server.no_ranges:
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        start, end = int(match.group(1)), int(match.group(2))
+        self.send_response(206)
+        self.send_header('Content-Range', f'bytes {start}-{end}/{len(data)}')
+        self.send_header('Content-Length', str(end - start + 1))
+        self.end_headers()
+        self.wfile.write(data[start : end + 1])
+
+    def log_message(self, format, *args):
+        pass
+
+
+class _QuietServer(http.server.ThreadingHTTPServer):
+    """A server that is quiet about clients that refuse its certificate or hang up early."""
+
+    def handle_error(self, request, client_address):
+        pass
+
+
+class HttpsServer:
+    """
+    A local https server with a certificate of its own, which openssl makes.
+    It serves `files` by their path, follows `redirects`, answers the requests
+    to a path whose count is in `forbidden[path]` with 403, and ignores ranges
+    for the paths in `no_ranges`. Every request path is logged in `requests`.
+    """
+
+    def __init__(self, work_dir):
+        self.cert = os.path.join(work_dir, 'cert.pem')
+        key = os.path.join(work_dir, 'key.pem')
+        subprocess.run(
+            [
+                'openssl',
+                'req',
+                '-x509',
+                '-newkey',
+                'ec',
+                '-pkeyopt',
+                'ec_paramgen_curve:prime256v1',
+                '-nodes',
+            ]
+            + ['-keyout', key, '-out', self.cert, '-days', '1', '-subj', '/CN=127.0.0.1']
+            + ['-addext', 'subjectAltName=IP:127.0.0.1'],
+            check=True,
+            capture_output=True,
+        )
+        self.server = _QuietServer(('127.0.0.1', 0), _HttpsHandler)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(self.cert, key)
+        self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
+        self.url = f'https://127.0.0.1:{self.server.server_address[1]}'
+        self.reset()
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def reset(self):
+        self.server.files = self.files = {}
+        self.server.redirects = self.redirects = {}
+        self.server.forbidden = self.forbidden = {}
+        self.server.no_ranges = self.no_ranges = set()
+        self.server.requests = self.requests = []
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+class Repository:
+    """
+    A repository in the format of docs/repository-format.rst, which an
+    HttpsServer serves below /<id>. Components are added to channels, and
+    publish() puts their metadata on the server, signed with the key at `key`.
+    """
+
+    def __init__(self, server, repo_id, key):
+        self.server = server
+        self.id = repo_id
+        self.key = key
+        self.serial = 1
+        self.summary = 'Example applications'
+        self.valid_until = '2099-01-01T00:00:00Z'
+        self.channels = {}
+        self.url = f'{server.url}/{repo_id}'
+
+    def add_component(self, channel, component_id, version='1.0', icon=None):
+        self.channels.setdefault(channel, {})[component_id] = (version, icon)
+
+    def remove_component(self, channel, component_id):
+        del self.channels[channel][component_id]
+
+    def _serve(self, path, data):
+        self.server.files[f'/{self.id}/{path}'] = data
+
+    def _publish_channel(self, name, components):
+        arch = host_architecture()
+        index = {'components': {}}
+        catalog = []
+        icons = {}
+        for component_id, (version, icon) in components.items():
+            index['components'][component_id] = {
+                'versions': [
+                    {
+                        'bundle': f'{arch}/{component_id}/{version}',
+                        'version': version,
+                        'revision': 1,
+                        'manifest': {
+                            'location': f'pool/{component_id}/{fake_hash(component_id + version)}.json.zst',
+                            'size': 100,
+                            'sha256': fake_hash('sha256'),
+                            'blake3': fake_hash('blake3'),
+                        },
+                        'zck-header': {'size': 100, 'sha256': fake_hash('zck')},
+                    }
+                ]
+            }
+            icon_xml = ''
+            if icon is not None:
+                location = f'{name}/{arch}/media/{component_id}/{hashlib.sha256(icon).hexdigest()[:16]}.jxl'
+                self._serve(location, icon)
+                icons[f'64x64/{component_id}.jxl'] = {'location': location, **file_entry(icon)}
+                icon_xml = f'<icon type="cached" width="64" height="64">{component_id}.jxl</icon>'
+            catalog.append(
+                f'<component type="desktop-application"><id>{component_id}</id><name>{component_id}</name>'
+                f'<summary>A component</summary><bundle type="manifold">{arch}/{component_id}/{version}</bundle>'
+                f'{icon_xml}</component>'
+            )
+        catalog_xml = (
+            f'<components version="1.2" origin="{self.id}-{name}">{"".join(catalog)}</components>'
+        ).encode()
+
+        files = {
+            'index.json.zst': zstd_compress(json.dumps(index).encode()),
+            'components.xml.zst': zstd_compress(catalog_xml),
+            'icons.json.zst': zstd_compress(json.dumps(icons).encode()),
+        }
+        for file_name, data in files.items():
+            self._serve(f'{name}/{arch}/{file_name}', data)
+        return {
+            'architectures': {
+                arch: {file_name: file_entry(data) for file_name, data in files.items()}
+            }
+        }
+
+    def publish(self):
+        """Put the metadata on the server, and return the root index as served."""
+        root = {
+            'id': self.id,
+            'summary': self.summary,
+            'serial': self.serial,
+            'date': '2026-11-05T12:00:00Z',
+            'valid-until': self.valid_until,
+            'channels': {
+                name: self._publish_channel(name, components)
+                for name, components in self.channels.items()
+            },
+        }
+        data = zstd_compress(json.dumps(root).encode())
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, 'repo-index.json.zst')
+            with open(path, 'wb') as f:
+                f.write(data)
+            subprocess.run(
+                ['ssh-keygen', '-q', '-Y', 'sign', '-f', self.key, '-n', 'manifold.repo', path],
+                check=True,
+                capture_output=True,
+            )
+            with open(path + '.sig', 'rb') as f:
+                self._serve('repo-index.sig', f.read())
+        self._serve('repo-index.json.zst', data)
+        return data

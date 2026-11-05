@@ -29,9 +29,13 @@ MF_BEGIN_PRIVATE_DECLS
 #define MF_STORE_RUNTIMES_DIR MF_STORAGE_DIR "/" MF_STORE_RUNTIMES_SUBDIR
 
 /* the AppStream catalogs of all origins */
-#define MF_STORE_CATALOG_XML_SUBDIR  "catalog/xml"
-#define MF_STORE_CATALOG_FILE_SUFFIX ".xml.zst"
-#define MF_STORE_LOCAL_ICONS_SUBDIR  "catalog/icons/" MF_BUNDLE_CATALOG_ORIGIN
+#define MF_STORE_CATALOG_XML_SUBDIR   "catalog/xml"
+#define MF_STORE_CATALOG_FILE_SUFFIX  ".xml.zst"
+#define MF_STORE_CATALOG_ICONS_SUBDIR "catalog/icons"
+#define MF_STORE_LOCAL_ICONS_SUBDIR   MF_STORE_CATALOG_ICONS_SUBDIR "/" MF_BUNDLE_CATALOG_ORIGIN
+
+/* the cached metadata of all remotes */
+#define MF_STORE_REMOTES_SUBDIR "remotes"
 
 #define MF_STORE_COMPONENT_TO_ROOT   "../../.."
 #define MF_STORE_CATALOG_XML_TO_ROOT "../.."

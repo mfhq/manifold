@@ -23,7 +23,7 @@ G_BEGIN_DECLS
  * @MF_ERROR_PERMISSION_DENIED: The caller is not allowed to do this.
  * @MF_ERROR_INVALID_BUNDLE: The file is not a Manifold bundle.
  * @MF_ERROR_WRONG_ARCHITECTURE: The component was built for another architecture than this system's.
- * @MF_ERROR_VERIFICATION_FAILED: The bundle does not match the hashes recorded in its index.
+ * @MF_ERROR_VERIFICATION_FAILED: Data does not match its signature, or the hashes recorded for it.
  * @MF_ERROR_MISSING_BASE: The base a component builds on is not installed.
  * @MF_ERROR_ALREADY_INSTALLED: This version of the component is installed already.
  * @MF_ERROR_COMPONENT_IN_USE: An installed component builds on this component.
@@ -32,6 +32,8 @@ G_BEGIN_DECLS
  * @MF_ERROR_ID_CONFLICT: Another kind of component is installed with this ID.
  * @MF_ERROR_FILE_CONFLICT: A file on the host is in the way of a file of the component.
  * @MF_ERROR_INVALID_REPOSITORY: The data of a repository is not valid.
+ * @MF_ERROR_EXPIRED: The metadata of a repository has expired.
+ * @MF_ERROR_DOWNLOAD_FAILED: A file could not be downloaded.
  *
  * Errors that can happen when managing the Manifold installation of a host.
  */
@@ -52,6 +54,8 @@ typedef enum {
     MF_ERROR_ID_CONFLICT,
     MF_ERROR_FILE_CONFLICT,
     MF_ERROR_INVALID_REPOSITORY,
+    MF_ERROR_EXPIRED,
+    MF_ERROR_DOWNLOAD_FAILED,
     /*< private >*/
     MF_ERROR_LAST
 } MfError;

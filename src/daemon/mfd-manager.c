@@ -19,6 +19,7 @@
 #include "mfd-image-reader.h"
 #include "mfd-install-set.h"
 #include "mfd-integrator.h"
+#include "mfd-refresh.h"
 #include "mfd-store-writer.h"
 #include "mfd-utils.h"
 
@@ -40,6 +41,9 @@ struct _MfdManager {
     MfStore *store;
     MfdStoreWriter *writer;
     MfdIntegrator *integrator;
+
+    char *fetch_helper;  /* the download helper to run ourselves, or NULL to use the systemd service */
+    char *fetch_ca_file; /* the only certificate authority that a helper we run ourselves trusts, or NULL */
 };
 
 G_DEFINE_TYPE(MfdManager, mfd_manager, G_TYPE_OBJECT)
@@ -52,6 +56,8 @@ mfd_manager_finalize(GObject *object)
     g_clear_object(&manager->integrator);
     g_clear_object(&manager->writer);
     g_clear_object(&manager->store);
+    g_free(manager->fetch_helper);
+    g_free(manager->fetch_ca_file);
 
     G_OBJECT_CLASS(mfd_manager_parent_class)->finalize(object);
 }
@@ -1823,4 +1829,101 @@ mfd_manager_mark(MfdManager *manager,
     }
 
     return g_steal_pointer(&marked);
+}
+
+/**
+ * mfd_manager_set_fetch_helper:
+ * @helper_path: (nullable): the download helper to run ourselves, or %NULL
+ *   to use the systemd service
+ * @ca_file: (nullable): the only certificate authority that a helper we run
+ *   ourselves trusts
+ *
+ * Make the manager run the download helper itself. This is used by tests.
+ */
+void
+mfd_manager_set_fetch_helper(MfdManager *manager, const char *helper_path, const char *ca_file)
+{
+    g_return_if_fail(MFD_IS_MANAGER(manager));
+
+    g_free(manager->fetch_helper);
+    manager->fetch_helper = g_strdup(helper_path);
+    g_free(manager->fetch_ca_file);
+    manager->fetch_ca_file = g_strdup(ca_file);
+}
+
+/**
+ * mfd_manager_refresh:
+ * @manager: an #MfdManager
+ * @remote_ids: (nullable) (array zero-terminated=1): the remotes to refresh, or %NULL for all
+ * @progress_func: (nullable): called whenever the operation progresses
+ * @user_data: passed to @progress_func
+ * @error: a #GError
+ *
+ * Download the metadata of remotes, and store it. If a remote fails, the
+ * other remotes are still refreshed, and the error of the first failure is
+ * returned. Refreshing all remotes also removes the cached data of remotes
+ * that are not configured anymore.
+ *
+ * Returns: (transfer full): the result with the warnings of the refresh, or %NULL on error
+ */
+MfResult *
+mfd_manager_refresh(MfdManager *manager,
+                    const char *const *remote_ids,
+                    MfProgressFunc progress_func,
+                    gpointer user_data,
+                    GError **error)
+{
+    g_auto(MfdProgressTracker) tracker = {
+        .func = progress_func,
+        .user_data = user_data,
+        .progress = mf_progress_new(),
+    };
+    g_autoptr(MfResult) result = mf_result_new();
+    g_autoptr(GPtrArray) remotes = NULL;
+    g_autoptr(MfdFetcher) fetcher = NULL;
+    g_autoptr(GError) first_error = NULL;
+    const char *root;
+
+    g_return_val_if_fail(MFD_IS_MANAGER(manager), NULL);
+
+    root = mf_store_get_path(manager->store);
+    if (remote_ids == NULL) {
+        remotes = mf_remote_list_all(error);
+        if (remotes == NULL)
+            return NULL;
+    } else {
+        remotes = g_ptr_array_new_with_free_func(g_object_unref);
+        for (guint i = 0; remote_ids[i] != NULL; i++) {
+            MfRemote *remote = mf_remote_new_for_id(remote_ids[i], error);
+
+            if (remote == NULL)
+                return NULL;
+            g_ptr_array_add(remotes, remote);
+        }
+    }
+
+    fetcher = mfd_fetcher_new(manager->fetch_helper, manager->fetch_ca_file);
+
+    tracker.total = remotes->len;
+    for (guint i = 0; i < remotes->len; i++) {
+        MfRemote *remote = g_ptr_array_index(remotes, i);
+        g_autoptr(GError) local_error = NULL;
+
+        mfd_progress_begin_item(&tracker, MF_ACTION_REFRESH, mf_remote_get_id(remote), NULL, 0);
+        if (!mfd_refresh_remote(root, fetcher, remote, result, NULL, &local_error)) {
+            g_warning("Unable to refresh %s: %s", mf_remote_get_id(remote), local_error->message);
+            if (first_error == NULL)
+                first_error = g_steal_pointer(&local_error);
+        }
+        mfd_progress_end_item(&tracker);
+    }
+
+    if (remote_ids == NULL && !mfd_refresh_remove_unconfigured(root, remotes, error))
+        return NULL;
+    if (first_error != NULL) {
+        g_propagate_error(error, g_steal_pointer(&first_error));
+        return NULL;
+    }
+
+    return g_steal_pointer(&result);
 }

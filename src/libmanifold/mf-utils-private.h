@@ -76,6 +76,7 @@ gboolean mf_mime_xml_name_is_valid(const char *name);
 gboolean mf_text_is_valid(GBytes *text);
 MF_INTERNAL_VISIBLE
 gboolean mf_display_text_is_valid(const char *text);
+MF_INTERNAL_VISIBLE
 gboolean mf_bytes_are_jxl(GBytes *bytes);
 gboolean mf_file_is_masked(const char *path);
 

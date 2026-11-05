@@ -391,7 +391,7 @@ mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant
             g_set_error(error, MF_ERROR, code, _("Not a valid manifest: %s"), message);
             break;
         case MF_ERROR_VERIFICATION_FAILED:
-            g_set_error(error, MF_ERROR, code, _("The bundle could not be verified: %s"), message);
+            g_set_error(error, MF_ERROR, code, _("Verification failed: %s"), message);
             break;
         case MF_ERROR_FILE_CONFLICT:
             g_set_error(error, MF_ERROR, code, _("File conflict: %s"), message);
@@ -1151,6 +1151,108 @@ mf_manager_cleanup(MfManager *manager,
                              mf_on_sync_call_done,
                              &sync);
     return mf_manager_cleanup_finish(manager, mf_sync_call_wait(&sync), error);
+}
+
+/**
+ * mf_manager_refresh_async:
+ * @manager: an #MfManager
+ * @remote_ids: (nullable) (array zero-terminated=1): the IDs of the remotes to refresh, or %NULL for all
+ * @progress_func: (nullable) (scope notified) (closure progress_data) (destroy progress_data_destroy):
+ *   called whenever the service reports progress
+ * @progress_data: passed to @progress_func
+ * @progress_data_destroy: (nullable): function to free @progress_data, called once the operation
+ *   has finished and @callback has run
+ * @cancellable: (nullable): a #GCancellable
+ * @callback: called when the refresh is done, or failed
+ * @user_data: passed to @callback
+ *
+ * Download the metadata of remotes, check it, and make their catalogs
+ * available. Refreshing all remotes also removes the cached data of remotes
+ * that are not configured anymore.
+ */
+void
+mf_manager_refresh_async(MfManager *manager,
+                         const char *const *remote_ids,
+                         MfProgressFunc progress_func,
+                         gpointer progress_data,
+                         GDestroyNotify progress_data_destroy,
+                         GCancellable *cancellable,
+                         GAsyncReadyCallback callback,
+                         gpointer user_data)
+{
+    g_autoptr(sd_json_variant) parameters = NULL;
+    int r;
+
+    g_return_if_fail(MF_IS_MANAGER(manager));
+
+    r = sd_json_buildo(&parameters,
+                       SD_JSON_BUILD_PAIR_CONDITION(remote_ids != NULL,
+                                                    "remotes",
+                                                    SD_JSON_BUILD_STRV((char **) remote_ids)));
+    mf_manager_call_async(manager,
+                          MF_VARLINK_METHOD_REFRESH,
+                          r,
+                          parameters,
+                          -1,
+                          progress_func,
+                          progress_data,
+                          progress_data_destroy,
+                          cancellable,
+                          callback,
+                          user_data,
+                          mf_manager_refresh_async);
+}
+
+/**
+ * mf_manager_refresh_finish:
+ * @manager: an #MfManager
+ * @result: the result passed to the callback
+ * @error: a #GError
+ *
+ * Returns: (transfer full): the result with the warnings of the refresh, or %NULL on failure
+ */
+MfResult *
+mf_manager_refresh_finish(MfManager *manager, GAsyncResult *result, GError **error)
+{
+    return mf_manager_result_finish(manager, result, mf_manager_refresh_async, error);
+}
+
+/**
+ * mf_manager_refresh:
+ * @manager: an #MfManager
+ * @remote_ids: (nullable) (array zero-terminated=1): the IDs of the remotes to refresh, or %NULL for all
+ * @progress_func: (nullable) (scope call): called whenever the service reports progress
+ * @progress_data: passed to @progress_func
+ * @cancellable: (nullable): a #GCancellable
+ * @error: a #GError
+ *
+ * Refresh remotes, see mf_manager_refresh_async().
+ * This blocks until the refresh is done, or failed.
+ *
+ * Returns: (transfer full): the result with the warnings of the refresh, or %NULL on failure
+ */
+MfResult *
+mf_manager_refresh(MfManager *manager,
+                   const char *const *remote_ids,
+                   MfProgressFunc progress_func,
+                   gpointer progress_data,
+                   GCancellable *cancellable,
+                   GError **error)
+{
+    g_auto(MfSyncCall) sync = {};
+
+    g_return_val_if_fail(MF_IS_MANAGER(manager), NULL);
+
+    mf_sync_call_begin(&sync);
+    mf_manager_refresh_async(manager,
+                             remote_ids,
+                             progress_func,
+                             progress_data,
+                             NULL,
+                             cancellable,
+                             mf_on_sync_call_done,
+                             &sync);
+    return mf_manager_refresh_finish(manager, mf_sync_call_wait(&sync), error);
 }
 
 /**

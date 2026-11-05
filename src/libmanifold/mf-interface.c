@@ -66,7 +66,9 @@ static SD_VARLINK_DEFINE_ENUM_TYPE(
     SD_VARLINK_FIELD_COMMENT("A component is removed on request."),
     SD_VARLINK_DEFINE_ENUM_VALUE(remove),
     SD_VARLINK_FIELD_COMMENT("An unused component is removed."),
-    SD_VARLINK_DEFINE_ENUM_VALUE(cleanup));
+    SD_VARLINK_DEFINE_ENUM_VALUE(cleanup),
+    SD_VARLINK_FIELD_COMMENT("The metadata of a remote is downloaded."),
+    SD_VARLINK_DEFINE_ENUM_VALUE(refresh));
 
 static SD_VARLINK_DEFINE_STRUCT_TYPE(
     ItemProgress,
@@ -147,6 +149,14 @@ static SD_VARLINK_DEFINE_METHOD_FULL(
 static SD_VARLINK_DEFINE_METHOD_FULL(
     Cleanup,
     SD_VARLINK_SUPPORTS_MORE,
+    MF_TRANSACTION_FLAGS_INPUT,
+    MF_OPERATION_OUTPUT);
+
+static SD_VARLINK_DEFINE_METHOD_FULL(
+    Refresh,
+    SD_VARLINK_SUPPORTS_MORE,
+    SD_VARLINK_FIELD_COMMENT("The IDs of the remotes to refresh. All remotes are refreshed if this is not set."),
+    SD_VARLINK_DEFINE_INPUT(remotes, SD_VARLINK_STRING, SD_VARLINK_ARRAY | SD_VARLINK_NULLABLE),
     MF_TRANSACTION_FLAGS_INPUT,
     MF_OPERATION_OUTPUT);
 
@@ -260,6 +270,14 @@ static SD_VARLINK_DEFINE_ERROR(
     InvalidRepository,
     MF_ERROR_MESSAGE_FIELD);
 
+static SD_VARLINK_DEFINE_ERROR(
+    Expired,
+    MF_ERROR_MESSAGE_FIELD);
+
+static SD_VARLINK_DEFINE_ERROR(
+    DownloadFailed,
+    MF_ERROR_MESSAGE_FIELD);
+
 SD_VARLINK_DEFINE_INTERFACE(
     org_freedesktop_manifold,
     MF_INTERFACE,
@@ -294,6 +312,9 @@ SD_VARLINK_DEFINE_INTERFACE(
                               "images no component links to, and what interrupted installations left. "
                               "Called with the 'more' flag, reports its progress. Privileged."),
     &vl_method_Cleanup,
+    SD_VARLINK_SYMBOL_COMMENT("Download the metadata of remotes, after checking it, and make their catalogs "
+                              "available. Called with the 'more' flag, reports its progress. Privileged."),
+    &vl_method_Refresh,
     SD_VARLINK_SYMBOL_COMMENT("Mark a version of a component as kept until it is removed explicitly (manual), "
                               "or as removed once it is not needed anymore (auto). Nothing is removed "
                               "right away. Privileged."),
@@ -326,7 +347,11 @@ SD_VARLINK_DEFINE_INTERFACE(
     SD_VARLINK_SYMBOL_COMMENT("A file on the host is in the way of a file of the component."),
     &vl_error_FileConflict,
     SD_VARLINK_SYMBOL_COMMENT("The data of a repository is not valid."),
-    &vl_error_InvalidRepository);
+    &vl_error_InvalidRepository,
+    SD_VARLINK_SYMBOL_COMMENT("The metadata of a repository has expired, so nothing is installed from it."),
+    &vl_error_Expired,
+    SD_VARLINK_SYMBOL_COMMENT("A file could not be downloaded."),
+    &vl_error_DownloadFailed);
 
 /* clang-format on */
 
@@ -350,6 +375,8 @@ static const struct {
     {MF_ERROR_ID_CONFLICT,         MF_INTERFACE ".IdConflict"        },
     {MF_ERROR_FILE_CONFLICT,       MF_INTERFACE ".FileConflict"      },
     {MF_ERROR_INVALID_REPOSITORY,  MF_INTERFACE ".InvalidRepository" },
+    {MF_ERROR_EXPIRED,             MF_INTERFACE ".Expired"           },
+    {MF_ERROR_DOWNLOAD_FAILED,     MF_INTERFACE ".DownloadFailed"    },
 };
 
 /**

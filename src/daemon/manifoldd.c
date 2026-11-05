@@ -18,7 +18,7 @@
 #include "mfd-service.h"
 
 static int
-mfd_run_service(const char *socket_path)
+mfd_run_service(const char *socket_path, const char *fetch_helper, const char *fetch_ca_file)
 {
     g_autoptr(sd_event) event = NULL;
     g_autoptr(MfdService) service = NULL;
@@ -36,6 +36,9 @@ mfd_run_service(const char *socket_path)
         return EXIT_FAILURE;
     }
 
+    if (fetch_helper != NULL)
+        mfd_service_set_fetch_helper(service, fetch_helper, fetch_ca_file);
+
     if (!mfd_service_listen(service, socket_path, &error)) {
         g_critical("%s", error->message);
         return EXIT_FAILURE;
@@ -50,12 +53,22 @@ main(int argc, char **argv)
     g_autoptr(GOptionContext) context = NULL;
     g_autoptr(GError) error = NULL;
     g_autofree char *socket_path = NULL;
+    g_autofree char *fetch_helper = NULL;
+    g_autofree char *fetch_ca_file = NULL;
     gboolean verbose = FALSE;
     gboolean show_version = FALSE;
     const GOptionEntry entries[] = {
-        {"socket",  0, 0, G_OPTION_ARG_FILENAME, &socket_path,  "Listen on the socket at PATH", "PATH"},
-        {"verbose", 0, 0, G_OPTION_ARG_NONE,     &verbose,      "Show more information",        NULL  },
-        {"version", 0, 0, G_OPTION_ARG_NONE,     &show_version, "Show the program version",     NULL  },
+        {"socket",        0, 0, G_OPTION_ARG_FILENAME, &socket_path,   "Listen on the socket at PATH", "PATH"},
+        {"fetch-helper",
+         0,                  0,
+         G_OPTION_ARG_FILENAME,                        &fetch_helper,
+         "Run the download helper at PATH ourselves",                                                  "PATH"},
+        {"fetch-ca-file",
+         0,                  0,
+         G_OPTION_ARG_FILENAME,                        &fetch_ca_file,
+         "Make that helper trust only the certificate authority in FILE",                              "FILE"},
+        {"verbose",       0, 0, G_OPTION_ARG_NONE,     &verbose,       "Show more information",        NULL  },
+        {"version",       0, 0, G_OPTION_ARG_NONE,     &show_version,  "Show the program version",     NULL  },
         G_OPTION_ENTRY_NULL,
     };
 
@@ -89,5 +102,5 @@ main(int argc, char **argv)
     /* make what we create world-readable, regardless of the inherited umask */
     umask(022);
 
-    return mfd_run_service(socket_path);
+    return mfd_run_service(socket_path, fetch_helper, fetch_ca_file);
 }

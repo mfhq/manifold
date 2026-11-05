@@ -103,6 +103,15 @@ MfResult       *mfd_manager_remove(MfdManager     *manager,
                                    MfdErrorDetail *ret_detail,
                                    GError        **error);
 
+void            mfd_manager_set_fetch_helper(MfdManager *manager,
+                                             const char *helper_path,
+                                             const char *ca_file);
+MfResult       *mfd_manager_refresh(MfdManager        *manager,
+                                    const char *const *remote_ids,
+                                    MfProgressFunc     progress_func,
+                                    gpointer           user_data,
+                                    GError           **error);
+
 GPtrArray      *mfd_manager_mark(MfdManager     *manager,
                                  const char     *component_id,
                                  const char     *version,

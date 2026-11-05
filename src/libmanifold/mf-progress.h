@@ -20,6 +20,7 @@ G_BEGIN_DECLS
  * @MF_ACTION_INSTALL: A component is installed.
  * @MF_ACTION_REMOVE: A component is removed on request.
  * @MF_ACTION_CLEANUP: A component nothing uses is removed.
+ * @MF_ACTION_REFRESH: The metadata of a remote is downloaded.
  *
  * What action Manifold performs.
  */
@@ -28,6 +29,7 @@ typedef enum {
     MF_ACTION_INSTALL,
     MF_ACTION_REMOVE,
     MF_ACTION_CLEANUP,
+    MF_ACTION_REFRESH,
     /*< private >*/
     MF_ACTION_LAST
 } MfAction;
