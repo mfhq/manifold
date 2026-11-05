@@ -335,6 +335,31 @@ mf_set_error_from_service_details(GError **error,
 }
 
 /**
+ * mf_describe_invalid_parameter:
+ * @parameter: the name of a parameter that the service rejected
+ *
+ * Returns: (nullable): a message that says what is wrong with the value the
+ *   caller gave, or %NULL if we do not know the parameter
+ */
+static const gchar *
+mf_describe_invalid_parameter(const gchar *parameter)
+{
+    if (g_str_equal(parameter, "url"))
+        return _("The URL of a repository has to be an https URL without a query or fragment");
+    if (g_str_equal(parameter, "publicKey"))
+        return _("The public key is not a valid SSH public key");
+    if (g_str_equal(parameter, "channels"))
+        return _("A channel name is not valid, or a channel is named twice");
+    if (g_str_equal(parameter, "origin"))
+        return _("The origin has to be given as <remote>-<channel>");
+    if (g_str_equal(parameter, "remoteId") || g_str_equal(parameter, "remotes"))
+        return _("The ID of the remote is not valid");
+    if (g_str_equal(parameter, "componentId") || g_str_equal(parameter, "componentIds"))
+        return _("The component identifier is not valid");
+    return NULL;
+}
+
+/**
  * mf_set_error_from_service:
  *
  * Turn an error the service replied with into a #GError that says what
@@ -357,7 +382,7 @@ mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant
 
         switch (code) {
         case MF_ERROR_PERMISSION_DENIED:
-            g_set_error_literal(error, MF_ERROR, code, _("Not permitted to change the installed components"));
+            g_set_error_literal(error, MF_ERROR, code, _("Not authorized to do this"));
             break;
         case MF_ERROR_INVALID_BUNDLE:
             g_set_error(error, MF_ERROR, code, _("Not a valid bundle: %s"), message);
@@ -370,6 +395,9 @@ mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant
             break;
         case MF_ERROR_FILE_CONFLICT:
             g_set_error(error, MF_ERROR, code, _("File conflict: %s"), message);
+            break;
+        case MF_ERROR_INVALID_REPOSITORY:
+            g_set_error(error, MF_ERROR, code, _("Not a valid repository: %s"), message);
             break;
         default:
             g_set_error_literal(error, MF_ERROR, code, message);
@@ -394,11 +422,17 @@ mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant
                             MF_ERROR_NOT_IMPLEMENTED,
                             _("The Manifold service does not implement this operation"));
     } else if (g_strcmp0(error_id, SD_VARLINK_ERROR_INVALID_PARAMETER) == 0) {
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_FAILED,
-                    _("The Manifold service rejected the parameter %s"),
-                    mf_parameter_string(parameters, "parameter", "?"));
+        const gchar *parameter = mf_parameter_string(parameters, "parameter", "?");
+        const gchar *reason = mf_describe_invalid_parameter(parameter);
+
+        if (reason != NULL)
+            g_set_error_literal(error, MF_ERROR, MF_ERROR_FAILED, reason);
+        else
+            g_set_error(error,
+                        MF_ERROR,
+                        MF_ERROR_FAILED,
+                        _("The Manifold service rejected the parameter %s"),
+                        parameter);
     } else {
         g_set_error(error,
                     MF_ERROR,

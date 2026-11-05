@@ -16,6 +16,8 @@ MF_BEGIN_PRIVATE_DECLS
 #define MF_REMOTE_CONFIG_NAME "remote.conf"
 #define MF_REMOTE_KEYS_SUBDIR "keys"
 
+gboolean mf_remote_channel_is_valid(const char *channel);
+
 MF_INTERNAL_VISIBLE
 MfRemote *mf_remote_new_for_dirs(const char *vendor_dir,
                                  const char *admin_dir,

@@ -73,6 +73,15 @@ test('remote',
     suite: 'unit',
 )
 
+test('repo',
+    executable('test-repo',
+        ['test-repo.c'],
+        include_directories: [root_inc_dir],
+        dependencies: [manifold_dep, mft_test_utils_dep, zstd_dep],
+    ),
+    suite: 'unit',
+)
+
 test('zchunk',
     executable('test-zchunk',
         ['test-zchunk.c'],
