@@ -363,22 +363,15 @@ mf_repo_read_publisher(MfRepoRootIndex *index, sd_json_variant *root, GError **e
 }
 
 /**
- * mf_repo_root_index_new_from_signed:
- * @data: the root index, as the repository serves it
- * @signature: the signature of the root index
- * @keys: the keys that are trusted to sign the repository of the remote
- * @remote_id: the ID of the remote, which the repository must have
+ * mf_repo_root_index_read:
+ * @fingerprint: (transfer full) (nullable): the fingerprint of the key that signed the index
  *
- * Verify the signature of a root index, and parse it.
+ * Parse a root index. The repository ID in the index has to be @remote_id.
  *
  * Returns: (transfer full): the root index, or %NULL
  */
-MfRepoRootIndex *
-mf_repo_root_index_new_from_signed(GBytes *data,
-                              GBytes *signature,
-                              MfTrustedKeys *keys,
-                              const char *remote_id,
-                              GError **error)
+static MfRepoRootIndex *
+mf_repo_root_index_read(GBytes *data, const char *remote_id, char *fingerprint, GError **error)
 {
     g_autoptr(MfRepoRootIndex) index = g_new0(MfRepoRootIndex, 1);
     g_autoptr(GBytes) text = NULL;
@@ -386,22 +379,7 @@ mf_repo_root_index_new_from_signed(GBytes *data,
     sd_json_variant *channels;
     const char *value;
 
-    if (mf_trusted_keys_is_empty(keys)) {
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_VERIFICATION_FAILED,
-                    _("No key is trusted to sign the repository %s"),
-                    remote_id);
-        return NULL;
-    }
-    if (!mf_trusted_keys_verify(keys,
-                                MF_SIGNATURE_SCOPE_REPO,
-                                data,
-                                signature,
-                                &index->key_fingerprint,
-                                error))
-        return NULL;
-
+    index->key_fingerprint = fingerprint;
     text = mf_zstd_decompress_bytes(data,
                                     ROOT_INDEX_SIZE_MAX,
                                     MF_REPO_ROOT_INDEX_NAME,
@@ -466,6 +444,57 @@ mf_repo_root_index_new_from_signed(GBytes *data,
     }
 
     return g_steal_pointer(&index);
+}
+
+/**
+ * mf_repo_root_index_new_from_signed:
+ * @data: the root index, as the repository serves it
+ * @signature: the signature of the root index
+ * @keys: the keys that are trusted to sign the repository
+ * @remote_id: the ID that the repository must have
+ *
+ * Verify the signature of a root index, and parse it.
+ *
+ * Returns: (transfer full): the root index, or %NULL
+ */
+MfRepoRootIndex *
+mf_repo_root_index_new_from_signed(GBytes *data,
+                                   GBytes *signature,
+                                   MfTrustedKeys *keys,
+                                   const char *remote_id,
+                                   GError **error)
+{
+    char *fingerprint = NULL;
+
+    if (mf_trusted_keys_is_empty(keys)) {
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_VERIFICATION_FAILED,
+                    _("No key is trusted to sign the repository %s"),
+                    remote_id);
+        return NULL;
+    }
+    if (!mf_trusted_keys_verify(keys, MF_SIGNATURE_SCOPE_REPO, data, signature, &fingerprint, error))
+        return NULL;
+
+    return mf_repo_root_index_read(data, remote_id, fingerprint, error);
+}
+
+/**
+ * mf_repo_root_index_new_from_stored:
+ * @data: a cached root index from the store
+ * @remote_id: the ID of the remote
+ *
+ * Parse a cached root index to display information about its repository.
+ * The signature is not verified again, so the result must not be used to
+ * install anything.
+ *
+ * Returns: (transfer full): the root index, or %NULL
+ */
+MfRepoRootIndex *
+mf_repo_root_index_new_from_stored(GBytes *data, const char *remote_id, GError **error)
+{
+    return mf_repo_root_index_read(data, remote_id, NULL, error);
 }
 
 /**

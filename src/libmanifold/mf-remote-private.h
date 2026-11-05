@@ -6,8 +6,6 @@
 
 #pragma once
 
-#include <systemd/sd-json.h>
-
 #include "mf-remote.h"
 #include "mf-macros-private.h"
 
@@ -24,11 +22,13 @@ gboolean mf_remote_channel_is_valid(const char *channel);
 MF_INTERNAL_VISIBLE
 MfRemote *mf_remote_new_for_dirs(const char *vendor_dir,
                                  const char *admin_dir,
+                                 const char *state_dir,
                                  const char *remote_id,
                                  GError    **error);
 MF_INTERNAL_VISIBLE
 GPtrArray *mf_remote_list_for_dirs(const char *vendor_dir,
                                    const char *admin_dir,
+                                   const char *state_dir,
                                    GError    **error);
 
 MF_INTERNAL_VISIBLE

@@ -14,6 +14,7 @@
 #include "mfc-context.h"
 #include "mfc-manage.h"
 #include "mfc-query.h"
+#include "mfc-remote.h"
 #include "mfc-signing.h"
 #include "mfc-util.h"
 
@@ -150,6 +151,7 @@ main(int argc, char **argv)
     mfc_register_query_commands(ctx);
     mfc_register_manage_commands(ctx);
     mfc_register_signing_commands(ctx);
+    mfc_register_remote_commands(ctx);
 
     context = g_option_context_new("COMMAND");
     g_option_context_add_main_entries(context, mfc_global_options, NULL);

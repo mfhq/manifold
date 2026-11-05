@@ -44,6 +44,10 @@ mfc_on_progress(const MfProgress *progress, gpointer user_data)
         /* TRANSLATORS: label of a progress bar, with the component and its version */
         label = g_strdup_printf(_("Cleaning up %s %s"), subject, version ? version : "");
         break;
+    case MF_ACTION_REFRESH:
+        /* TRANSLATORS: label of a progress bar, with the ID of a remote */
+        label = g_strdup_printf(_("Refreshing %s"), subject);
+        break;
     default:
         label = g_strdup(subject);
         break;
@@ -274,7 +278,7 @@ mfc_run_install_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
         if (ret == MFC_EXIT_SUCCESS)
             continue;
 
-        /* we stop at the first file that fails, and say which ones we did not get to */
+        /* we stop at the first file that fails, and list the files that were not installed */
         if (i + 1 < argc) {
             skipped = g_string_new(argv[i + 1]);
             for (int j = i + 2; j < argc; j++)
@@ -458,6 +462,44 @@ mfc_run_cleanup_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
 }
 
 /**
+ * mfc_run_refresh_command:
+ *
+ * Download the metadata of the remotes, or of some of them.
+ */
+static int
+mfc_run_refresh_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
+{
+    g_autoptr(GOptionContext) context = NULL;
+    g_autoptr(MfResult) result = NULL;
+    g_autoptr(GPtrArray) remote_ids = g_ptr_array_new();
+    g_autoptr(GError) error = NULL;
+    int ret;
+
+    context = mfc_option_context_for_command(cmd, NULL);
+    ret = mfc_parse_command_options(context, cmd, &argc, &argv);
+    if (ret != MFC_EXIT_SUCCESS)
+        return ret;
+    for (int i = 1; i < argc; i++)
+        g_ptr_array_add(remote_ids, argv[i]);
+    g_ptr_array_add(remote_ids, NULL);
+
+    result = mf_manager_refresh(mfc_context_get_manager(ctx),
+                                argc > 1 ? (const char *const *) remote_ids->pdata : NULL,
+                                mfc_on_progress,
+                                ctx,
+                                NULL,
+                                &error);
+    mfc_progress_bar_finish(ctx->progress_bar);
+    if (result == NULL) {
+        g_printerr(_("Unable to refresh: %s\n"), error->message);
+        return MFC_EXIT_FAILURE;
+    }
+    mfc_print_result(result);
+
+    return MFC_EXIT_SUCCESS;
+}
+
+/**
  * mfc_run_mark_command:
  *
  * Set the install mode of a version of a component. A version with the mode
@@ -542,6 +584,13 @@ mfc_register_manage_commands(MfcContext *ctx)
                                  /* TRANSLATORS: `manifold cleanup` command description */
                                  _("Remove dependencies and images that are no longer needed."),
                                  mfc_run_cleanup_command);
+    mfc_context_register_command(
+        ctx,
+        "refresh",
+        "[REMOTE-ID...]",
+        /* TRANSLATORS: `manifold refresh` command description */
+        _("Download the metadata of the remotes, so their components can be installed."),
+        mfc_run_refresh_command);
     mfc_context_register_command(
         ctx,
         "mark",

@@ -7,6 +7,7 @@
 #include "config.h"
 
 #include <glib/gstdio.h>
+#include <zstd.h>
 #include <manifold.h>
 
 #include "mf-remote-private.h"
@@ -118,7 +119,7 @@ test_vendor_and_admin(Fixture *f, gconstpointer user_data)
 
     /* without Channels, the remote has the main channel, and the URL loses its trailing slash */
     mft_write_remote(f->vendor_dir, "example", "[Remote]\nURL=https://example.org/repo/\n");
-    remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, "example", &error);
+    remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, NULL, "example", &error);
     g_assert_no_error(error);
     g_assert_cmpstr(mf_remote_get_id(remote), ==, "example");
     g_assert_cmpstr(mf_remote_get_url(remote), ==, "https://example.org/repo");
@@ -128,7 +129,7 @@ test_vendor_and_admin(Fixture *f, gconstpointer user_data)
     mft_write_remote(f->admin_dir,
                      "example",
                      "[Remote]\nURL=https://mirror.example.org/repo\nChannels=main;beta;\n");
-    remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, "example", &error);
+    remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, NULL, "example", &error);
     g_assert_no_error(error);
     g_assert_cmpstr(mf_remote_get_url(remote), ==, "https://mirror.example.org/repo");
     g_assert_cmpstrv(mf_remote_get_channels(remote), ((const char *[]){"main", "beta", NULL}));
@@ -151,6 +152,50 @@ test_vendor_and_admin(Fixture *f, gconstpointer user_data)
 }
 
 /**
+ * test_state:
+ *
+ * A remote reads its summary, publisher and expiry date from the cached root index.
+ */
+static void
+test_state(Fixture *f, gconstpointer user_data)
+{
+    const char *json =
+        "{\"id\": \"example\", \"summary\": \"Example applications\", "
+        "\"publisher\": {\"name\": \"Example Inc.\", \"email\": \"repo@example.org\"}, "
+        "\"serial\": 1, \"date\": \"2026-11-02T18:00:00Z\", "
+        "\"valid-until\": \"2027-05-04T14:57:58Z\", \"channels\": {}}";
+    g_autofree char *state_dir = g_build_filename(f->dir, "var-lib", NULL);
+    g_autofree char *remote_state = g_build_filename(state_dir, "example", NULL);
+    g_autofree char *index_path = g_build_filename(remote_state, "repo-index.json.zst", NULL);
+    gsize bound = ZSTD_compressBound(strlen(json));
+    g_autofree guint8 *compressed = g_malloc(bound);
+    size_t size = ZSTD_compress(compressed, bound, json, strlen(json), 3);
+    g_autoptr(MfRemote) remote = NULL;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *valid_until = NULL;
+
+    mft_write_remote(f->vendor_dir, "example", "[Remote]\nURL=https://example.org/repo\n");
+
+    /* nothing is known before the first refresh */
+    remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, state_dir, "example", &error);
+    g_assert_no_error(error);
+    g_assert_null(mf_remote_get_summary(remote));
+    g_assert_null(mf_remote_get_valid_until(remote));
+    g_clear_object(&remote);
+
+    g_assert_false(ZSTD_isError(size));
+    mft_make_dirs(remote_state);
+    g_assert_true(g_file_set_contents(index_path, (const char *) compressed, (gssize) size, NULL));
+    remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, state_dir, "example", &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(mf_remote_get_summary(remote), ==, "Example applications");
+    g_assert_cmpstr(mf_remote_get_publisher_name(remote), ==, "Example Inc.");
+    g_assert_cmpstr(mf_remote_get_publisher_email(remote), ==, "repo@example.org");
+    valid_until = g_date_time_format_iso8601(mf_remote_get_valid_until(remote));
+    g_assert_cmpstr(valid_until, ==, "2027-05-04T14:57:58Z");
+}
+
+/**
  * test_list:
  *
  * Remotes are listed by their ID, from both directories, without the masked ones.
@@ -165,7 +210,7 @@ test_list(Fixture *f, gconstpointer user_data)
     g_autofree char *keys_only = g_build_filename(f->admin_dir, "keys-only", "keys", NULL);
 
     /* nothing is defined yet */
-    remotes = mf_remote_list_for_dirs(f->vendor_dir, f->admin_dir, &error);
+    remotes = mf_remote_list_for_dirs(f->vendor_dir, f->admin_dir, NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(remotes->len, ==, 0);
     g_clear_pointer(&remotes, g_ptr_array_unref);
@@ -180,14 +225,14 @@ test_list(Fixture *f, gconstpointer user_data)
     mft_write_file(stray, "not a remote");
     mft_make_dirs(keys_only);
 
-    remotes = mf_remote_list_for_dirs(f->vendor_dir, f->admin_dir, &error);
+    remotes = mf_remote_list_for_dirs(f->vendor_dir, f->admin_dir, NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(remotes->len, ==, 3);
     g_assert_cmpstr(mf_remote_get_id(g_ptr_array_index(remotes, 0)), ==, "admin.only");
     g_assert_cmpstr(mf_remote_get_id(g_ptr_array_index(remotes, 1)), ==, "vendor-only");
     g_assert_cmpstr(mf_remote_get_id(g_ptr_array_index(remotes, 2)), ==, "zeta");
 
-    masked = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, "masked", &error);
+    masked = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, NULL, "masked", &error);
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
     g_assert_null(masked);
 }
@@ -222,14 +267,14 @@ test_invalid(Fixture *f, gconstpointer user_data)
         g_autoptr(GPtrArray) remotes = NULL;
 
         mft_write_remote(f->admin_dir, "example", configs[i]);
-        remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, "example", &error);
+        remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, NULL, "example", &error);
         g_assert_error(error, MF_ERROR, MF_ERROR_FAILED);
         g_assert_null(remote);
         g_clear_error(&error);
 
         /* the list leaves the remote out with a warning */
         g_test_expect_message(NULL, G_LOG_LEVEL_WARNING, "Ignoring the remote example:*");
-        remotes = mf_remote_list_for_dirs(f->vendor_dir, f->admin_dir, &error);
+        remotes = mf_remote_list_for_dirs(f->vendor_dir, f->admin_dir, NULL, &error);
         g_test_assert_expected_messages();
         g_assert_no_error(error);
         g_assert_cmpuint(remotes->len, ==, 0);
@@ -237,7 +282,8 @@ test_invalid(Fixture *f, gconstpointer user_data)
 
     for (gsize i = 0; i < G_N_ELEMENTS(ids); i++) {
         g_autoptr(GError) error = NULL;
-        g_autoptr(MfRemote) remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, ids[i], &error);
+        g_autoptr(MfRemote)
+            remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, NULL, ids[i], &error);
 
         g_assert_error(error, MF_ERROR, MF_ERROR_FAILED);
         g_assert_null(remote);
@@ -251,6 +297,7 @@ main(int argc, char **argv)
 
 #define add_test(name, func) g_test_add("/remote/" name, Fixture, NULL, mft_setup, func, mft_teardown)
     add_test("vendor-and-admin", test_vendor_and_admin);
+    add_test("state", test_state);
     add_test("list", test_list);
     add_test("invalid", test_invalid);
 #undef add_test

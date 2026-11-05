@@ -26,6 +26,10 @@ GPtrArray         *mf_remote_list_all(GError **error);
 const char        *mf_remote_get_id(MfRemote *remote);
 const char        *mf_remote_get_url(MfRemote *remote);
 const char *const *mf_remote_get_channels(MfRemote *remote);
+const char        *mf_remote_get_summary(MfRemote *remote);
+const char        *mf_remote_get_publisher_name(MfRemote *remote);
+const char        *mf_remote_get_publisher_email(MfRemote *remote);
+GDateTime         *mf_remote_get_valid_until(MfRemote *remote);
 
 MfTrustedKeys     *mf_remote_load_trusted_keys(MfRemote *remote,
                                                GError  **error);
