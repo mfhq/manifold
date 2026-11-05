@@ -8,6 +8,8 @@
 
 #include <manifold.h>
 
+#include "mf-utils-private.h"
+
 static void
 test_version_is_valid(void)
 {
@@ -48,6 +50,40 @@ test_hex_hash_is_valid(void)
     g_assert_false(mf_hex_hash_is_valid(upper));
     g_assert_false(mf_hex_hash_is_valid(shorter));
     g_assert_false(mf_hex_hash_is_valid(longer));
+}
+
+static void
+test_relative_path_is_valid(void)
+{
+    g_autoptr(GString) longest = g_string_new(NULL);
+    g_autofree char *too_long = NULL;
+    static const char *const invalid[] = {
+        "",
+        "/pool/a.json.zst",
+        "pool//a.json.zst",
+        "pool/",
+        "../pool/a.json.zst",
+        "pool/../a",
+        "pool/./a",
+        "pool/.hidden",
+        "pool\\a",
+        "pool/a\nb",
+    };
+
+    g_assert_true(mf_relative_path_is_valid("pool/org/example/App/0dbf23ee.json.zst"));
+    g_assert_true(mf_relative_path_is_valid("main/x86_64/media/org/example/App/3f0c/icons/64x64@2/App.jxl"));
+    g_assert_true(mf_relative_path_is_valid("index.json"));
+    g_assert_false(mf_relative_path_is_valid(NULL));
+    for (gsize i = 0; i < G_N_ELEMENTS(invalid); i++)
+        g_assert_false(mf_relative_path_is_valid(invalid[i]));
+
+    /* a path may be longer than a name, up to 1024 bytes */
+    for (guint i = 0; i < 204; i++)
+        g_string_append(longest, "abcd/");
+    g_string_append(longest, "abcd");
+    g_assert_true(mf_relative_path_is_valid(longest->str));
+    too_long = g_strconcat(longest->str, "e", NULL);
+    g_assert_false(mf_relative_path_is_valid(too_long));
 }
 
 static void
@@ -150,6 +186,7 @@ main(int argc, char **argv)
     g_test_add_func("/utils/version-is-valid", test_version_is_valid);
     g_test_add_func("/utils/version-compare", test_version_compare);
     g_test_add_func("/utils/hex-hash-is-valid", test_hex_hash_is_valid);
+    g_test_add_func("/utils/relative-path-is-valid", test_relative_path_is_valid);
     g_test_add_func("/utils/component-id-is-valid", test_component_id_is_valid);
     g_test_add_func("/utils/program-name-is-valid", test_program_name_is_valid);
     g_test_add_func("/utils/architecture-is-valid", test_architecture_is_valid);

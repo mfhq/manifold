@@ -528,23 +528,6 @@ mf_bundle_build_image_ref(MfManifest *manifest)
 }
 
 /**
- * mf_bytes_are_jxl:
- *
- * Check for a JPEG XL image, as a bare codestream or in its container.
- */
-static gboolean
-mf_bytes_are_jxl(GBytes *bytes)
-{
-    static const guint8 codestream[] = {0xff, 0x0a};
-    static const guint8 container[] = {0x00, 0x00, 0x00, 0x0c, 'J', 'X', 'L', ' ', '\r', '\n', 0x87, '\n'};
-    gsize size;
-    const guint8 *data = g_bytes_get_data(bytes, &size);
-
-    return (size >= sizeof(codestream) && memcmp(data, codestream, sizeof(codestream)) == 0) ||
-           (size >= sizeof(container) && memcmp(data, container, sizeof(container)) == 0);
-}
-
-/**
  * mf_bundle_image_collect_icons:
  * @contents: the files the index lists, by name
  *
