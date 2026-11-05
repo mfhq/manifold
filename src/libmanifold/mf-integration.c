@@ -311,17 +311,14 @@ mf_integration_file_get_checksum(MfIntegrationFile *file, MfChecksumKind kind)
 gboolean
 mf_integration_file_check_content(MfIntegrationFile *file, GBytes *content)
 {
-    g_autofree char *sha256 = NULL;
-    g_autofree char *blake3 = NULL;
+    MfFileEntry actual;
 
     g_return_val_if_fail(MF_IS_INTEGRATION_FILE(file), FALSE);
     g_return_val_if_fail(content != NULL, FALSE);
 
-    sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, content);
-    blake3 = mf_blake3_of_bytes(content);
-
-    return g_str_equal(sha256, file->checksums[MF_CHECKSUM_KIND_SHA256]) &&
-           g_str_equal(blake3, file->checksums[MF_CHECKSUM_KIND_BLAKE3]);
+    mf_file_entry_set_for_bytes(&actual, content);
+    return g_str_equal(actual.sha256, file->checksums[MF_CHECKSUM_KIND_SHA256]) &&
+           g_str_equal(actual.blake3, file->checksums[MF_CHECKSUM_KIND_BLAKE3]);
 }
 
 /**

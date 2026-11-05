@@ -14,11 +14,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <glib/gi18n-lib.h>
-#include <blake3.h>
 #include <zck.h>
 #include <zstd.h>
 
 #include "mf-error.h"
+#include "mf-manifest-private.h"
 #include "mf-utils-private.h"
 
 /*
@@ -401,10 +401,8 @@ mf_zchunk_check_image(int fd, MfManifest *manifest, GError **error)
 {
     g_autofree char *buffer = NULL;
     g_autoptr(zckCtx) zck = NULL;
-    g_autoptr(GChecksum) checksum = NULL;
-    g_autofree char *blake3 = NULL;
-    guint8 hash[BLAKE3_OUT_LEN];
-    blake3_hasher hasher;
+    g_autoptr(MfHasher) hasher = NULL;
+    MfFileEntry actual;
     guint64 image_size;
     guint64 total = 0;
 
@@ -417,8 +415,7 @@ mf_zchunk_check_image(int fd, MfManifest *manifest, GError **error)
 
     image_size = mf_manifest_get_image_size(manifest);
     buffer = g_malloc(READ_BUFFER_SIZE);
-    checksum = g_checksum_new(G_CHECKSUM_SHA256);
-    blake3_hasher_init(&hasher);
+    hasher = mf_hasher_new();
     for (;;) {
         ssize_t n = zck_read(zck, buffer, READ_BUFFER_SIZE);
 
@@ -429,19 +426,15 @@ mf_zchunk_check_image(int fd, MfManifest *manifest, GError **error)
         if (n == 0)
             break;
 
+        /* an image that is too large can not match, so we read no further */
         total += (guint64) n;
+        mf_hasher_update(hasher, buffer, (gsize) n);
         if (total > image_size)
             break;
-        g_checksum_update(checksum, (const guchar *) buffer, (gsize) n);
-        blake3_hasher_update(&hasher, buffer, (gsize) n);
     }
 
-    blake3_hasher_finalize(&hasher, hash, sizeof(hash));
-    blake3 = mf_hash_to_hex(hash, sizeof(hash));
-    if (total != image_size ||
-        g_strcmp0(g_checksum_get_string(checksum),
-                  mf_manifest_get_image_checksum(manifest, MF_CHECKSUM_KIND_SHA256)) != 0 ||
-        g_strcmp0(blake3, mf_manifest_get_image_checksum(manifest, MF_CHECKSUM_KIND_BLAKE3)) != 0) {
+    mf_hasher_finish(hasher, &actual);
+    if (!mf_manifest_image_matches(manifest, &actual)) {
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,

@@ -49,6 +49,7 @@ mflib_priv_headers = [
     'mf-interface-private.h',
     'mf-json-private.h',
     'mf-macros-private.h',
+    'mf-manifest-private.h',
     'mf-progress-private.h',
     'mf-result-private.h',
     'mf-signer-private.h',
