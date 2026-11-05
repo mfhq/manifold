@@ -638,7 +638,7 @@ class InstallerTest(unittest.TestCase):
     def test_catalog_is_kept_and_linked(self):
         self.manifold('install', self.core_bundle)
         self.manifold('install', self.app_bundle)
-        catalog = f'{STORE}/origins/local/catalog'
+        catalog = f'{STORE}/origins/manifold-local/xml'
         for directory, component in (('runtimes', CORE_ID), ('apps', APP_ID)):
             name = f'{component}.xml'
             self.assertTrue(os.path.isfile(f'{STORE}/{directory}/{component}/current/{name}'))
@@ -654,11 +654,11 @@ class InstallerTest(unittest.TestCase):
             self.assertNotIn('<screenshot', data)
 
         # icons are named after their component, so all share a directory per size
-        icons = f'{STORE}/origins/local/icons/manifold-local/64x64'
+        icons = f'{STORE}/origins/manifold-local/icons/64x64'
         icon = f'{APP_ID}.jxl'
         self.assertEqual(
             os.readlink(f'{icons}/{icon}'),
-            f'../../../../../apps/{APP_ID}/current/icons/64x64/{icon}',
+            f'../../../../apps/{APP_ID}/current/icons/64x64/{icon}',
         )
         with open(f'{icons}/{icon}', 'rb') as f:
             self.assertEqual(f.read(), JXL_DATA)

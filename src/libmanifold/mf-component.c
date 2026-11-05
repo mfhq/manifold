@@ -410,7 +410,8 @@ mf_component_get_install_mode(MfComponent *component)
  *
  * Get the origin of this component.
  *
- * Returns: where the component came from: the name of a repository, or "local"
+ * Returns: where the component came from: the origin of a repository channel,
+ *   or "manifold-local" for bundles
  */
 const char *
 mf_component_get_origin(MfComponent *component)

@@ -1354,7 +1354,7 @@ mfd_manager_execute_removal(MfdManager *manager,
 /**
  * mfd_make_local_appstream_catalog:
  *
- * Create catalog data for a component of the "local" origin. We drop its
+ * Create catalog data for a component of the local origin. We drop its
  * screenshots (we only allow those for repos).
  */
 static GBytes *
@@ -1459,8 +1459,8 @@ mfd_manager_execute_install_plan(MfdManager *manager,
     gboolean added = FALSE;
 
     *ret_bytes_added = 0;
-    /* before we write anything else, build the catalog data for our fake "local"
-     * origin, so a failure leaves nothing behind */
+    /* before we write anything else, build the catalog data for the local origin,
+     * so a failure leaves nothing behind */
     catalog = mfd_make_local_appstream_catalog(mf_bundle_image_get_catalog(iplan->image), error);
     if (catalog == NULL) {
         g_prefix_error(error, "%s: ", component_id);

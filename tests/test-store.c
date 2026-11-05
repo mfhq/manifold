@@ -224,7 +224,7 @@ test_install_runtime(Fixture *f, gconstpointer user_data)
     mft_assert_link(RUNTIMES "/" TEST_CORE_ID "/13.4-1/runtime.raw", expected_link);
     g_assert_false(g_file_test(RUNTIMES "/" TEST_CORE_ID "/13.4-1/base", G_FILE_TEST_EXISTS));
     origin = mft_read_file(RUNTIMES "/" TEST_CORE_ID "/13.4-1/origin");
-    g_assert_cmpstr(origin, ==, "local\n");
+    g_assert_cmpstr(origin, ==, "manifold-local\n");
     mode = mft_read_file(RUNTIMES "/" TEST_CORE_ID "/13.4-1/mode");
     g_assert_cmpstr(mode, ==, "manual\n");
     manifest = mft_read_file(RUNTIMES "/" TEST_CORE_ID "/13.4-1/manifest.json");
@@ -243,7 +243,7 @@ test_install_runtime(Fixture *f, gconstpointer user_data)
     g_assert_cmpstr(mf_component_get_verity_hash(core), ==, hash);
     g_assert_true(mf_component_is_current(core));
     g_assert_cmpint(mf_component_get_install_mode(core), ==, MF_INSTALL_MODE_MANUAL);
-    g_assert_cmpstr(mf_component_get_origin(core), ==, "local");
+    g_assert_cmpstr(mf_component_get_origin(core), ==, "manifold-local");
 
     g_assert_true(mf_store_has_image(store, hash));
 }
