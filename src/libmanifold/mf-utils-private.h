@@ -73,6 +73,7 @@ gboolean mf_mime_weight_is_valid(const char *weight);
 gboolean mf_mime_xml_name_is_valid(const char *name);
 gboolean mf_text_is_valid(GBytes *text);
 gboolean mf_bytes_are_jxl(GBytes *bytes);
+gboolean mf_file_is_masked(const char *path);
 
 MF_INTERNAL_VISIBLE
 char *mf_build_full_version(const char *version,

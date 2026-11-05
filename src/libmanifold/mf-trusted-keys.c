@@ -90,9 +90,9 @@ mf_trusted_keys_new(void)
  * mf_trusted_key_new:
  * @public_key: a public key in OpenSSH format, `<type> <base64 key> [comment]`
  *
- * Parse a public key. We only keep its type and the key itself, as we write
- * them into an allowed-signers file of ssh-keygen. There, any other text could
- * add options or keys of its own.
+ * Parse a public key. We only keep the type and the data of the key, because
+ * we write keys into an allowed-signers file for ssh-keygen. Any other text
+ * in that file could add options or more keys.
  *
  * Returns: (transfer full) (nullable): the key, or %NULL if @public_key is not a valid public key
  */
@@ -192,7 +192,6 @@ mf_trusted_keys_add_dir(MfTrustedKeys *keys, const char *dir, GError **error)
     found = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify) mf_trusted_key_free);
     while ((name = g_dir_read_name(gdir)) != NULL) {
         g_autofree char *path = NULL;
-        g_autofree char *target = NULL;
         g_autofree char *contents = NULL;
         MfTrustedKey *key;
 
@@ -201,8 +200,7 @@ mf_trusted_keys_add_dir(MfTrustedKeys *keys, const char *dir, GError **error)
         path = g_build_filename(dir, name, NULL);
 
         /* a link to /dev/null masks the key of the same name, which we record as a key of NULL */
-        target = g_file_read_link(path, NULL);
-        if (g_strcmp0(target, "/dev/null") == 0) {
+        if (mf_file_is_masked(path)) {
             g_hash_table_replace(found, g_strdup(name), NULL);
             continue;
         }

@@ -508,6 +508,23 @@ mf_hash_to_hex_buffer(char *dest, const guint8 *hash, gsize size)
 }
 
 /**
+ * mf_file_is_masked:
+ * @path: a file in a directory that overrides a directory with lower precedence
+ *
+ * A symbolic link to `/dev/null` masks the file with the same name in the
+ * directory with lower precedence.
+ *
+ * Returns: %TRUE if @path is a link to `/dev/null`
+ */
+gboolean
+mf_file_is_masked(const char *path)
+{
+    g_autofree char *target = g_file_read_link(path, NULL);
+
+    return g_strcmp0(target, "/dev/null") == 0;
+}
+
+/**
  * mf_bytes_are_jxl:
  *
  * Check for a JPEG XL image, as a bare codestream or in its container.
