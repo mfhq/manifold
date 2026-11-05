@@ -506,7 +506,8 @@ class Repository:
         self.key = key
         self.serial = 1
         self.summary = 'Example applications'
-        self.valid_until = '2099-01-01T00:00:00Z'
+        self.publisher = None
+        self.valid_until = '2099-06-01T12:00:00Z'
         self.channels = {}
         self.url = f'{server.url}/{repo_id}'
 
@@ -574,6 +575,7 @@ class Repository:
         root = {
             'id': self.id,
             'summary': self.summary,
+            **({'publisher': self.publisher} if self.publisher is not None else {}),
             'serial': self.serial,
             'date': '2026-11-05T12:00:00Z',
             'valid-until': self.valid_until,

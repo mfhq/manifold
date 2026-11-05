@@ -68,7 +68,7 @@ test('remote',
     executable('test-remote',
         ['test-remote.c'],
         include_directories: [root_inc_dir],
-        dependencies: [manifold_dep, mft_test_utils_dep],
+        dependencies: [manifold_dep, mft_test_utils_dep, zstd_dep],
     ),
     suite: 'unit',
 )
@@ -159,6 +159,17 @@ test('installer',
            '--daemon', manifoldd_exe.full_path(), '--client', manifold_exe.full_path(),
            '--integration-prefix', mf_integration_prefix],
     depends: [manifoldd_exe, manifold_exe],
+    suite: 'e2e',
+    timeout: 120,
+)
+
+# refreshes remotes from a local https server, in the sandbox
+test('remotes',
+    test_sandbox_exe,
+    args: [python_exe.full_path(), files('test-remote.py'),
+           '--daemon', manifoldd_exe.full_path(), '--fetch-helper', manifold_fetch_exe.full_path(),
+           '--client', manifold_exe.full_path(), '--remotes-dir', mf_sysconfdir / 'remotes'],
+    depends: [manifoldd_exe, manifold_fetch_exe, manifold_exe],
     suite: 'e2e',
     timeout: 120,
 )

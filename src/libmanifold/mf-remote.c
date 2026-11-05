@@ -13,6 +13,7 @@
 
 #include "mf-bundle-private.h"
 #include "mf-error.h"
+#include "mf-repo-private.h"
 #include "mf-store-private.h"
 #include "mf-utils-private.h"
 
@@ -50,6 +51,12 @@ struct _MfRemote {
     GStrv channels;
     char *vendor_dir; /* the directory of the remote in the vendor directory */
     char *admin_dir;  /* the directory of the remote in the administrator directory */
+
+    /* the description of the repository from its cached root index, if there is one */
+    char *summary;
+    char *publisher_name;
+    char *publisher_email;
+    GDateTime *valid_until;
 };
 
 G_DEFINE_FINAL_TYPE(MfRemote, mf_remote, G_TYPE_OBJECT)
@@ -64,6 +71,10 @@ mf_remote_finalize(GObject *object)
     g_strfreev(remote->channels);
     g_free(remote->vendor_dir);
     g_free(remote->admin_dir);
+    g_free(remote->summary);
+    g_free(remote->publisher_name);
+    g_free(remote->publisher_email);
+    g_clear_pointer(&remote->valid_until, g_date_time_unref);
 
     G_OBJECT_CLASS(mf_remote_parent_class)->finalize(object);
 }
@@ -236,9 +247,41 @@ mf_remote_read_channels(GKeyFile *config, const char *config_path, const char *r
 }
 
 /**
+ * mf_remote_read_state:
+ * @state_dir: the directory with the cached metadata of all remotes
+ *
+ * Read the description of the repository from the cached root index of the
+ * remote, if there is one.
+ */
+static void
+mf_remote_read_state(MfRemote *remote, const char *state_dir)
+{
+    g_autofree char *path = g_build_filename(state_dir, remote->id, MF_REPO_ROOT_INDEX_NAME, NULL);
+    g_autoptr(GMappedFile) file = g_mapped_file_new(path, FALSE, NULL);
+    g_autoptr(GBytes) data = NULL;
+    g_autoptr(MfRepoRootIndex) index = NULL;
+    g_autoptr(GError) error = NULL;
+
+    if (file == NULL)
+        return;
+    data = g_mapped_file_get_bytes(file);
+    index = mf_repo_root_index_new_from_stored(data, remote->id, &error);
+    if (index == NULL) {
+        g_debug("Unable to read the cached root index of %s: %s", remote->id, error->message);
+        return;
+    }
+
+    remote->summary = g_steal_pointer(&index->summary);
+    remote->publisher_name = g_steal_pointer(&index->publisher_name);
+    remote->publisher_email = g_steal_pointer(&index->publisher_email);
+    remote->valid_until = g_date_time_ref(index->valid_until);
+}
+
+/**
  * mf_remote_new_for_dirs:
  * @vendor_dir: the directory with the remotes that vendors ship
  * @admin_dir: the directory with the remotes of the administrator
+ * @state_dir: (nullable): the directory with the cached metadata of all remotes
  * @remote_id: the ID of the remote
  *
  * Read the definition of a remote.
@@ -247,7 +290,11 @@ mf_remote_read_channels(GKeyFile *config, const char *config_path, const char *r
  *   or its definition is not valid
  */
 MfRemote *
-mf_remote_new_for_dirs(const char *vendor_dir, const char *admin_dir, const char *remote_id, GError **error)
+mf_remote_new_for_dirs(const char *vendor_dir,
+                       const char *admin_dir,
+                       const char *state_dir,
+                       const char *remote_id,
+                       GError **error)
 {
     g_autoptr(MfRemote) remote = NULL;
     g_autoptr(GKeyFile) config = g_key_file_new();
@@ -290,6 +337,8 @@ mf_remote_new_for_dirs(const char *vendor_dir, const char *admin_dir, const char
     remote->channels = mf_remote_read_channels(config, config_path, remote_id, error);
     if (remote->channels == NULL)
         return NULL;
+    if (state_dir != NULL)
+        mf_remote_read_state(remote, state_dir);
 
     return g_steal_pointer(&remote);
 }
@@ -310,6 +359,7 @@ mf_remote_new_for_id(const char *remote_id, GError **error)
     g_return_val_if_fail(remote_id != NULL, NULL);
     return mf_remote_new_for_dirs(MF_DATADIR "/" MF_REMOTES_SUBDIR,
                                   MF_SYSCONFDIR "/" MF_REMOTES_SUBDIR,
+                                  MF_STORAGE_DIR "/" MF_STORE_REMOTES_SUBDIR,
                                   remote_id,
                                   error);
 }
@@ -346,6 +396,7 @@ mf_remote_collect_ids(const char *dir, GHashTable *ids, GError **error)
  * mf_remote_list_for_dirs:
  * @vendor_dir: the directory with the remotes that vendors ship
  * @admin_dir: the directory with the remotes of the administrator
+ * @state_dir: (nullable): the directory with the cached metadata of all remotes
  *
  * Read the definitions of all remotes. Masked remotes are left out, and so
  * are remotes with an invalid definition, after a warning.
@@ -354,7 +405,7 @@ mf_remote_collect_ids(const char *dir, GHashTable *ids, GError **error)
  *   by their ID, or %NULL if the directories can not be read
  */
 GPtrArray *
-mf_remote_list_for_dirs(const char *vendor_dir, const char *admin_dir, GError **error)
+mf_remote_list_for_dirs(const char *vendor_dir, const char *admin_dir, const char *state_dir, GError **error)
 {
     g_autoptr(GHashTable) ids = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     g_autoptr(GPtrArray) remotes = g_ptr_array_new_with_free_func(g_object_unref);
@@ -366,7 +417,7 @@ mf_remote_list_for_dirs(const char *vendor_dir, const char *admin_dir, GError **
     sorted = g_list_sort(g_hash_table_get_keys(ids), (GCompareFunc) g_strcmp0);
     for (GList *l = sorted; l != NULL; l = l->next) {
         g_autoptr(GError) local_error = NULL;
-        MfRemote *remote = mf_remote_new_for_dirs(vendor_dir, admin_dir, l->data, &local_error);
+        MfRemote *remote = mf_remote_new_for_dirs(vendor_dir, admin_dir, state_dir, l->data, &local_error);
 
         if (remote != NULL) {
             g_ptr_array_add(remotes, remote);
@@ -397,6 +448,7 @@ mf_remote_list_all(GError **error)
 {
     return mf_remote_list_for_dirs(MF_DATADIR "/" MF_REMOTES_SUBDIR,
                                    MF_SYSCONFDIR "/" MF_REMOTES_SUBDIR,
+                                   MF_STORAGE_DIR "/" MF_STORE_REMOTES_SUBDIR,
                                    error);
 }
 
@@ -456,6 +508,65 @@ mf_remote_get_channels(MfRemote *remote)
 {
     g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
     return (const char *const *) remote->channels;
+}
+
+/**
+ * mf_remote_get_summary:
+ * @remote: an #MfRemote
+ *
+ * Returns: (nullable): a short description of the repository, or %NULL if
+ *   the remote was not refreshed yet
+ */
+const char *
+mf_remote_get_summary(MfRemote *remote)
+{
+    g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
+    return remote->summary;
+}
+
+/**
+ * mf_remote_get_publisher_name:
+ * @remote: an #MfRemote
+ *
+ * Returns: (nullable): the name of the publisher of the repository, or %NULL
+ *   if it is not known, or the remote was not refreshed yet
+ */
+const char *
+mf_remote_get_publisher_name(MfRemote *remote)
+{
+    g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
+    return remote->publisher_name;
+}
+
+/**
+ * mf_remote_get_publisher_email:
+ * @remote: an #MfRemote
+ *
+ * Returns: (nullable): the email address of the publisher of the
+ *   repository, or %NULL if there is none
+ */
+const char *
+mf_remote_get_publisher_email(MfRemote *remote)
+{
+    g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
+    return remote->publisher_email;
+}
+
+/**
+ * mf_remote_get_valid_until:
+ * @remote: an #MfRemote
+ *
+ * Nothing is installed from a remote with expired metadata, until the remote
+ * is refreshed.
+ *
+ * Returns: (nullable) (transfer none): the time at which the cached metadata
+ *   of the remote expires, or %NULL if the remote was not refreshed yet
+ */
+GDateTime *
+mf_remote_get_valid_until(MfRemote *remote)
+{
+    g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
+    return remote->valid_until;
 }
 
 /**
