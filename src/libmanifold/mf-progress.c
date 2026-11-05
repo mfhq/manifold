@@ -39,6 +39,8 @@ mf_action_to_string(MfAction action)
         return "remove";
     case MF_ACTION_CLEANUP:
         return "cleanup";
+    case MF_ACTION_REFRESH:
+        return "refresh";
     default:
         return "unknown";
     }
@@ -59,6 +61,8 @@ mf_action_from_string(const char *action_str)
         return MF_ACTION_REMOVE;
     if (g_strcmp0(action_str, "cleanup") == 0)
         return MF_ACTION_CLEANUP;
+    if (g_strcmp0(action_str, "refresh") == 0)
+        return MF_ACTION_REFRESH;
     return MF_ACTION_UNKNOWN;
 }
 

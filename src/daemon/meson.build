@@ -5,14 +5,20 @@
 manifoldd_src = [
     'mfd-image-reader.c',
     'mfd-image-reader.h',
+    'mfd-fetcher.c',
+    'mfd-fetcher.h',
     'mfd-install-set.c',
     'mfd-install-set.h',
     'mfd-integrator.c',
     'mfd-integrator.h',
     'mfd-manager.c',
     'mfd-manager.h',
+    'mfd-origin.c',
+    'mfd-origin.h',
     'mfd-policy.c',
     'mfd-policy.h',
+    'mfd-refresh.c',
+    'mfd-refresh.h',
     'mfd-service.c',
     'mfd-service.h',
     'mfd-store-writer.c',
@@ -24,7 +30,7 @@ manifoldd_src = [
 manifoldd_c_args = hardening_c_args + ['-DG_LOG_DOMAIN="manifoldd"']
 
 manifoldd_lib = static_library('manifoldd',
-    [manifoldd_src, mf_daemon_shared_src],
+    [manifoldd_src, mf_daemon_shared_src, mf_fetch_interface_src],
     c_args: manifoldd_c_args,
     include_directories: [root_inc_dir, shared_inc_dir],
     dependencies: [

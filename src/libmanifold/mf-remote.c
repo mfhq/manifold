@@ -116,6 +116,49 @@ mf_remote_channel_is_valid(const char *channel)
 }
 
 /**
+ * mf_origin_build_name:
+ * @remote_id: the ID of a remote
+ * @channel: a channel of the remote
+ *
+ * Returns: (transfer full): the name of the origin of a channel, `<remote>-<channel>`
+ */
+char *
+mf_origin_build_name(const char *remote_id, const char *channel)
+{
+    return g_strdup_printf("%s-%s", remote_id, channel);
+}
+
+/**
+ * mf_origin_split_name:
+ * @origin: the name of an origin
+ * @ret_remote_id: (out) (optional) (transfer full): the ID of the remote
+ * @ret_channel: (out) (optional) (transfer none): the channel, which points into @origin
+ *
+ * Split the name of an origin into the ID of its remote and its channel.
+ * The channel starts after the last `-` of the name.
+ *
+ * Returns: %FALSE if @origin is not the name of the origin of a channel of a remote
+ */
+gboolean
+mf_origin_split_name(const char *origin, char **ret_remote_id, const char **ret_channel)
+{
+    const char *dash = strrchr(origin, '-');
+    g_autofree char *remote_id = NULL;
+
+    if (dash == NULL || !mf_remote_channel_is_valid(dash + 1))
+        return FALSE;
+    remote_id = g_strndup(origin, (gsize) (dash - origin));
+    if (!mf_remote_id_is_valid(remote_id))
+        return FALSE;
+
+    if (ret_remote_id != NULL)
+        *ret_remote_id = g_steal_pointer(&remote_id);
+    if (ret_channel != NULL)
+        *ret_channel = dash + 1;
+    return TRUE;
+}
+
+/**
  * mf_remote_read_url:
  *
  * Returns: (transfer full): the URL of the repository, without a `/` at its end, or %NULL
@@ -380,6 +423,24 @@ mf_remote_get_url(MfRemote *remote)
 {
     g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
     return remote->url;
+}
+
+/**
+ * mf_remote_build_url:
+ * @remote: an #MfRemote
+ * @location: a path relative to the root of the repository
+ *
+ * Returns: (transfer full): the URL of @location
+ */
+char *
+mf_remote_build_url(MfRemote *remote, const char *location)
+{
+    g_autofree char *escaped = NULL;
+
+    g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
+
+    escaped = g_uri_escape_string(location, G_URI_RESERVED_CHARS_ALLOWED_IN_PATH, FALSE);
+    return g_strconcat(remote->url, "/", escaped, NULL);
 }
 
 /**

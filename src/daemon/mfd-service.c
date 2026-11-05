@@ -98,6 +98,7 @@ struct _MfdRequest {
     char *component_id;         /* the component to remove or mark */
     char *version;              /* the version to remove or mark, or NULL for all of them */
     MfInstallMode mode;         /* how to mark the component */
+    GStrv remote_ids;           /* the remotes to refresh, or NULL for all of them */
 };
 
 /**
@@ -140,6 +141,7 @@ mfd_request_free(MfdRequest *request)
         close(request->bundle_fd);
     g_free(request->component_id);
     g_free(request->version);
+    g_strfreev(request->remote_ids);
     g_free(request);
 }
 
@@ -239,6 +241,8 @@ mfd_error_is_about_request(const GError *error)
     case MF_ERROR_ID_CONFLICT:
     case MF_ERROR_FILE_CONFLICT:
     case MF_ERROR_INVALID_REPOSITORY:
+    case MF_ERROR_EXPIRED:
+    case MF_ERROR_DOWNLOAD_FAILED:
         return TRUE;
     default:
         return FALSE;
@@ -540,6 +544,34 @@ mfd_service_remove(MfdService *service, MfdRequest *request)
                                 &error);
     if (result == NULL) {
         mfd_service_reply_error(request->link, error, &detail);
+        return 0;
+    }
+
+    return mfd_service_reply_result(request->link, result);
+}
+
+/**
+ * mfd_service_refresh:
+ *
+ * Refresh the remotes of the request, and reply to the call.
+ */
+static int
+mfd_service_refresh(MfdService *service, MfdRequest *request)
+{
+    g_autoptr(MfResult) result = NULL;
+    g_autoptr(GError) error = NULL;
+
+    g_message("User %u requested to refresh %s",
+              (unsigned int) request->uid,
+              request->remote_ids != NULL ? "some remotes" : "all remotes");
+
+    result = mfd_manager_refresh(service->manager,
+                                 (const char *const *) request->remote_ids,
+                                 request->report_progress ? mfd_service_on_progress : NULL,
+                                 request->link,
+                                 &error);
+    if (result == NULL) {
+        mfd_service_reply_error(request->link, error, NULL);
         return 0;
     }
 
@@ -990,6 +1022,64 @@ mfd_varlink_method_cleanup(sd_varlink *link,
 }
 
 /**
+ * mfd_varlink_method_refresh:
+ */
+static int
+mfd_varlink_method_refresh(sd_varlink *link,
+                           sd_json_variant *parameters,
+                           sd_varlink_method_flags_t flags,
+                           void *userdata)
+{
+    MfdService *service = userdata;
+    struct {
+        sd_json_variant *remotes;
+        MfTransactionFlags flags;
+    } p = {};
+    static const sd_json_dispatch_field dispatch_table[] = {
+        {"remotes",
+         _SD_JSON_VARIANT_TYPE_INVALID, sd_json_dispatch_variant_noref,
+         offsetof(typeof(p), remotes),
+         0},
+        {"flags",
+         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
+         offsetof(typeof(p), flags),
+         0},
+        {},
+    };
+    g_autoptr(GPtrArray) remote_ids = NULL;
+    MfdRequest *request;
+    int r;
+
+    r = sd_varlink_dispatch(link, parameters, dispatch_table, &p);
+    if (r != 0)
+        return r;
+
+    if (p.remotes != NULL && !sd_json_variant_is_null(p.remotes)) {
+        if (!sd_json_variant_is_array(p.remotes))
+            return sd_varlink_error_invalid_parameter_name(link, "remotes");
+        remote_ids = g_ptr_array_new_with_free_func(g_free);
+        for (size_t i = 0; i < sd_json_variant_elements(p.remotes); i++) {
+            sd_json_variant *id = sd_json_variant_by_index(p.remotes, i);
+
+            if (!sd_json_variant_is_string(id))
+                return sd_varlink_error_invalid_parameter_name(link, "remotes");
+            g_ptr_array_add(remote_ids, g_strdup(sd_json_variant_string(id)));
+        }
+        g_ptr_array_add(remote_ids, NULL);
+    }
+
+    request = mfd_request_new(link,
+                              mfd_service_refresh,
+                              MF_VARLINK_METHOD_REFRESH,
+                              MFD_POLKIT_ACTION_REFRESH,
+                              flags);
+    if (remote_ids != NULL)
+        request->remote_ids = (GStrv) g_ptr_array_free(g_steal_pointer(&remote_ids), FALSE);
+
+    return mfd_service_authorize(service, request, p.flags);
+}
+
+/**
  * mfd_varlink_method_mark_component:
  */
 static int
@@ -1086,7 +1176,9 @@ mfd_service_new(sd_event *event, GError **error)
                                            MF_VARLINK_METHOD_CLEANUP,
                                            mfd_varlink_method_cleanup,
                                            MF_VARLINK_METHOD_MARK_COMPONENT,
-                                           mfd_varlink_method_mark_component);
+                                           mfd_varlink_method_mark_component,
+                                           MF_VARLINK_METHOD_REFRESH,
+                                           mfd_varlink_method_refresh);
     if (r < 0) {
         mf_set_error_from_errno(error, r, "Unable to bind Varlink methods");
         return NULL;
@@ -1185,6 +1277,17 @@ mfd_service_exit_when_idle(MfdService *service)
                                       G_USEC_PER_SEC,
                                       mfd_service_on_idle_timeout,
                                       NULL);
+}
+
+/**
+ * mfd_service_set_fetch_helper:
+ *
+ * Make the service run the download helper itself. This is used by tests.
+ */
+void
+mfd_service_set_fetch_helper(MfdService *service, const char *helper_path, const char *ca_file)
+{
+    mfd_manager_set_fetch_helper(service->manager, helper_path, ca_file);
 }
 
 /**

@@ -19,6 +19,7 @@ G_BEGIN_DECLS
 #define MFD_POLKIT_ACTION_INSTALL_PRIVILEGED "org.freedesktop.manifold.install-privileged"
 #define MFD_POLKIT_ACTION_REMOVE             "org.freedesktop.manifold.remove"
 #define MFD_POLKIT_ACTION_MARK               "org.freedesktop.manifold.mark"
+#define MFD_POLKIT_ACTION_REFRESH            "org.freedesktop.manifold.refresh"
 
 sd_bus  *mfd_policy_connect(sd_event *event,
                             GError  **error);

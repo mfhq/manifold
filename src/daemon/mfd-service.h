@@ -17,6 +17,9 @@ G_DECLARE_FINAL_TYPE(MfdService, mfd_service, MFD, SERVICE, GObject)
 MfdService *mfd_service_new(sd_event *event,
                             GError  **error);
 
+void        mfd_service_set_fetch_helper(MfdService *service,
+                                         const char *helper_path,
+                                         const char *ca_file);
 gboolean    mfd_service_listen(MfdService *service,
                                const char *socket_path,
                                GError    **error);

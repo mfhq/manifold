@@ -39,6 +39,8 @@ static const char *const STATE_DIRS[] = {
     MF_RUNTIME_DIR,
     MF_STORAGE_DIR,
     MF_CACHE_DIR,
+    MF_DATADIR "/remotes",
+    MF_SYSCONFDIR "/remotes",
     MF_INTEGRATION_PREFIX "/lib/systemd",
     MF_INTEGRATION_PREFIX "/lib/udev",
 };

@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <systemd/sd-json.h>
+
 #include "mf-remote.h"
 #include "mf-macros-private.h"
 
@@ -16,6 +18,7 @@ MF_BEGIN_PRIVATE_DECLS
 #define MF_REMOTE_CONFIG_NAME "remote.conf"
 #define MF_REMOTE_KEYS_SUBDIR "keys"
 
+MF_INTERNAL_VISIBLE
 gboolean mf_remote_channel_is_valid(const char *channel);
 
 MF_INTERNAL_VISIBLE
@@ -27,5 +30,16 @@ MF_INTERNAL_VISIBLE
 GPtrArray *mf_remote_list_for_dirs(const char *vendor_dir,
                                    const char *admin_dir,
                                    GError    **error);
+
+MF_INTERNAL_VISIBLE
+char *mf_origin_build_name(const char *remote_id,
+                           const char *channel);
+MF_INTERNAL_VISIBLE
+gboolean mf_origin_split_name(const char  *origin,
+                              char       **ret_remote_id,
+                              const char **ret_channel);
+MF_INTERNAL_VISIBLE
+char *mf_remote_build_url(MfRemote   *remote,
+                          const char *location);
 
 MF_END_PRIVATE_DECLS

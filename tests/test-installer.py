@@ -580,7 +580,7 @@ class InstallTest(InstallerTestCase):
         # the app comes first in the bundle, but is installed after the kit it builds on
         self.install_core()
         self.assertIn(
-            'could not be verified',
+            'Verification failed',
             self.install(self.kit, self.app, corrupt_image=self.app, expect=1),
         )
 

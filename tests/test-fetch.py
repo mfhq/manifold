@@ -13,70 +13,19 @@ Usage: test-fetch.py --helper manifold-fetch
 """
 
 import argparse
-import http.server
 import json
 import os
-import re
 import shutil
 import socket
-import ssl
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mftest import EXIT_SKIPPED  # noqa: E402
+from mftest import EXIT_SKIPPED, HttpsServer  # noqa: E402
 
 FETCH = 'org.freedesktop.manifold.fetch.Fetch'
-
-
-class Handler(http.server.BaseHTTPRequestHandler):
-    """Serves files whole or one range at a time, and redirects the way GitHub does for release assets."""
-
-    def do_GET(self):
-        server = self.server
-        server.requests.append(self.path)
-        count = server.requests.count(self.path)
-
-        if self.path in server.redirects:
-            self.send_response(302)
-            self.send_header('Location', server.redirects[self.path])
-            self.send_header('Content-Length', '0')
-            self.end_headers()
-            return
-        if count in server.forbidden.get(self.path, ()):
-            self.send_error(403)
-            return
-        data = server.files.get(self.path)
-        if data is None:
-            self.send_error(404)
-            return
-
-        match = re.fullmatch(r'bytes=(\d+)-(\d+)', self.headers.get('Range', ''))
-        if match is None or self.path in server.no_ranges:
-            self.send_response(200)
-            self.send_header('Content-Length', str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-            return
-        start, end = int(match.group(1)), int(match.group(2))
-        self.send_response(206)
-        self.send_header('Content-Range', f'bytes {start}-{end}/{len(data)}')
-        self.send_header('Content-Length', str(end - start + 1))
-        self.end_headers()
-        self.wfile.write(data[start : end + 1])
-
-    def log_message(self, format, *args):
-        pass
-
-
-class Server(http.server.ThreadingHTTPServer):
-    """The server, quiet about clients that refuse its certificate or hang up early."""
-
-    def handle_error(self, request, client_address):
-        pass
 
 
 class Helper:
@@ -120,44 +69,17 @@ class FetchTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.work = tempfile.mkdtemp()
-        cls.cert = os.path.join(cls.work, 'cert.pem')
-        key = os.path.join(cls.work, 'key.pem')
-        subprocess.run(
-            [
-                'openssl',
-                'req',
-                '-x509',
-                '-newkey',
-                'ec',
-                '-pkeyopt',
-                'ec_paramgen_curve:prime256v1',
-                '-nodes',
-            ]
-            + ['-keyout', key, '-out', cls.cert, '-days', '1', '-subj', '/CN=127.0.0.1']
-            + ['-addext', 'subjectAltName=IP:127.0.0.1'],
-            check=True,
-            capture_output=True,
-        )
-
-        cls.server = Server(('127.0.0.1', 0), Handler)
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(cls.cert, key)
-        cls.server.socket = context.wrap_socket(cls.server.socket, server_side=True)
-        cls.url = f'https://127.0.0.1:{cls.server.server_address[1]}'
-        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+        cls.server = HttpsServer(cls.work)
+        cls.cert = cls.server.cert
+        cls.url = cls.server.url
 
     @classmethod
     def tearDownClass(cls):
-        cls.server.shutdown()
-        cls.server.server_close()
+        cls.server.stop()
         shutil.rmtree(cls.work)
 
     def setUp(self):
-        self.server.files = {}
-        self.server.redirects = {}
-        self.server.forbidden = {}
-        self.server.no_ranges = set()
-        self.server.requests = []
+        self.server.reset()
         self.helper = Helper(self.cert)
 
     def tearDown(self):
