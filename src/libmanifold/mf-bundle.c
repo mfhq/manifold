@@ -157,18 +157,8 @@ typedef struct {
 /* a screenshot or video of the catalog, which we only read when it is copied out */
 typedef struct {
     guint64 index; /* the index of the file in the archive */
-    guint64 size;
-    char *sha256;
-    char *blake3;
+    MfFileEntry entry;
 } MfBundleMediaFile;
-
-static void
-mf_bundle_media_file_free(MfBundleMediaFile *file)
-{
-    g_free(file->sha256);
-    g_free(file->blake3);
-    g_free(file);
-}
 
 G_DEFINE_TYPE_WITH_PRIVATE(MfBundle, mf_bundle, G_TYPE_OBJECT)
 
@@ -201,10 +191,7 @@ mf_bundle_init(MfBundle *bundle)
     auto priv = GET_PRIVATE(bundle);
 
     priv->images = g_ptr_array_new_with_free_func(g_object_unref);
-    priv->media = g_hash_table_new_full(g_str_hash,
-                                        g_str_equal,
-                                        g_free,
-                                        (GDestroyNotify) mf_bundle_media_file_free);
+    priv->media = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 }
 
 void
@@ -352,6 +339,7 @@ mf_zip_read_entry(zip_t *zip, guint64 index, const char *name, guint64 *budget, 
  * mf_zip_hash_entry:
  * @size_max: we stop reading after this many bytes
  * @dest_fd: file descriptor to write the file to, or -1 to only hash it
+ * @ret_entry: (out caller-allocates): the size and hashes of the file
  *
  * Compute the size and hashes of a file of the bundle, without keeping it in memory.
  */
@@ -361,14 +349,13 @@ mf_zip_hash_entry(zip_t *zip,
                   const char *name,
                   guint64 size_max,
                   int dest_fd,
-                  guint64 *ret_size,
-                  char **ret_sha256,
-                  char **ret_blake3,
+                  MfFileEntry *ret_entry,
                   GError **error)
 {
     g_autofree char *buffer = g_malloc(COPY_BUFFER_SIZE);
     g_autoptr(GChecksum) checksum = g_checksum_new(G_CHECKSUM_SHA256);
     guint8 blake3[BLAKE3_OUT_LEN];
+    g_autofree char *blake3_hex = NULL;
     blake3_hasher hasher;
     zip_file_t *file;
     guint64 total = 0;
@@ -401,9 +388,10 @@ mf_zip_hash_entry(zip_t *zip,
     zip_fclose(file);
 
     blake3_hasher_finalize(&hasher, blake3, sizeof(blake3));
-    *ret_size = total;
-    *ret_sha256 = g_strdup(g_checksum_get_string(checksum));
-    *ret_blake3 = mf_hash_to_hex(blake3, sizeof(blake3));
+    blake3_hex = mf_hash_to_hex(blake3, sizeof(blake3));
+    ret_entry->size = total;
+    g_strlcpy(ret_entry->sha256, g_checksum_get_string(checksum), sizeof(ret_entry->sha256));
+    g_strlcpy(ret_entry->blake3, blake3_hex, sizeof(ret_entry->blake3));
     return TRUE;
 }
 
@@ -468,13 +456,9 @@ mf_bundle_reader_verify_indexed_file(MfBundleReader *reader,
     MfBundlePrivate *priv = GET_PRIVATE(reader->bundle);
     MfBundleEntry *archive_entry;
     g_autoptr(GBytes) data = NULL;
-    g_autofree char *actual_sha256 = NULL;
-    g_autofree char *actual_blake3 = NULL;
+    MfFileEntry expected;
+    MfFileEntry actual;
     const char *name;
-    const char *expected_sha256;
-    const char *expected_blake3;
-    guint64 size;
-    guint64 actual_size;
 
     if (!sd_json_variant_is_object(entry)) {
         g_set_error(error,
@@ -498,26 +482,7 @@ mf_bundle_reader_verify_indexed_file(MfBundleReader *reader,
                     MF_BUNDLE_INDEX_NAME);
         return FALSE;
     }
-    if (!mf_json_get_unsigned_field(entry,
-                                    MF_BUNDLE_INDEX_NAME,
-                                    "size",
-                                    MF_ERROR_INVALID_BUNDLE,
-                                    &size,
-                                    error))
-        return FALSE;
-    expected_sha256 = mf_json_get_hash_field(entry,
-                                             MF_BUNDLE_INDEX_NAME,
-                                             "sha256",
-                                             MF_ERROR_INVALID_BUNDLE,
-                                             error);
-    if (expected_sha256 == NULL)
-        return FALSE;
-    expected_blake3 = mf_json_get_hash_field(entry,
-                                             MF_BUNDLE_INDEX_NAME,
-                                             "blake3",
-                                             MF_ERROR_INVALID_BUNDLE,
-                                             error);
-    if (expected_blake3 == NULL)
+    if (!mf_json_get_file_entry(entry, MF_BUNDLE_INDEX_NAME, MF_ERROR_INVALID_BUNDLE, &expected, error))
         return FALSE;
 
     archive_entry = mf_bundle_reader_take_reference(reader, name, MF_BUNDLE_INDEX_NAME, error);
@@ -526,26 +491,15 @@ mf_bundle_reader_verify_indexed_file(MfBundleReader *reader,
 
     if (g_str_has_prefix(name, MF_BUNDLE_CATALOG_MEDIA_PREFIX)) {
         /* screenshots and videos can be large, so we only hash them */
-        if (!mf_zip_hash_entry(priv->zip,
-                               archive_entry->index,
-                               name,
-                               size,
-                               -1,
-                               &actual_size,
-                               &actual_sha256,
-                               &actual_blake3,
-                               error))
+        if (!mf_zip_hash_entry(priv->zip, archive_entry->index, name, expected.size, -1, &actual, error))
             return FALSE;
     } else {
         data = mf_zip_read_entry(priv->zip, archive_entry->index, name, &reader->budget, error);
         if (data == NULL)
             return FALSE;
-        actual_size = g_bytes_get_size(data);
-        actual_sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, data);
-        actual_blake3 = mf_blake3_of_bytes(data);
+        mf_file_entry_set_for_bytes(&actual, data);
     }
-    if (actual_size != size || g_strcmp0(actual_sha256, expected_sha256) != 0 ||
-        g_strcmp0(actual_blake3, expected_blake3) != 0) {
+    if (!mf_file_entry_equal(&actual, &expected)) {
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,
@@ -559,9 +513,7 @@ mf_bundle_reader_verify_indexed_file(MfBundleReader *reader,
         MfBundleMediaFile *media_file = g_new0(MfBundleMediaFile, 1);
 
         media_file->index = archive_entry->index;
-        media_file->size = size;
-        media_file->sha256 = g_strdup(expected_sha256);
-        media_file->blake3 = g_strdup(expected_blake3);
+        media_file->entry = expected;
         g_hash_table_insert(priv->media, g_strdup(name + strlen(MF_BUNDLE_CATALOG_MEDIA_PREFIX)), media_file);
     }
 
@@ -1333,11 +1285,9 @@ mf_bundle_list_media_files(MfBundle *bundle)
 gboolean
 mf_bundle_copy_media_file(MfBundle *bundle, const char *name, int dest_fd, GError **error)
 {
-    g_autofree char *sha256 = NULL;
-    g_autofree char *blake3 = NULL;
     g_autofree char *entry_name = NULL;
     MfBundleMediaFile *media_file;
-    guint64 size;
+    MfFileEntry actual;
 
     g_return_val_if_fail(MF_IS_BUNDLE(bundle), FALSE);
     g_return_val_if_fail(name != NULL, FALSE);
@@ -1355,15 +1305,12 @@ mf_bundle_copy_media_file(MfBundle *bundle, const char *name, int dest_fd, GErro
     if (!mf_zip_hash_entry(priv->zip,
                            media_file->index,
                            entry_name,
-                           media_file->size,
+                           media_file->entry.size,
                            dest_fd,
-                           &size,
-                           &sha256,
-                           &blake3,
+                           &actual,
                            error))
         return FALSE;
-    if (size != media_file->size || g_strcmp0(sha256, media_file->sha256) != 0 ||
-        g_strcmp0(blake3, media_file->blake3) != 0) {
+    if (!mf_file_entry_equal(&actual, &media_file->entry)) {
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,

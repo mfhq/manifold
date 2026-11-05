@@ -19,6 +19,26 @@ MF_BEGIN_PRIVATE_DECLS
 /* the suffix of the cached icons in AppStream catalogs (JXL images) */
 #define MF_ICON_SUFFIX ".jxl"
 
+/* the length of a hex encoded 256 bit hash */
+#define MF_HEX_HASH_LENGTH 64
+
+/**
+ * MfFileEntry:
+ *
+ * The size and hashes of a file, as an index records them, or as we found
+ * them for a file we read.
+ */
+typedef struct {
+    guint64 size;
+    char    sha256[MF_HEX_HASH_LENGTH + 1];
+    char    blake3[MF_HEX_HASH_LENGTH + 1];
+} MfFileEntry;
+
+void     mf_file_entry_set_for_bytes(MfFileEntry *entry,
+                                     GBytes      *data);
+gboolean mf_file_entry_equal(const MfFileEntry *a,
+                             const MfFileEntry *b);
+
 gboolean mf_write_all(int         fd,
                       const char *buffer,
                       gsize       size,
@@ -50,6 +70,7 @@ gboolean mf_split_full_version(const char *name,
                                char      **ret_version,
                                guint64    *ret_revision);
 
-gboolean mf_str_consists_of(const char *str, const char *chars);
+gboolean mf_str_consists_of(const char *str,
+                            const char *chars);
 
 MF_END_PRIVATE_DECLS

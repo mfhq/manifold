@@ -189,6 +189,41 @@ mf_json_get_hash_field(sd_json_variant *object,
 }
 
 /**
+ * mf_json_get_file_entry:
+ * @object: an object with the "size", "sha256" and "blake3" of a file
+ * @ret: (out caller-allocates): the entry
+ *
+ * Read what an index records about a file.
+ *
+ * Returns: %TRUE if @object has a valid size and valid hashes
+ */
+gboolean
+mf_json_get_file_entry(sd_json_variant *object,
+                       const char *context,
+                       MfError code,
+                       MfFileEntry *ret,
+                       GError **error)
+{
+    const char *sha256;
+    const char *blake3;
+    guint64 size;
+
+    if (!mf_json_get_unsigned_field(object, context, "size", code, &size, error))
+        return FALSE;
+    sha256 = mf_json_get_hash_field(object, context, "sha256", code, error);
+    if (sha256 == NULL)
+        return FALSE;
+    blake3 = mf_json_get_hash_field(object, context, "blake3", code, error);
+    if (blake3 == NULL)
+        return FALSE;
+
+    ret->size = size;
+    g_strlcpy(ret->sha256, sha256, sizeof(ret->sha256));
+    g_strlcpy(ret->blake3, blake3, sizeof(ret->blake3));
+    return TRUE;
+}
+
+/**
  * mf_json_parse_file:
  * @path: a file holding a JSON object
  *

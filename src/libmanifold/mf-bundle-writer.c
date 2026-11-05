@@ -32,9 +32,8 @@ constexpr char IMAGE_SUFFIX[] = ".raw";
 /* a file that the index lists */
 typedef struct {
     char *name;
-    GBytes *data;
-    char *sha256;
-    char *blake3;
+    GBytes *data; /* libzip reads it when the archive is written */
+    MfFileEntry entry;
 } MfIndexedFile;
 
 static void
@@ -42,8 +41,6 @@ mf_indexed_file_free(MfIndexedFile *file)
 {
     g_free(file->name);
     g_bytes_unref(file->data);
-    g_free(file->sha256);
-    g_free(file->blake3);
     g_free(file);
 }
 
@@ -276,8 +273,7 @@ mf_bundle_writer_add_indexed_file(MfBundleWriter *writer,
     file = g_new0(MfIndexedFile, 1);
     file->name = g_strdup(name);
     file->data = g_bytes_ref(data);
-    file->sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, data);
-    file->blake3 = mf_blake3_of_bytes(data);
+    mf_file_entry_set_for_bytes(&file->entry, data);
     g_ptr_array_add(priv->files, file);
 
     return TRUE;
@@ -610,9 +606,9 @@ mf_bundle_writer_write_index(MfBundleWriter *writer, GError **error)
 
         r = sd_json_variant_append_arraybo(&files,
                                            SD_JSON_BUILD_PAIR_STRING("name", file->name),
-                                           SD_JSON_BUILD_PAIR_UNSIGNED("size", g_bytes_get_size(file->data)),
-                                           SD_JSON_BUILD_PAIR_STRING("blake3", file->blake3),
-                                           SD_JSON_BUILD_PAIR_STRING("sha256", file->sha256));
+                                           SD_JSON_BUILD_PAIR_UNSIGNED("size", file->entry.size),
+                                           SD_JSON_BUILD_PAIR_STRING("blake3", file->entry.blake3),
+                                           SD_JSON_BUILD_PAIR_STRING("sha256", file->entry.sha256));
         if (r < 0)
             goto fail;
     }
