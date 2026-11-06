@@ -6,15 +6,16 @@
 
 """
 End-to-end tests of remotes, in the sandbox: the manifold tool refreshes
-the metadata of a repository on a local https server, and installs
-components from it. manifoldd downloads everything with the download
-helper, which it starts itself.
+the metadata of a repository on a local https server, and installs and
+updates components from it. manifoldd downloads everything with the
+download helper, which it starts itself.
 
 Usage: mf-test-sandbox test-remote.py --daemon manifoldd --fetch-helper manifold-fetch
            --client manifold --remotes-dir DIR --zchunk-tool mf-test-zchunk
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -39,6 +40,15 @@ from mftest import (  # noqa: E402
     zstd_available,
     zstd_compress,
 )
+
+BLOCK_SIZE = 4096
+
+
+def incompressible_data(seed, blocks):
+    """Data that zstd can not compress, so repositories split it into chunks of 16 blocks."""
+    return b''.join(
+        hashlib.sha256(f'{seed}:{i}'.encode()).digest() for i in range(blocks * BLOCK_SIZE // 32)
+    )
 
 
 def make_key(path):
@@ -133,6 +143,11 @@ class RemoteTest(unittest.TestCase):
         """Run 'manifold install' for a component, from the given origin if there is one."""
         options = ['--origin', origin] if origin is not None else []
         return self.manifold('install', *options, component_id, expect=expect)
+
+    def update(self, *component_ids, expect=0):
+        """Run 'manifold update' without the refresh that an update starts with, so that
+        the tests decide which metadata the update sees."""
+        return self.manifold('update', '--no-refresh', *component_ids, expect=expect)
 
     def listed(self, output, heading):
         """Return the (ID, version) of the components that the tool listed below a heading
@@ -436,6 +451,102 @@ class RemoteTest(unittest.TestCase):
             'No remote has org.example.Missing', self.install('org.example.Missing', expect=1)
         )
 
+    def test_update_reuses_chunks(self):
+        old_data = incompressible_data('app', 64)
+        new_data = bytearray(old_data)
+        new_data[24 * BLOCK_SIZE : 25 * BLOCK_SIZE] = incompressible_data('changed', 1)
+        app = Image(APP_ID, 'app', '0.1.0', base=self.kit, data=old_data)
+        app2 = Image(APP_ID, 'app', '0.2.0', base=self.kit, data=bytes(new_data))
+        for image in (self.core, self.kit, app):
+            self.repo.add_image('main', image)
+        self.repo.publish()
+        self.configure_remote()
+        self.refresh()
+        self.install(APP_ID)
+
+        self.repo.serial += 1
+        self.repo.add_image('main', app2)
+        self.repo.publish()
+        self.refresh()
+        self.server.sent.clear()
+        out = self.update()
+
+        self.assertEqual(self.listed(out, 'Installed:'), [(APP_ID, '0.2.0')])
+        self.assertEqual(self.listed(out, 'Removed:'), [(APP_ID, '0.1.0')])
+        self.assertEqual(
+            [(cid, version) for cid, version, *_ in self.installed() if cid == APP_ID],
+            [(APP_ID, '0.2.0')],
+        )
+        # one chunk of four changed, which is all we downloaded of the image, with its header
+        zchunk = self.repo.zchunk_file(app2)[0]
+        sent = self.server.sent[f'/example/pool/{app2.verity_hash}.raw.zck']
+        self.assertLess(sent, len(zchunk) / 2)
+        self.assertGreater(sent, 16 * BLOCK_SIZE)
+
+        # with everything up to date, nothing is downloaded
+        self.server.requests.clear()
+        self.assertIn('There are no updates.', self.update())
+        self.assertEqual(self.image_requests('/'), [])
+        self.assertFalse([p for p in self.server.requests if p.endswith('.json.zst')])
+
+    def test_update_dependencies(self):
+        platform = Image(CORE_ID + '.qt6', 'platform', '6.8', base=self.core)
+        core2 = Image(CORE_ID, 'core', '13.5', seed='core 13.5')
+        for image in (self.core, self.kit, self.app, platform):
+            self.repo.add_image('main', image)
+        self.repo.publish()
+        self.configure_remote()
+        self.refresh()
+        self.install(platform.component)
+
+        # the platform needs exactly the core it came with, which a newer core would not change
+        self.repo.serial += 1
+        self.repo.add_image('main', core2)
+        self.repo.publish()
+        self.refresh()
+        self.assertIn('There are no updates.', self.update())
+
+        # the kit of the application builds on whatever core is current, so the core is updated
+        self.install(APP_ID)
+        self.assertEqual(self.listed(self.update(), 'Installed:'), [(CORE_ID, '13.5')])
+        self.assertIn((CORE_ID, '13.5', 'auto', 'example-main'), self.installed())
+        self.assertIn((CORE_ID, '13.4', 'auto', 'example-main'), self.installed())
+        self.assertTrue(os.readlink(f'{STORE}/runtimes/{CORE_ID}/current').startswith('13.5-'))
+
+    def test_update_skips_what_it_can_not_update(self):
+        self.publish_app()
+        self.install(APP_ID)
+
+        # a new core and a new application, but the manifest of the application is gone
+        core2 = Image(CORE_ID, 'core', '13.5', seed='core 13.5')
+        self.repo.serial += 1
+        self.repo.add_image('main', core2)
+        self.repo.add_image('main', self.app2)
+        self.repo.publish()
+        self.refresh()
+        del self.server.files[f'/example/pool/{self.app2.verity_hash}.json.zst']
+        self.server.requests.clear()
+        out = self.update()
+
+        self.assertEqual(self.listed(out, 'Installed:'), [(CORE_ID, '13.5')])
+        self.assertIn(f'Warning: Unable to update {APP_ID}', out)
+        self.assertIn((APP_ID, '0.1.0', 'auto', 'example-main'), self.installed())
+        # the root index was downloaded once more, and it had not changed
+        self.assertEqual(self.server.requests.count('/example/repo-index.json.zst'), 1)
+
+        # a component from a remote that is not configured anymore is not updated, with a warning
+        shutil.rmtree(os.path.join(ARGS.remotes_dir, 'example'))
+        out = self.update()
+        self.assertEqual(self.listed(out, 'Installed:'), [])
+        self.assertIn(
+            f'Warning: {APP_ID} comes from example-main, which is not configured anymore', out
+        )
+
+        # a component that is named has to be installed
+        self.assertIn(
+            'org.example.Missing is not installed', self.update('org.example.Missing', expect=1)
+        )
+
     def test_install_tells_bundle_files_from_components(self):
         self.publish_app()
 
@@ -455,6 +566,39 @@ class RemoteTest(unittest.TestCase):
         # we stop at the first component that fails, and name the ones that were not installed
         out = self.manifold('install', 'org.example.Missing', APP_ID, expect=1)
         self.assertIn(f'The rest was not installed: {APP_ID}', out)
+
+    def test_update_refreshes_first(self):
+        self.publish_app()
+        self.install(APP_ID)
+        self.assertIn('There are no updates.', self.manifold('update'))
+
+        # without a refresh, we do not see the new version
+        self.repo.serial += 1
+        self.repo.add_image('main', self.app2)
+        self.repo.publish()
+        self.server.requests.clear()
+        self.assertIn('There are no updates.', self.update())
+        self.assertEqual(self.server.requests, [])
+        out = self.manifold('update', APP_ID)
+        self.assertEqual(self.listed(out, 'Installed:'), [(APP_ID, '0.2.0')])
+        self.assertEqual(self.listed(out, 'Removed:'), [(APP_ID, '0.1.0')])
+
+        # a remote that fails to refresh does not stop the update
+        app3 = Image(APP_ID, 'app', '0.3.0', base=self.kit)
+        self.repo.serial += 1
+        self.repo.add_image('main', app3)
+        self.repo.publish()
+        self.refresh()
+        del self.server.files['/example/repo-index.json.zst']
+        out = self.manifold('update')
+        self.assertIn(
+            'Warning: Unable to refresh, updating from what the last refresh downloaded', out
+        )
+        self.assertIn(f'app      {APP_ID} 0.3.0', out)
+
+        self.assertIn(
+            'not a valid component identifier', self.manifold('update', 'not/valid', expect=2)
+        )
 
     def test_install_checks_what_was_kept_again(self):
         self.publish_app()
