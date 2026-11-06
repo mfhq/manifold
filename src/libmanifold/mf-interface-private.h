@@ -27,6 +27,7 @@ MF_BEGIN_PRIVATE_DECLS
 #define MF_VARLINK_METHOD_CLEANUP           MF_INTERFACE ".Cleanup"
 #define MF_VARLINK_METHOD_MARK_COMPONENT    MF_INTERFACE ".MarkComponent"
 #define MF_VARLINK_METHOD_REFRESH           MF_INTERFACE ".Refresh"
+#define MF_VARLINK_METHOD_UPDATE            MF_INTERFACE ".Update"
 
 /* transaction flags */
 #define MF_VARLINK_TRANSACTION_FLAG_ALLOW_INTERACTIVE "allowInteractive"

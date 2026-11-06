@@ -216,11 +216,11 @@ def make_erofs(files):
 
 
 class Image:
-    """An image for a bundle, with its manifest. Its content is made up, unless it has an
-    integration section, which needs a real filesystem. That section maps the kinds of
-    files to their paths and contents. image_files are the files the image really holds,
-    if those are to differ from what the manifest records. aliases maps the names of
-    aliases to their programs, and needs an integration section."""
+    """An image for a bundle, with its manifest. Its content is made up, unless it is given
+    as data, or it has an integration section, which needs a real filesystem. That section
+    maps the kinds of files to their paths and contents. image_files are the files the image
+    really holds, if those are to differ from what the manifest records. aliases maps the
+    names of aliases to their programs, and needs an integration section."""
 
     def __init__(
         self,
@@ -235,6 +235,7 @@ class Image:
         integration=None,
         image_files=None,
         aliases=None,
+        data=None,
     ):
         self.component = component
         self.kind = kind
@@ -247,7 +248,9 @@ class Image:
         self.identity = fake_hash('identity:' + component)
         self.integration = integration
         self.aliases = aliases
-        if integration is None:
+        if data is not None:
+            self.data = data
+        elif integration is None:
             self.data = hashlib.sha512((seed or self.name).encode()).digest() * 1024
         else:
             if image_files is None:
@@ -426,14 +429,15 @@ class _HttpsHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
-            self.wfile.write(data)
-            return
-        start, end = int(match.group(1)), int(match.group(2))
-        self.send_response(206)
-        self.send_header('Content-Range', f'bytes {start}-{end}/{len(data)}')
-        self.send_header('Content-Length', str(end - start + 1))
-        self.end_headers()
-        self.wfile.write(data[start : end + 1])
+        else:
+            start, end = int(match.group(1)), int(match.group(2))
+            self.send_response(206)
+            self.send_header('Content-Range', f'bytes {start}-{end}/{len(data)}')
+            self.send_header('Content-Length', str(end - start + 1))
+            self.end_headers()
+            data = data[start : end + 1]
+        server.sent[self.path] = server.sent.get(self.path, 0) + len(data)
+        self.wfile.write(data)
 
     def log_message(self, format, *args):
         pass
@@ -451,7 +455,8 @@ class HttpsServer:
     A local https server with a certificate of its own, which openssl makes.
     It serves `files` by their path, follows `redirects`, answers the requests
     to a path whose count is in `forbidden[path]` with 403, and ignores ranges
-    for the paths in `no_ranges`. Every request path is logged in `requests`.
+    for the paths in `no_ranges`. Every request path is logged in `requests`,
+    and how many bytes of each path were sent in `sent`.
     """
 
     def __init__(self, work_dir):
@@ -487,6 +492,7 @@ class HttpsServer:
         self.server.forbidden = self.forbidden = {}
         self.server.no_ranges = self.no_ranges = set()
         self.server.requests = self.requests = []
+        self.server.sent = self.sent = {}
 
     def stop(self):
         self.server.shutdown()

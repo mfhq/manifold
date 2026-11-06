@@ -55,8 +55,9 @@ struct _MfdInstallItem {
  * The set of components that one operation installs.
  */
 typedef struct {
-    GPtrArray *items;   /* (element-type MfdInstallItem) */
-    GPtrArray *remotes; /* (element-type MfRemote): the remotes that manifests were downloaded from */
+    GPtrArray *items;    /* (element-type MfdInstallItem) */
+    GPtrArray *remotes;  /* (element-type MfRemote): the remotes that manifests were downloaded from */
+    GPtrArray *warnings; /* (element-type utf8): warnings about components that were left out */
 } MfdInstallSet;
 
 MfdInstallSet  *mfd_install_set_new(void);

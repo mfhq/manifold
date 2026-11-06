@@ -171,6 +171,14 @@ static SD_VARLINK_DEFINE_METHOD_FULL(
     MF_TRANSACTION_FLAGS_INPUT,
     MF_OPERATION_OUTPUT);
 
+static SD_VARLINK_DEFINE_METHOD_FULL(
+    Update,
+    SD_VARLINK_SUPPORTS_MORE,
+    SD_VARLINK_FIELD_COMMENT("The components to update. Every component from a remote is updated if this is not set."),
+    SD_VARLINK_DEFINE_INPUT(componentIds, SD_VARLINK_STRING, SD_VARLINK_ARRAY | SD_VARLINK_NULLABLE),
+    MF_TRANSACTION_FLAGS_INPUT,
+    MF_OPERATION_OUTPUT);
+
 static SD_VARLINK_DEFINE_METHOD(
     MarkComponent,
     SD_VARLINK_FIELD_COMMENT("Identifier of the component to mark."),
@@ -333,6 +341,10 @@ SD_VARLINK_DEFINE_INTERFACE(
     SD_VARLINK_SYMBOL_COMMENT("Download the metadata of remotes, after checking it, and make their catalogs "
                               "available. Called with the 'more' flag, reports its progress. Privileged."),
     &vl_method_Refresh,
+    SD_VARLINK_SYMBOL_COMMENT("Update components to the newest version their origin has, with the bases that version "
+                              "needs. What cannot be updated is named in the warnings of the result. "
+                              "Called with the 'more' flag, reports its progress. Privileged."),
+    &vl_method_Update,
     SD_VARLINK_SYMBOL_COMMENT("Mark a version of a component as kept until it is removed explicitly (manual), "
                               "or as removed once it is not needed anymore (auto). Nothing is removed "
                               "right away. Privileged."),

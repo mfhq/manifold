@@ -98,6 +98,7 @@ mfd_install_set_new(void)
 
     set->items = g_ptr_array_new_with_free_func((GDestroyNotify) mfd_install_item_free);
     set->remotes = g_ptr_array_new_with_free_func(g_object_unref);
+    set->warnings = g_ptr_array_new_with_free_func(g_free);
     return set;
 }
 
@@ -152,6 +153,7 @@ mfd_install_set_free(MfdInstallSet *set)
         return;
     g_ptr_array_unref(set->items);
     g_ptr_array_unref(set->remotes);
+    g_ptr_array_unref(set->warnings);
     g_free(set);
 }
 

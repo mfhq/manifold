@@ -1366,6 +1366,111 @@ mf_manager_refresh(MfManager *manager,
 }
 
 /**
+ * mf_manager_update_async:
+ * @manager: an #MfManager
+ * @component_ids: (nullable) (array zero-terminated=1): the components to update, or %NULL for
+ *   every component from a remote
+ * @progress_func: (nullable) (scope notified) (closure progress_data) (destroy progress_data_destroy):
+ *   called whenever the service reports progress
+ * @progress_data: passed to @progress_func
+ * @progress_data_destroy: (nullable): function to free @progress_data, called once the operation
+ *   has finished and @callback has run
+ * @cancellable: (nullable): a #GCancellable
+ * @callback: called when the update is done, or failed
+ * @user_data: passed to @callback
+ *
+ * Update components to the newest version their origin has, with the bases
+ * that version needs. The service uses the metadata of the remotes from their
+ * last refresh, see mf_manager_refresh_async(). The warnings of the result
+ * name the components that could not be updated, and say why.
+ */
+void
+mf_manager_update_async(MfManager *manager,
+                        const char *const *component_ids,
+                        MfProgressFunc progress_func,
+                        gpointer progress_data,
+                        GDestroyNotify progress_data_destroy,
+                        GCancellable *cancellable,
+                        GAsyncReadyCallback callback,
+                        gpointer user_data)
+{
+    g_autoptr(sd_json_variant) parameters = NULL;
+    int r;
+
+    g_return_if_fail(MF_IS_MANAGER(manager));
+
+    r = sd_json_buildo(&parameters,
+                       SD_JSON_BUILD_PAIR_CONDITION(component_ids != NULL,
+                                                    "componentIds",
+                                                    SD_JSON_BUILD_STRV((char **) component_ids)));
+    mf_manager_call_async(manager,
+                          MF_VARLINK_METHOD_UPDATE,
+                          r,
+                          parameters,
+                          -1,
+                          progress_func,
+                          progress_data,
+                          progress_data_destroy,
+                          cancellable,
+                          callback,
+                          user_data,
+                          mf_manager_update_async);
+}
+
+/**
+ * mf_manager_update_finish:
+ * @manager: an #MfManager
+ * @result: the result passed to the callback
+ * @error: a #GError
+ *
+ * Returns: (transfer full): what was installed and removed, or %NULL on failure
+ */
+MfResult *
+mf_manager_update_finish(MfManager *manager, GAsyncResult *result, GError **error)
+{
+    return mf_manager_result_finish(manager, result, mf_manager_update_async, error);
+}
+
+/**
+ * mf_manager_update:
+ * @manager: an #MfManager
+ * @component_ids: (nullable) (array zero-terminated=1): the components to update, or %NULL for
+ *   every component from a remote
+ * @progress_func: (nullable) (scope call): called whenever the service reports progress
+ * @progress_data: passed to @progress_func
+ * @cancellable: (nullable): a #GCancellable
+ * @error: a #GError
+ *
+ * Update components, see mf_manager_update_async().
+ * This blocks until the update is done, or failed.
+ *
+ * Returns: (transfer full): what was installed and removed, or %NULL on failure
+ */
+MfResult *
+mf_manager_update(MfManager *manager,
+                  const char *const *component_ids,
+                  MfProgressFunc progress_func,
+                  gpointer progress_data,
+                  GCancellable *cancellable,
+                  GError **error)
+{
+    g_auto(MfSyncCall) sync = {};
+
+    g_return_val_if_fail(MF_IS_MANAGER(manager), NULL);
+
+    mf_sync_call_begin(&sync);
+    mf_manager_update_async(manager,
+                            component_ids,
+                            progress_func,
+                            progress_data,
+                            NULL,
+                            cancellable,
+                            mf_on_sync_call_done,
+                            &sync);
+    return mf_manager_update_finish(manager, mf_sync_call_wait(&sync), error);
+}
+
+/**
  * mf_manager_mark_component_async:
  * @manager: an #MfManager
  * @component_id: identifier of the component to mark
