@@ -198,3 +198,117 @@ mfc_prompt_number(const char *question, guint maxnum)
         g_print(_("Please enter a number from 0 to %u: "), maxnum);
     }
 }
+
+/**
+ * mfc_prompt_yes_no:
+ * @question: the question to ask, without the possible answers
+ *
+ * Ask a yes/no question on the terminal. The default answer is no. Only
+ * "y" and "yes" count as yes, in upper or lower case.
+ *
+ * Returns: %TRUE if the answer was yes
+ */
+gboolean
+mfc_prompt_yes_no(const char *question)
+{
+    char buffer[64];
+
+    g_print("%s [y/N] ", question);
+    if (fgets(buffer, sizeof(buffer), stdin) == NULL)
+        return FALSE;
+    g_strstrip(buffer);
+
+    return g_ascii_strcasecmp(buffer, "y") == 0 || g_ascii_strcasecmp(buffer, "yes") == 0;
+}
+
+/**
+ * mfc_on_progress:
+ *
+ * Draw the progress of an operation, one bar per item.
+ */
+void
+mfc_on_progress(const MfProgress *progress, gpointer user_data)
+{
+    MfcContext *ctx = user_data;
+    const MfItemProgress *item = mf_progress_get_item(progress);
+    g_autofree char *label = NULL;
+
+    if (item == NULL)
+        return;
+    const char *subject = mf_item_progress_get_subject(item);
+    const char *version = mf_item_progress_get_version(item);
+
+    switch (mf_item_progress_get_action(item)) {
+    case MF_ACTION_INSTALL:
+        /* TRANSLATORS: label of a progress bar, with the component and its version */
+        label = g_strdup_printf(_("Installing %s %s"), subject, version ? version : "");
+        break;
+    case MF_ACTION_REMOVE:
+        /* TRANSLATORS: label of a progress bar, with the component and its version */
+        label = g_strdup_printf(_("Removing %s %s"), subject, version ? version : "");
+        break;
+    case MF_ACTION_CLEANUP:
+        /* TRANSLATORS: label of a progress bar, with the component and its version */
+        label = g_strdup_printf(_("Cleaning up %s %s"), subject, version ? version : "");
+        break;
+    case MF_ACTION_REFRESH:
+        /* TRANSLATORS: label of a progress bar, with the ID of a remote */
+        label = g_strdup_printf(_("Refreshing %s"), subject);
+        break;
+    default:
+        label = g_strdup(subject);
+        break;
+    }
+
+    if (!mfc_progress_bar_is_for(ctx->progress_bar, item))
+        mfc_progress_bar_start(ctx->progress_bar, item, label);
+    mfc_progress_bar_update(ctx->progress_bar,
+                            mf_item_progress_get_percent(item),
+                            mf_item_progress_get_bytes_done(item));
+}
+
+/**
+ * mfc_print_result:
+ *
+ * Print the results of an operation.
+ */
+void
+mfc_print_result(MfResult *result)
+{
+    GPtrArray *installed = mf_result_get_installed(result);
+    GPtrArray *removed = mf_result_get_removed(result);
+    GPtrArray *warnings = mf_result_get_warnings(result);
+    guint n_images = mf_result_get_removed_images(result)->len;
+
+    if (installed->len > 0) {
+        g_print("%s\n", _("Installed:"));
+        mfc_print_components(installed, FALSE);
+    }
+    if (removed->len > 0) {
+        g_print("%s\n", _("Removed:"));
+        mfc_print_components(removed, FALSE);
+    }
+    if (n_images > 0)
+        g_print(g_dngettext(GETTEXT_PACKAGE,
+                            "Removed %u image that is no longer used.\n",
+                            "Removed %u images that are no longer used.\n",
+                            n_images),
+                n_images);
+    if (mf_result_get_bytes_added(result) > 0) {
+        g_autofree char *size = g_format_size(mf_result_get_bytes_added(result));
+
+        g_print(_("Disk space used: %s\n"), size);
+    }
+    if (mf_result_get_bytes_freed(result) > 0) {
+        g_autofree char *size = g_format_size(mf_result_get_bytes_freed(result));
+
+        g_print(_("Disk space freed: %s\n"), size);
+    }
+    for (guint i = 0; i < warnings->len; i++) {
+        /* warnings can contain text from files of a bundle, so we escape control characters */
+        g_autofree char *shown = g_strescape(g_ptr_array_index(warnings, i), NULL);
+
+        /* TRANSLATORS: %s is a problem that did not make the operation fail */
+        g_printerr(_("Warning: %s\n"), shown);
+    }
+}

@@ -7,9 +7,34 @@
 #include "config.h"
 #include "mfc-remote.h"
 
+#include <unistd.h>
 #include <glib/gi18n-lib.h>
 
 #include "mfc-util.h"
+
+/* the values of the options of the remote add command */
+static char *optn_key = NULL;
+static char **optn_channels = NULL;
+static gboolean optn_yes = FALSE;
+
+static const GOptionEntry remote_add_options[] = {
+    {"key",
+     0, 0,
+     G_OPTION_ARG_FILENAME,     &optn_key,
+     N_("Trust the public key in this file, instead of the key the repository serves."),
+     "FILE"},
+    {"channel",
+     0, 0,
+     G_OPTION_ARG_STRING_ARRAY, &optn_channels,
+     N_("Install from this channel instead of 'main'. Can be given more than once."),
+     "NAME"},
+    {"yes",
+     0, 0,
+     G_OPTION_ARG_NONE,         &optn_yes,
+     N_("Trust the key the repository serves without asking."),
+     NULL  },
+    G_OPTION_ENTRY_NULL,
+};
 
 /**
  * mfc_print_remote:
@@ -66,7 +91,6 @@ mfc_run_remote_list_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **a
 {
     g_autoptr(GOptionContext) context = NULL;
     g_autoptr(GPtrArray) remotes = NULL;
-    g_autoptr(GDateTime) now = g_date_time_new_now_utc();
     g_autoptr(GError) error = NULL;
     int ret;
 
@@ -101,6 +125,188 @@ mfc_run_remote_list_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **a
 }
 
 /**
+ * mfc_read_public_key:
+ *
+ * Returns: (transfer full): the contents of the public key file @path, or %NULL on error
+ */
+static char *
+mfc_read_public_key(const char *path)
+{
+    g_autoptr(GError) error = NULL;
+    char *contents = NULL;
+
+    if (!g_file_get_contents(path, &contents, NULL, &error)) {
+        g_printerr(_("Unable to read %s: %s\n"), path, error->message);
+        return NULL;
+    }
+    return contents;
+}
+
+/**
+ * mfc_check_remote_info:
+ * @channels: the channels to enable for the remote
+ *
+ * Check that the repository can be added as a remote with @channels.
+ *
+ * The service performs the same check when it adds the remote. We check
+ * early, so the user is not asked to trust the key of a repository that
+ * the service will refuse.
+ *
+ * Returns: %TRUE if the repository can be added
+ */
+static gboolean
+mfc_check_remote_info(MfRemoteInfo *info, const char *const *channels)
+{
+    const char *remote_id = mf_remote_get_id(mf_remote_info_get_remote(info));
+    const char *const *available = mf_remote_info_get_available_channels(info);
+    g_autoptr(MfRemote) existing = mf_remote_new_for_id(remote_id, NULL);
+
+    if (existing != NULL) {
+        g_printerr(_("There is a remote %s already.\n"), remote_id);
+        return FALSE;
+    }
+    for (guint i = 0; channels[i] != NULL; i++) {
+        if (!g_strv_contains(available, channels[i])) {
+            /* TRANSLATORS: a repository, and the name of a channel that the repository does not have */
+            g_printerr(_("The repository %s has no channel %s for this system.\n"), remote_id, channels[i]);
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+/**
+ * mfc_run_remote_add_command:
+ *
+ * Add a repository as a remote, once the user trusts the key that signs it.
+ */
+static int
+mfc_run_remote_add_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
+{
+    const char *const default_channels[] = {"main", NULL};
+    g_autoptr(GOptionContext) context = NULL;
+    g_autoptr(MfRemoteInfo) info = NULL;
+    g_autoptr(MfResult) result = NULL;
+    g_autoptr(GError) error = NULL;
+    g_autofree char *public_key = NULL;
+    g_autofree char *channel_list = NULL;
+    const char *const *channels;
+    const char *url;
+    MfRemote *remote;
+    int ret;
+
+    context = mfc_option_context_for_command(cmd, remote_add_options);
+    ret = mfc_parse_command_options(context, cmd, &argc, &argv);
+    if (ret != MFC_EXIT_SUCCESS)
+        return ret;
+
+    if (argc < 2) {
+        g_printerr("%s\n", _("You need to specify the URL of the repository."));
+        return MFC_EXIT_INVALID_CMD;
+    }
+    if (argc > 2) {
+        mfc_print_help_hint(cmd->name, argv[2]);
+        return MFC_EXIT_INVALID_CMD;
+    }
+    url = argv[1];
+    channels = optn_channels != NULL ? (const char *const *) optn_channels : default_channels;
+
+    /* the user has to confirm that they trust the key, and we can only ask on a terminal */
+    if (optn_key == NULL && !optn_yes && !isatty(STDIN_FILENO)) {
+        /* TRANSLATORS: --yes and --key are options of the command, and not translated */
+        g_printerr("%s\n",
+                   _("There is no terminal to ask whether you trust the key, use --yes to trust it or "
+                     "--key to specify it."));
+        return MFC_EXIT_INVALID_CMD;
+    }
+    if (optn_key != NULL) {
+        public_key = mfc_read_public_key(optn_key);
+        if (public_key == NULL)
+            return MFC_EXIT_BAD_INPUT;
+    }
+
+    info = mf_manager_inspect_remote(mfc_context_get_manager(ctx), url, public_key, NULL, &error);
+    if (info == NULL) {
+        g_printerr(_("Unable to add the repository at %s: %s\n"), url, error->message);
+        return MFC_EXIT_FAILURE;
+    }
+    remote = mf_remote_info_get_remote(info);
+    if (!mfc_check_remote_info(info, channels))
+        return MFC_EXIT_FAILURE;
+    mfc_print_remote(remote, channels);
+    /* TRANSLATORS: the fingerprint of the key that signs a repository */
+    g_print(_("  Key: %s\n"), mf_remote_info_get_fingerprint(info));
+
+    if (optn_key == NULL && !optn_yes) {
+        if (!mfc_prompt_yes_no(_("Trust this key, and add the remote?"))) {
+            g_print("%s\n", _("Aborted."));
+            return MFC_EXIT_FAILURE;
+        }
+    }
+
+    result = mf_manager_add_remote(mfc_context_get_manager(ctx),
+                                   mf_remote_get_id(remote),
+                                   mf_remote_get_url(remote),
+                                   mf_remote_info_get_public_key(info),
+                                   channels,
+                                   mfc_on_progress,
+                                   ctx,
+                                   NULL,
+                                   &error);
+    mfc_progress_bar_finish(ctx->progress_bar);
+    if (result == NULL) {
+        g_printerr(_("Unable to add the remote %s: %s\n"), mf_remote_get_id(remote), error->message);
+        return MFC_EXIT_FAILURE;
+    }
+
+    channel_list = g_strjoinv(", ", (char **) channels);
+    /* TRANSLATORS: the ID of the new remote, and a list of its enabled channels */
+    g_print(_("Added the remote %s, which installs from %s.\n"), mf_remote_get_id(remote), channel_list);
+    mfc_print_result(result);
+
+    return MFC_EXIT_SUCCESS;
+}
+
+/**
+ * mfc_run_remote_remove_command:
+ *
+ * Remove a remote. Components that were installed from it stay installed.
+ */
+static int
+mfc_run_remote_remove_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
+{
+    g_autoptr(GOptionContext) context = NULL;
+    g_autoptr(GError) error = NULL;
+    int ret;
+
+    context = mfc_option_context_for_command(cmd, NULL);
+    ret = mfc_parse_command_options(context, cmd, &argc, &argv);
+    if (ret != MFC_EXIT_SUCCESS)
+        return ret;
+
+    if (argc < 2) {
+        g_printerr("%s\n", _("You need to specify the remote to remove."));
+        return MFC_EXIT_INVALID_CMD;
+    }
+    if (argc > 2) {
+        mfc_print_help_hint(cmd->name, argv[2]);
+        return MFC_EXIT_INVALID_CMD;
+    }
+
+    if (!mf_manager_remove_remote(mfc_context_get_manager(ctx), argv[1], NULL, &error)) {
+        g_printerr(_("Unable to remove the remote %s: %s\n"), argv[1], error->message);
+        return MFC_EXIT_FAILURE;
+    }
+
+    g_print(_("Removed the remote %s. Components that were installed from it stay installed, but are "
+              "no longer updated.\n"),
+            argv[1]);
+
+    return MFC_EXIT_SUCCESS;
+}
+
+/**
  * mfc_register_remote_commands:
  */
 void
@@ -112,4 +318,16 @@ mfc_register_remote_commands(MfcContext *ctx)
                                  /* TRANSLATORS: `manifold remote list` command description */
                                  _("List the remotes that components are installed from."),
                                  mfc_run_remote_list_command);
+    mfc_context_register_command(ctx,
+                                 "remote add",
+                                 "URL",
+                                 /* TRANSLATORS: `manifold remote add` command description */
+                                 _("Add a repository as a remote."),
+                                 mfc_run_remote_add_command);
+    mfc_context_register_command(ctx,
+                                 "remote remove",
+                                 "REMOTE-ID",
+                                 /* TRANSLATORS: `manifold remote remove` command description */
+                                 _("Remove a remote."),
+                                 mfc_run_remote_remove_command);
 }

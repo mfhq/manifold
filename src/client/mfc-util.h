@@ -31,5 +31,10 @@ void            mfc_print_components(GPtrArray *components,
                                      gboolean   with_header);
 guint           mfc_prompt_number(const char *question,
                                   guint       maxnum);
+gboolean        mfc_prompt_yes_no(const char *question);
+
+void            mfc_on_progress(const MfProgress *progress,
+                                gpointer          user_data);
+void            mfc_print_result(MfResult *result);
 
 G_END_DECLS
