@@ -367,6 +367,29 @@ mf_repo_read_publisher(MfRepoRootIndex *index, sd_json_variant *root, GError **e
 }
 
 /**
+ * mf_repo_root_index_parse:
+ * @data: a root index, as the repository serves it
+ *
+ * Returns: (transfer full): the JSON object of the root index, or %NULL
+ */
+static sd_json_variant *
+mf_repo_root_index_parse(GBytes *data, GError **error)
+{
+    g_autoptr(GBytes) text = mf_zstd_decompress_bytes(data,
+                                                      ROOT_INDEX_SIZE_MAX,
+                                                      MF_REPO_ROOT_INDEX_NAME,
+                                                      MF_ERROR_INVALID_REPOSITORY,
+                                                      error);
+
+    if (text == NULL)
+        return NULL;
+    return mf_json_parse_object(g_bytes_get_data(text, NULL),
+                                MF_REPO_ROOT_INDEX_NAME,
+                                MF_ERROR_INVALID_REPOSITORY,
+                                error);
+}
+
+/**
  * mf_repo_root_index_read:
  * @fingerprint: (transfer full) (nullable): the fingerprint of the key that signed the index
  *
@@ -378,23 +401,12 @@ static MfRepoRootIndex *
 mf_repo_root_index_read(GBytes *data, const char *remote_id, char *fingerprint, GError **error)
 {
     g_autoptr(MfRepoRootIndex) index = g_new0(MfRepoRootIndex, 1);
-    g_autoptr(GBytes) text = NULL;
     g_autoptr(sd_json_variant) root = NULL;
     sd_json_variant *channels;
     const char *value;
 
     index->key_fingerprint = fingerprint;
-    text = mf_zstd_decompress_bytes(data,
-                                    ROOT_INDEX_SIZE_MAX,
-                                    MF_REPO_ROOT_INDEX_NAME,
-                                    MF_ERROR_INVALID_REPOSITORY,
-                                    error);
-    if (text == NULL)
-        return NULL;
-    root = mf_json_parse_object(g_bytes_get_data(text, NULL),
-                                MF_REPO_ROOT_INDEX_NAME,
-                                MF_ERROR_INVALID_REPOSITORY,
-                                error);
+    root = mf_repo_root_index_parse(data, error);
     if (root == NULL)
         return NULL;
 
@@ -482,6 +494,38 @@ mf_repo_root_index_new_from_signed(GBytes *data,
         return NULL;
 
     return mf_repo_root_index_read(data, remote_id, fingerprint, error);
+}
+
+/**
+ * mf_repo_root_index_read_id:
+ * @data: a root index, as the repository serves it
+ *
+ * Read the ID of a repository from its root index, without verifying the
+ * signature. We need this when a repository is added as a remote: the public
+ * key file that the repository serves is named after the ID. The signature
+ * is verified with that key afterwards.
+ *
+ * Returns: (transfer full): the ID of the repository, or %NULL
+ */
+char *
+mf_repo_root_index_read_id(GBytes *data, GError **error)
+{
+    g_autoptr(sd_json_variant) root = mf_repo_root_index_parse(data, error);
+    const char *value;
+
+    if (root == NULL)
+        return NULL;
+    value = mf_json_get_string_field(root, MF_REPO_ROOT_INDEX_NAME, "id", MF_ERROR_INVALID_REPOSITORY, error);
+    if (value == NULL)
+        return NULL;
+
+    /* the ID is used as a file name and a directory name, so it must be valid */
+    if (!mf_remote_id_is_valid(value)) {
+        mf_repo_set_invalid(error, MF_REPO_ROOT_INDEX_NAME, _("%s is not a valid repository ID"), value);
+        return NULL;
+    }
+
+    return g_strdup(value);
 }
 
 /**

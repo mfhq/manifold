@@ -19,6 +19,8 @@ manifoldd_src = [
     'mfd-policy.h',
     'mfd-refresh.c',
     'mfd-refresh.h',
+    'mfd-remotes.c',
+    'mfd-remotes.h',
     'mfd-repo-image.c',
     'mfd-repo-image.h',
     'mfd-resolver.c',

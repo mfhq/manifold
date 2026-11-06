@@ -165,7 +165,8 @@ class Daemon:
         replies = [json.loads(reply) for reply in result.stdout.split('\x1e') if reply.strip()]
         if result.returncode != 0:
             raise VarlinkError(result.stderr.strip(), replies[0] if replies else {})
-        return replies if more else replies[0]
+        # a method without output may have its reply printed as nothing at all
+        return replies if more else (replies[0] if replies else {})
 
     def _call_passing_fd(self, method, parameters, more, fd):
         """
@@ -513,8 +514,9 @@ class Repository:
     HttpsServer serves below /<id>. Components are added to channels, and
     publish() puts their metadata on the server, signed with the key at `key`.
 
-    A component added with add_component() only has metadata, which is enough
-    to refresh. One added with add_image() can be installed: the repository
+    The repository serves the public key of `key` next to its root index, as
+    <id>_key.pub. A component added with add_component() only has metadata,
+    which is enough to refresh. One added with add_image() can be installed: the repository
     serves its manifest, and its image as a zchunk file that `zchunk_tool`
     writes, in its pool unless `pool_images` is false. A channel with a path in
     `image_paths` also serves its images there, behind a redirect like the
@@ -681,5 +683,7 @@ class Repository:
             )
             with open(path + '.sig', 'rb') as f:
                 self._serve('repo-index.sig', f.read())
+        with open(self.key + '.pub', 'rb') as f:
+            self._serve(f'{self.id}_key.pub', f.read())
         self._serve('repo-index.json.zst', data)
         return data

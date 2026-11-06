@@ -2066,3 +2066,104 @@ mfd_manager_refresh(MfdManager *manager,
 
     return g_steal_pointer(&result);
 }
+
+/**
+ * mfd_manager_inspect_remote:
+ * @manager: an #MfdManager
+ * @url: the https URL of a repository
+ * @public_key: (nullable): the public key that has to sign the repository, or
+ *   %NULL to use the key the repository serves
+ * @error: a #GError
+ *
+ * Download and verify the root index of a repository, before it is added as a remote.
+ *
+ * Returns: (transfer full): the repository, or %NULL on error
+ */
+MfdRemoteInspection *
+mfd_manager_inspect_remote(MfdManager *manager, const char *url, const char *public_key, GError **error)
+{
+    g_autoptr(MfdFetcher) fetcher = NULL;
+
+    g_return_val_if_fail(MFD_IS_MANAGER(manager), NULL);
+
+    fetcher = mfd_manager_new_fetcher(manager);
+    return mfd_remotes_inspect(fetcher, url, public_key, NULL, error);
+}
+
+/**
+ * mfd_manager_add_remote:
+ * @manager: an #MfdManager
+ * @remote_id: the ID of the repository, which the user confirmed
+ * @url: the https URL of a repository
+ * @public_key: the public key the user decided to trust for the repository
+ * @channels: (nullable): the channels to install from, or %NULL for only `main`
+ * @progress_func: (nullable): called whenever the operation progresses
+ * @user_data: passed to @progress_func
+ * @error: a #GError
+ *
+ * Add a repository as a remote that trusts @public_key, and refresh it. If
+ * the refresh fails, the remote stays, because its root index and its key
+ * were verified already. The result then has a warning with the reason.
+ *
+ * Returns: (transfer full): the result with the warnings of the refresh, or %NULL on error
+ */
+MfResult *
+mfd_manager_add_remote(MfdManager *manager,
+                       const char *remote_id,
+                       const char *url,
+                       const char *public_key,
+                       const char *const *channels,
+                       MfProgressFunc progress_func,
+                       gpointer user_data,
+                       GError **error)
+{
+    g_auto(MfdProgressTracker) tracker = {
+        .func = progress_func,
+        .user_data = user_data,
+        .progress = mf_progress_new(),
+        .total = 1,
+    };
+    g_autoptr(MfResult) result = mf_result_new();
+    g_autoptr(MfdFetcher) fetcher = NULL;
+    g_autoptr(MfdRemoteInspection) inspection = NULL;
+    g_autoptr(MfRemote) remote = NULL;
+    g_autoptr(GError) local_error = NULL;
+
+    g_return_val_if_fail(MFD_IS_MANAGER(manager), NULL);
+
+    /* we inspect the repository again, with exactly the ID and key that the user confirmed */
+    fetcher = mfd_manager_new_fetcher(manager);
+    inspection = mfd_remotes_inspect(fetcher, url, public_key, remote_id, error);
+    if (inspection == NULL)
+        return NULL;
+    remote = mfd_remotes_add(inspection, channels, error);
+    if (remote == NULL)
+        return NULL;
+
+    mfd_progress_begin_item(&tracker, MF_ACTION_REFRESH, mf_remote_get_id(remote), NULL, 0);
+    if (!mfd_refresh_remote(mf_store_get_path(manager->store), fetcher, remote, result, NULL, &local_error))
+        mfd_emit_warning(result,
+                         "The remote %s was added, but refreshing it failed: %s",
+                         mf_remote_get_id(remote),
+                         local_error->message);
+    mfd_progress_end_item(&tracker);
+
+    return g_steal_pointer(&result);
+}
+
+/**
+ * mfd_manager_remove_remote:
+ * @manager: an #MfdManager
+ * @remote_id: the ID of a remote
+ * @error: a #GError
+ *
+ * Remove a remote and its cached data.
+ *
+ * Returns: %TRUE if the remote was removed
+ */
+gboolean
+mfd_manager_remove_remote(MfdManager *manager, const char *remote_id, GError **error)
+{
+    g_return_val_if_fail(MFD_IS_MANAGER(manager), FALSE);
+    return mfd_remotes_remove(mf_store_get_path(manager->store), remote_id, error);
+}

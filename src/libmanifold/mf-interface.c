@@ -112,6 +112,27 @@ static SD_VARLINK_DEFINE_STRUCT_TYPE(
     SD_VARLINK_FIELD_COMMENT("The components the operation changed, as they are now."),
     SD_VARLINK_DEFINE_FIELD_BY_TYPE(components, Component, SD_VARLINK_ARRAY));
 
+static SD_VARLINK_DEFINE_STRUCT_TYPE(
+    RemoteInfo,
+    SD_VARLINK_FIELD_COMMENT("The ID of the repository, which is the ID of its remote."),
+    SD_VARLINK_DEFINE_FIELD(id, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The https URL of the repository, without a '/' at its end."),
+    SD_VARLINK_DEFINE_FIELD(url, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("A short description of the repository."),
+    SD_VARLINK_DEFINE_FIELD(summary, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The name of the publisher of the repository, if it has one."),
+    SD_VARLINK_DEFINE_FIELD(publisherName, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("The email address of the publisher, if it has one."),
+    SD_VARLINK_DEFINE_FIELD(publisherEmail, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("When the root index of the repository expires, in ISO 8601 format."),
+    SD_VARLINK_DEFINE_FIELD(validUntil, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The channels of the repository that have components for the architecture of this system."),
+    SD_VARLINK_DEFINE_FIELD(channels, SD_VARLINK_STRING, SD_VARLINK_ARRAY),
+    SD_VARLINK_FIELD_COMMENT("The public key that signs the root index, in OpenSSH format without its comment."),
+    SD_VARLINK_DEFINE_FIELD(publicKey, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The SHA256 fingerprint of the key, as 'ssh-keygen -l' shows it."),
+    SD_VARLINK_DEFINE_FIELD(fingerprint, SD_VARLINK_STRING, 0));
+
 static SD_VARLINK_DEFINE_ENUM_TYPE(
     TransactionFlag,
     SD_VARLINK_FIELD_COMMENT("The service may ask the user things, e.g. to authorize an operation."),
@@ -178,6 +199,39 @@ static SD_VARLINK_DEFINE_METHOD_FULL(
     SD_VARLINK_DEFINE_INPUT(componentIds, SD_VARLINK_STRING, SD_VARLINK_ARRAY | SD_VARLINK_NULLABLE),
     MF_TRANSACTION_FLAGS_INPUT,
     MF_OPERATION_OUTPUT);
+
+static SD_VARLINK_DEFINE_METHOD(
+    InspectRemote,
+    SD_VARLINK_FIELD_COMMENT("The https URL of the repository."),
+    SD_VARLINK_DEFINE_INPUT(url, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The public key that has to sign the repository, in OpenSSH format. "
+                             "If this is not set, the key that the repository serves is used."),
+    SD_VARLINK_DEFINE_INPUT(publicKey, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    MF_TRANSACTION_FLAGS_INPUT,
+    SD_VARLINK_FIELD_COMMENT("The description of the repository, and the key that signs it."),
+    SD_VARLINK_DEFINE_OUTPUT_BY_TYPE(remote, RemoteInfo, 0));
+
+static SD_VARLINK_DEFINE_METHOD_FULL(
+    AddRemote,
+    SD_VARLINK_SUPPORTS_MORE,
+    SD_VARLINK_FIELD_COMMENT("The ID of the repository, as InspectRemote returned it. A repository "
+                             "that has a different ID is not added."),
+    SD_VARLINK_DEFINE_INPUT(remoteId, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The https URL of the repository."),
+    SD_VARLINK_DEFINE_INPUT(url, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The public key that signs the repository, in OpenSSH format. "
+                             "The remote trusts this key."),
+    SD_VARLINK_DEFINE_INPUT(publicKey, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The channels to install from. Only 'main' if this is not set."),
+    SD_VARLINK_DEFINE_INPUT(channels, SD_VARLINK_STRING, SD_VARLINK_ARRAY | SD_VARLINK_NULLABLE),
+    MF_TRANSACTION_FLAGS_INPUT,
+    MF_OPERATION_OUTPUT);
+
+static SD_VARLINK_DEFINE_METHOD(
+    RemoveRemote,
+    SD_VARLINK_FIELD_COMMENT("The ID of the remote to remove."),
+    SD_VARLINK_DEFINE_INPUT(remoteId, SD_VARLINK_STRING, 0),
+    MF_TRANSACTION_FLAGS_INPUT);
 
 static SD_VARLINK_DEFINE_METHOD(
     MarkComponent,
@@ -301,6 +355,10 @@ static SD_VARLINK_DEFINE_ERROR(
     Ambiguous,
     MF_ERROR_MESSAGE_FIELD);
 
+static SD_VARLINK_DEFINE_ERROR(
+    RemoteExists,
+    MF_ERROR_MESSAGE_FIELD);
+
 SD_VARLINK_DEFINE_INTERFACE(
     org_freedesktop_manifold,
     MF_INTERFACE,
@@ -322,6 +380,8 @@ SD_VARLINK_DEFINE_INTERFACE(
     &vl_type_Result,
     SD_VARLINK_SYMBOL_COMMENT("What an operation did that installs and removes nothing."),
     &vl_type_Done,
+    SD_VARLINK_SYMBOL_COMMENT("A repository that could be added as a remote."),
+    &vl_type_RemoteInfo,
     SD_VARLINK_SYMBOL_COMMENT("A general flag that changes how operations are performed."),
     &vl_type_TransactionFlag,
 
@@ -345,6 +405,17 @@ SD_VARLINK_DEFINE_INTERFACE(
                               "needs. What cannot be updated is named in the warnings of the result. "
                               "Called with the 'more' flag, reports its progress. Privileged."),
     &vl_method_Update,
+    SD_VARLINK_SYMBOL_COMMENT("Download the root index of a repository and the public key that signs it, and check "
+                              "that the key verifies the root index, so the user can decide whether to trust "
+                              "the key. Nothing is changed. Privileged."),
+    &vl_method_InspectRemote,
+    SD_VARLINK_SYMBOL_COMMENT("Add a repository as a remote that trusts the given key, and refresh it. A remote "
+                              "that is masked is defined again. Called with the 'more' flag, reports its "
+                              "progress. Privileged."),
+    &vl_method_AddRemote,
+    SD_VARLINK_SYMBOL_COMMENT("Remove a remote and its cached metadata. A remote that the vendor ships is masked. "
+                              "Components installed from the remote stay, but are not updated anymore. Privileged."),
+    &vl_method_RemoveRemote,
     SD_VARLINK_SYMBOL_COMMENT("Mark a version of a component as kept until it is removed explicitly (manual), "
                               "or as removed once it is not needed anymore (auto). Nothing is removed "
                               "right away. Privileged."),
@@ -384,7 +455,9 @@ SD_VARLINK_DEFINE_INTERFACE(
     &vl_error_DownloadFailed,
     SD_VARLINK_SYMBOL_COMMENT("The request is ambiguous, e.g. several origins have the "
                               "component. The message names them."),
-    &vl_error_Ambiguous);
+    &vl_error_Ambiguous,
+    SD_VARLINK_SYMBOL_COMMENT("A remote with the ID of the repository is configured already."),
+    &vl_error_RemoteExists);
 
 /* clang-format on */
 
@@ -411,6 +484,7 @@ static const struct {
     {MF_ERROR_EXPIRED,             MF_INTERFACE ".Expired"           },
     {MF_ERROR_DOWNLOAD_FAILED,     MF_INTERFACE ".DownloadFailed"    },
     {MF_ERROR_AMBIGUOUS,           MF_INTERFACE ".Ambiguous"         },
+    {MF_ERROR_REMOTE_EXISTS,       MF_INTERFACE ".RemoteExists"      },
 };
 
 /**

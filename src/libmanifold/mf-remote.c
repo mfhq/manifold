@@ -10,6 +10,7 @@
 
 #include <string.h>
 #include <glib/gi18n-lib.h>
+#include <systemd/sd-json.h>
 
 #include "mf-bundle-private.h"
 #include "mf-error.h"
@@ -35,10 +36,10 @@
  * `/etc` replaces the file of the same remote in `/usr/share`, and a symbolic
  * link to `/dev/null` in `/etc` masks the remote. The keys in the `keys/`
  * subdirectory of both directories are trusted to sign the repository.
+ *
+ * A remote that mf_remote_info_get_remote() returns is not configured yet. It
+ * describes a repository, but has no channels and no trusted keys.
  */
-
-/* the channel of a remote that does not configure any channels */
-#define MF_REMOTE_DEFAULT_CHANNEL "main"
 
 /* the longest name a file can have. The catalog file of a channel is named after its origin. */
 constexpr size_t FILE_NAME_LENGTH_MAX = 255;
@@ -49,8 +50,8 @@ struct _MfRemote {
     char *id;
     char *url;
     GStrv channels;
-    char *vendor_dir; /* the directory of the remote in the vendor directory */
-    char *admin_dir;  /* the directory of the remote in the administrator directory */
+    char *vendor_dir; /* the directory of the remote in the vendor directory, or NULL */
+    char *admin_dir;  /* the directory of the remote in the administrator directory, or NULL */
 
     /* the description of the repository from its cached root index, if there is one */
     char *summary;
@@ -100,7 +101,7 @@ mf_remote_init(MfRemote *remote)
  *
  * Returns: %TRUE if @remote_id is a valid ID of a remote
  */
-static gboolean
+gboolean
 mf_remote_id_is_valid(const char *remote_id)
 {
     return remote_id[0] != '\0' && g_ascii_isalnum(remote_id[0]) &&
@@ -171,6 +172,79 @@ mf_origin_split_name(const char *origin, char **ret_remote_id, const char **ret_
 }
 
 /**
+ * mf_remote_check_channels:
+ * @remote_id: the ID of a remote
+ * @channels: the channels the remote installs from
+ *
+ * Check that @channels are valid channel names, and that no channel is listed
+ * twice. The catalog file of a channel is named after its origin, so the
+ * origin also has to be short enough for a file name.
+ *
+ * Returns: %TRUE if the remote can install from @channels
+ */
+gboolean
+mf_remote_check_channels(const char *remote_id, const char *const *channels, GError **error)
+{
+    if (channels[0] == NULL) {
+        g_set_error_literal(error, MF_ERROR, MF_ERROR_FAILED, _("No channel is named"));
+        return FALSE;
+    }
+
+    for (gsize i = 0; channels[i] != NULL; i++) {
+        if (!mf_remote_channel_is_valid(channels[i])) {
+            g_set_error(error, MF_ERROR, MF_ERROR_FAILED, _("%s is not a valid channel name"), channels[i]);
+            return FALSE;
+        }
+        if (g_strv_contains(channels + i + 1, channels[i])) {
+            g_set_error(error, MF_ERROR, MF_ERROR_FAILED, _("The channel %s is named twice"), channels[i]);
+            return FALSE;
+        }
+        if (strlen(remote_id) + 1 + strlen(channels[i]) + strlen(MF_STORE_CATALOG_FILE_SUFFIX) >
+            FILE_NAME_LENGTH_MAX) {
+            g_set_error(error,
+                        MF_ERROR,
+                        MF_ERROR_FAILED,
+                        _("The channel %s of the remote %s has too long a name"),
+                        channels[i],
+                        remote_id);
+            return FALSE;
+        }
+    }
+
+    return TRUE;
+}
+
+/**
+ * mf_remote_normalize_url:
+ * @url: the URL of a repository
+ *
+ * Validate the URL of a repository. We only download via https, and we append
+ * the paths of files to the URL, so it must not have a query, a fragment or
+ * a user name.
+ *
+ * Returns: (transfer full) (nullable): @url without a `/` at its end, or %NULL
+ *   if it is not a valid URL of a repository
+ */
+char *
+mf_remote_normalize_url(const char *url)
+{
+    g_autoptr(GUri) uri = g_uri_parse(url, G_URI_FLAGS_NONE, NULL);
+    g_autofree char *normalized = NULL;
+    gsize len;
+
+    if (uri == NULL || g_strcmp0(g_uri_get_scheme(uri), "https") != 0 || g_uri_get_host(uri) == NULL ||
+        g_uri_get_host(uri)[0] == '\0' || g_uri_get_userinfo(uri) != NULL || g_uri_get_query(uri) != NULL ||
+        g_uri_get_fragment(uri) != NULL)
+        return NULL;
+
+    normalized = g_strdup(url);
+    len = strlen(normalized);
+    while (len > 0 && normalized[len - 1] == '/')
+        normalized[--len] = '\0';
+    return g_steal_pointer(&normalized);
+}
+
+/**
  * mf_remote_read_url:
  *
  * Returns: (transfer full): the URL of the repository, without a `/` at its end, or %NULL
@@ -179,28 +253,16 @@ static char *
 mf_remote_read_url(GKeyFile *config, const char *config_path, GError **error)
 {
     g_autofree char *url = g_key_file_get_string(config, "Remote", "URL", NULL);
-    g_autoptr(GUri) uri = NULL;
-    gsize len;
+    char *normalized = url != NULL ? mf_remote_normalize_url(url) : NULL;
 
-    if (url != NULL)
-        uri = g_uri_parse(url, G_URI_FLAGS_NONE, NULL);
-    /* we only download over https, and append the paths of files to the URL */
-    if (uri == NULL || g_strcmp0(g_uri_get_scheme(uri), "https") != 0 || g_uri_get_host(uri) == NULL ||
-        g_uri_get_host(uri)[0] == '\0' || g_uri_get_userinfo(uri) != NULL || g_uri_get_query(uri) != NULL ||
-        g_uri_get_fragment(uri) != NULL) {
+    if (normalized == NULL)
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_FAILED,
                     /* TRANSLATORS: %s is a configuration file, URL a key in it */
                     _("%s: URL must be an https URL without a query or fragment"),
                     config_path);
-        return NULL;
-    }
-
-    len = strlen(url);
-    while (len > 0 && url[len - 1] == '/')
-        url[--len] = '\0';
-    return g_steal_pointer(&url);
+    return normalized;
 }
 
 /**
@@ -212,7 +274,7 @@ static GStrv
 mf_remote_read_channels(GKeyFile *config, const char *config_path, const char *remote_id, GError **error)
 {
     g_auto(GStrv) channels = NULL;
-    gsize n_channels = 0;
+    g_autoptr(GError) local_error = NULL;
 
     if (!g_key_file_has_key(config, "Remote", "Channels", NULL)) {
         const char *defaults[] = {MF_REMOTE_DEFAULT_CHANNEL, NULL};
@@ -220,26 +282,11 @@ mf_remote_read_channels(GKeyFile *config, const char *config_path, const char *r
         return g_strdupv((GStrv) defaults);
     }
 
-    channels = g_key_file_get_string_list(config, "Remote", "Channels", &n_channels, NULL);
-    for (gsize i = 0; channels != NULL && i < n_channels; i++) {
-        /* the origin of each channel names a catalog file */
-        if (!mf_remote_channel_is_valid(channels[i]) ||
-            g_strv_contains((const char *const *) channels + i + 1, channels[i]) ||
-            strlen(remote_id) + 1 + strlen(channels[i]) + strlen(MF_STORE_CATALOG_FILE_SUFFIX) >
-                FILE_NAME_LENGTH_MAX) {
-            g_set_error(error,
-                        MF_ERROR,
-                        MF_ERROR_FAILED,
-                        /* TRANSLATORS: the configuration file, and a channel it names */
-                        _("%s: %s is not a valid channel name, or it is named twice"),
-                        config_path,
-                        channels[i]);
-            return NULL;
-        }
-    }
-    if (n_channels == 0) {
-        /* TRANSLATORS: %s is a configuration file, Channels a key in it */
-        g_set_error(error, MF_ERROR, MF_ERROR_FAILED, _("%s: Channels names no channel"), config_path);
+    channels = g_key_file_get_string_list(config, "Remote", "Channels", NULL, NULL);
+    if (channels == NULL)
+        channels = g_new0(char *, 1);
+    if (!mf_remote_check_channels(remote_id, (const char *const *) channels, &local_error)) {
+        g_set_error(error, MF_ERROR, MF_ERROR_FAILED, "%s: %s", config_path, local_error->message);
         return NULL;
     }
 
@@ -357,11 +404,81 @@ MfRemote *
 mf_remote_new_for_id(const char *remote_id, GError **error)
 {
     g_return_val_if_fail(remote_id != NULL, NULL);
-    return mf_remote_new_for_dirs(MF_DATADIR "/" MF_REMOTES_SUBDIR,
-                                  MF_SYSCONFDIR "/" MF_REMOTES_SUBDIR,
+    return mf_remote_new_for_dirs(MF_REMOTES_VENDOR_DIR,
+                                  MF_REMOTES_ADMIN_DIR,
                                   MF_STORAGE_DIR "/" MF_STORE_REMOTES_SUBDIR,
                                   remote_id,
                                   error);
+}
+
+/**
+ * mf_remote_new_from_json:
+ * @object: the description of a repository, as the service replies with it
+ *   when the repository is inspected
+ *
+ * Create a remote for a repository that is not configured as a remote yet.
+ * It has no channels and no trusted keys.
+ *
+ * Returns: (transfer full) (nullable): the remote, or %NULL if @object does not
+ *   describe a repository
+ */
+MfRemote *
+mf_remote_new_from_json(sd_json_variant *object)
+{
+    struct {
+        const char *id;
+        const char *url;
+        const char *summary;
+        const char *publisher_name;
+        const char *publisher_email;
+        const char *valid_until;
+    } fields = {};
+    static const sd_json_dispatch_field fields_table[] = {
+        {"id",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(fields), id),
+         SD_JSON_MANDATORY},
+        {"url",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(fields), url),
+         SD_JSON_MANDATORY},
+        {"summary",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(fields), summary),
+         SD_JSON_MANDATORY},
+        {"publisherName",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(fields), publisher_name),
+         0},
+        {"publisherEmail",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(fields), publisher_email),
+         0},
+        {"validUntil",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(fields), valid_until),
+         SD_JSON_MANDATORY},
+        {},
+    };
+    g_autoptr(MfRemote) remote = NULL;
+    g_autoptr(GDateTime) valid_until = NULL;
+
+    if (sd_json_dispatch(object, fields_table, SD_JSON_ALLOW_EXTENSIONS, &fields) < 0)
+        return NULL;
+    valid_until = g_date_time_new_from_iso8601(fields.valid_until, NULL);
+    if (valid_until == NULL || !mf_remote_id_is_valid(fields.id))
+        return NULL;
+
+    remote = g_object_new(MF_TYPE_REMOTE, NULL);
+    remote->id = g_strdup(fields.id);
+    remote->url = g_strdup(fields.url);
+    remote->channels = g_new0(char *, 1);
+    remote->summary = g_strdup(fields.summary);
+    remote->publisher_name = g_strdup(fields.publisher_name);
+    remote->publisher_email = g_strdup(fields.publisher_email);
+    remote->valid_until = g_steal_pointer(&valid_until);
+
+    return g_steal_pointer(&remote);
 }
 
 /**
@@ -446,8 +563,8 @@ mf_remote_list_for_dirs(const char *vendor_dir, const char *admin_dir, const cha
 GPtrArray *
 mf_remote_list_all(GError **error)
 {
-    return mf_remote_list_for_dirs(MF_DATADIR "/" MF_REMOTES_SUBDIR,
-                                   MF_SYSCONFDIR "/" MF_REMOTES_SUBDIR,
+    return mf_remote_list_for_dirs(MF_REMOTES_VENDOR_DIR,
+                                   MF_REMOTES_ADMIN_DIR,
                                    MF_STORAGE_DIR "/" MF_STORE_REMOTES_SUBDIR,
                                    error);
 }
@@ -589,6 +706,12 @@ mf_remote_load_trusted_keys(MfRemote *remote, GError **error)
     g_autofree char *admin_keys = NULL;
 
     g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
+
+    /* a repository that was only inspected has no directories to read keys from */
+    if (remote->vendor_dir == NULL || remote->admin_dir == NULL) {
+        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("The remote %s is not configured"), remote->id);
+        return NULL;
+    }
 
     vendor_keys = g_build_filename(remote->vendor_dir, MF_REMOTE_KEYS_SUBDIR, NULL);
     admin_keys = g_build_filename(remote->admin_dir, MF_REMOTE_KEYS_SUBDIR, NULL);

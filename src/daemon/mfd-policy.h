@@ -20,6 +20,7 @@ G_BEGIN_DECLS
 #define MFD_POLKIT_ACTION_REMOVE             "org.freedesktop.manifold.remove"
 #define MFD_POLKIT_ACTION_MARK               "org.freedesktop.manifold.mark"
 #define MFD_POLKIT_ACTION_REFRESH            "org.freedesktop.manifold.refresh"
+#define MFD_POLKIT_ACTION_MANAGE_REMOTES     "org.freedesktop.manifold.manage-remotes"
 
 sd_bus  *mfd_policy_connect(sd_event *event,
                             GError  **error);

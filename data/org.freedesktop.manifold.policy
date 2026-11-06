@@ -41,6 +41,18 @@
     </defaults>
   </action>
 
+  <!-- A remote is trusted to deliver software, so adding one is as dangerous as installing from it.
+       Inspecting a repository changes nothing, but makes the service download from any https URL -->
+  <action id="org.freedesktop.manifold.manage-remotes">
+    <description>Manage software repositories</description>
+    <message>Authentication is required to change the software repositories of the system</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
   <!-- Marking removes nothing itself, but decides what later operations remove -->
   <action id="org.freedesktop.manifold.mark">
     <description>Mark software components to be kept or removed automatically</description>

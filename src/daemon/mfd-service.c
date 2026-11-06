@@ -20,6 +20,7 @@
 #include "mf-interface-private.h"
 #include "mf-remote-private.h"
 #include "mf-sdautoptr-private.h"
+#include "mf-trusted-keys-private.h"
 
 #include "mfd-manager.h"
 #include "mfd-policy.h"
@@ -101,6 +102,10 @@ struct _MfdRequest {
     char *version;                /* the version to remove or mark, or NULL for all of them */
     MfInstallMode mode;           /* how to mark the component */
     GStrv remote_ids;             /* the remotes to refresh, or NULL for all of them */
+    char *url;                    /* the repository to inspect or add as a remote */
+    char *public_key; /* the key that has to sign the repository, or NULL to use the key it serves */
+    GStrv channels;   /* the channels of the remote to add, or NULL for the default one */
+    char *remote_id;  /* the remote to remove */
 };
 
 /**
@@ -145,6 +150,10 @@ mfd_request_free(MfdRequest *request)
     g_free(request->component_id);
     g_free(request->version);
     g_strfreev(request->remote_ids);
+    g_free(request->url);
+    g_free(request->public_key);
+    g_strfreev(request->channels);
+    g_free(request->remote_id);
     g_free(request);
 }
 
@@ -247,6 +256,7 @@ mfd_error_is_about_request(const GError *error)
     case MF_ERROR_EXPIRED:
     case MF_ERROR_DOWNLOAD_FAILED:
     case MF_ERROR_AMBIGUOUS:
+    case MF_ERROR_REMOTE_EXISTS:
         return TRUE;
     default:
         return FALSE;
@@ -582,6 +592,102 @@ mfd_service_refresh(MfdService *service, MfdRequest *request)
     }
 
     return mfd_service_reply_result(request->link, result);
+}
+
+/**
+ * mfd_service_inspect_remote:
+ *
+ * Inspect the repository of the request, and reply to the call with the
+ * description of the repository and the key that signs it.
+ */
+static int
+mfd_service_inspect_remote(MfdService *service, MfdRequest *request)
+{
+    g_autoptr(MfdRemoteInspection) inspection = NULL;
+    g_autoptr(GError) error = NULL;
+    g_auto(GStrv) channels = NULL;
+    g_autofree char *valid_until = NULL;
+    MfRepoRootIndex *index;
+
+    g_message("User %u requested to inspect the repository at %s", (unsigned int) request->uid, request->url);
+
+    inspection = mfd_manager_inspect_remote(service->manager, request->url, request->public_key, &error);
+    if (inspection == NULL) {
+        mfd_service_reply_error(request->link, error, NULL);
+        return 0;
+    }
+    index = inspection->index;
+    channels = mfd_remote_inspection_list_channels(inspection);
+    valid_until = g_date_time_format_iso8601(index->valid_until);
+
+    return sd_varlink_replybo(
+        request->link,
+        SD_JSON_BUILD_PAIR(
+            "remote",
+            SD_JSON_BUILD_OBJECT(SD_JSON_BUILD_PAIR_STRING("id", index->id),
+                                 SD_JSON_BUILD_PAIR_STRING("url", inspection->url),
+                                 SD_JSON_BUILD_PAIR_STRING("summary", index->summary),
+                                 SD_JSON_BUILD_PAIR_CONDITION(index->publisher_name != NULL,
+                                                              "publisherName",
+                                                              SD_JSON_BUILD_STRING(index->publisher_name)),
+                                 SD_JSON_BUILD_PAIR_CONDITION(index->publisher_email != NULL,
+                                                              "publisherEmail",
+                                                              SD_JSON_BUILD_STRING(index->publisher_email)),
+                                 SD_JSON_BUILD_PAIR_STRING("validUntil", valid_until),
+                                 SD_JSON_BUILD_PAIR("channels", SD_JSON_BUILD_STRV(channels)),
+                                 SD_JSON_BUILD_PAIR_STRING("publicKey", inspection->public_key),
+                                 SD_JSON_BUILD_PAIR_STRING("fingerprint", index->key_fingerprint))));
+}
+
+/**
+ * mfd_service_add_remote:
+ *
+ * Add the repository of the request as a remote, refresh it, and reply to the call.
+ */
+static int
+mfd_service_add_remote(MfdService *service, MfdRequest *request)
+{
+    g_autoptr(MfResult) result = NULL;
+    g_autoptr(GError) error = NULL;
+
+    g_message("User %u requested to add the repository at %s as a remote",
+              (unsigned int) request->uid,
+              request->url);
+
+    result = mfd_manager_add_remote(service->manager,
+                                    request->remote_id,
+                                    request->url,
+                                    request->public_key,
+                                    (const char *const *) request->channels,
+                                    request->report_progress ? mfd_service_on_progress : NULL,
+                                    request->link,
+                                    &error);
+    if (result == NULL) {
+        mfd_service_reply_error(request->link, error, NULL);
+        return 0;
+    }
+
+    return mfd_service_reply_result(request->link, result);
+}
+
+/**
+ * mfd_service_remove_remote:
+ *
+ * Remove the remote of the request, and reply to the call.
+ */
+static int
+mfd_service_remove_remote(MfdService *service, MfdRequest *request)
+{
+    g_autoptr(GError) error = NULL;
+
+    g_message("User %u requested to remove the remote %s", (unsigned int) request->uid, request->remote_id);
+
+    if (!mfd_manager_remove_remote(service->manager, request->remote_id, &error)) {
+        mfd_service_reply_error(request->link, error, NULL);
+        return 0;
+    }
+
+    return sd_varlink_reply(request->link, NULL);
 }
 
 /**
@@ -992,6 +1098,37 @@ mfd_service_update(MfdService *service, MfdRequest *request)
 }
 
 /**
+ * mfd_json_variant_get_strv:
+ * @variant: (nullable): a parameter of a call
+ * @ret_strv: (out) (transfer full): the strings of @variant, or %NULL if it is not set
+ *
+ * Returns: %TRUE if @variant is an array of strings, or is not set
+ */
+static gboolean
+mfd_json_variant_get_strv(sd_json_variant *variant, GStrv *ret_strv)
+{
+    g_autoptr(GStrvBuilder) builder = NULL;
+
+    *ret_strv = NULL;
+    if (variant == NULL || sd_json_variant_is_null(variant))
+        return TRUE;
+    if (!sd_json_variant_is_array(variant))
+        return FALSE;
+
+    builder = g_strv_builder_new();
+    for (size_t i = 0; i < sd_json_variant_elements(variant); i++) {
+        sd_json_variant *entry = sd_json_variant_by_index(variant, i);
+
+        if (!sd_json_variant_is_string(entry))
+            return FALSE;
+        g_strv_builder_add(builder, sd_json_variant_string(entry));
+    }
+    *ret_strv = g_strv_builder_end(builder);
+
+    return TRUE;
+}
+
+/**
  * mfd_varlink_method_install_file:
  */
 static int
@@ -1125,7 +1262,7 @@ mfd_varlink_method_update(sd_varlink *link,
          0},
         {},
     };
-    g_autoptr(GPtrArray) component_ids = NULL;
+    g_auto(GStrv) component_ids = NULL;
     MfdRequest *request;
     int r;
 
@@ -1134,18 +1271,11 @@ mfd_varlink_method_update(sd_varlink *link,
         return r;
 
     /* a malformed call is refused before polkit may ask the user for a password */
-    if (p.component_ids != NULL && !sd_json_variant_is_null(p.component_ids)) {
-        if (!sd_json_variant_is_array(p.component_ids))
+    if (!mfd_json_variant_get_strv(p.component_ids, &component_ids))
+        return sd_varlink_error_invalid_parameter_name(link, "componentIds");
+    for (gsize i = 0; component_ids != NULL && component_ids[i] != NULL; i++) {
+        if (!mf_component_id_is_valid(component_ids[i]))
             return sd_varlink_error_invalid_parameter_name(link, "componentIds");
-        component_ids = g_ptr_array_new_with_free_func(g_free);
-        for (size_t i = 0; i < sd_json_variant_elements(p.component_ids); i++) {
-            sd_json_variant *id = sd_json_variant_by_index(p.component_ids, i);
-
-            if (!sd_json_variant_is_string(id) || !mf_component_id_is_valid(sd_json_variant_string(id)))
-                return sd_varlink_error_invalid_parameter_name(link, "componentIds");
-            g_ptr_array_add(component_ids, g_strdup(sd_json_variant_string(id)));
-        }
-        g_ptr_array_add(component_ids, NULL);
     }
 
     request = mfd_request_new(link,
@@ -1153,8 +1283,7 @@ mfd_varlink_method_update(sd_varlink *link,
                               MF_VARLINK_METHOD_UPDATE,
                               MFD_POLKIT_ACTION_INSTALL,
                               flags);
-    request->repo_request = mfd_repo_request_new_update(
-        component_ids != NULL ? (const char *const *) component_ids->pdata : NULL);
+    request->repo_request = mfd_repo_request_new_update((const char *const *) component_ids);
 
     return mfd_service_authorize(service, request, p.flags);
 }
@@ -1267,7 +1396,7 @@ mfd_varlink_method_refresh(sd_varlink *link,
          0},
         {},
     };
-    g_autoptr(GPtrArray) remote_ids = NULL;
+    g_auto(GStrv) remote_ids = NULL;
     MfdRequest *request;
     int r;
 
@@ -1275,27 +1404,201 @@ mfd_varlink_method_refresh(sd_varlink *link,
     if (r != 0)
         return r;
 
-    if (p.remotes != NULL && !sd_json_variant_is_null(p.remotes)) {
-        if (!sd_json_variant_is_array(p.remotes))
-            return sd_varlink_error_invalid_parameter_name(link, "remotes");
-        remote_ids = g_ptr_array_new_with_free_func(g_free);
-        for (size_t i = 0; i < sd_json_variant_elements(p.remotes); i++) {
-            sd_json_variant *id = sd_json_variant_by_index(p.remotes, i);
-
-            if (!sd_json_variant_is_string(id))
-                return sd_varlink_error_invalid_parameter_name(link, "remotes");
-            g_ptr_array_add(remote_ids, g_strdup(sd_json_variant_string(id)));
-        }
-        g_ptr_array_add(remote_ids, NULL);
-    }
+    if (!mfd_json_variant_get_strv(p.remotes, &remote_ids))
+        return sd_varlink_error_invalid_parameter_name(link, "remotes");
 
     request = mfd_request_new(link,
                               mfd_service_refresh,
                               MF_VARLINK_METHOD_REFRESH,
                               MFD_POLKIT_ACTION_REFRESH,
                               flags);
-    if (remote_ids != NULL)
-        request->remote_ids = (GStrv) g_ptr_array_free(g_steal_pointer(&remote_ids), FALSE);
+    request->remote_ids = g_steal_pointer(&remote_ids);
+
+    return mfd_service_authorize(service, request, p.flags);
+}
+
+/**
+ * mfd_varlink_method_inspect_remote:
+ */
+static int
+mfd_varlink_method_inspect_remote(sd_varlink *link,
+                                  sd_json_variant *parameters,
+                                  sd_varlink_method_flags_t flags,
+                                  void *userdata)
+{
+    MfdService *service = userdata;
+    struct {
+        const char *url;
+        const char *public_key;
+        MfTransactionFlags flags;
+    } p = {};
+    static const sd_json_dispatch_field dispatch_table[] = {
+        {"url",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(p), url),
+         SD_JSON_MANDATORY},
+        {"publicKey",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(p), public_key),
+         0},
+        {"flags",
+         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
+         offsetof(typeof(p), flags),
+         0},
+        {},
+    };
+    g_autofree char *url = NULL;
+    g_autofree char *public_key = NULL;
+    MfdRequest *request;
+    int r;
+
+    r = sd_varlink_dispatch(link, parameters, dispatch_table, &p);
+    if (r != 0)
+        return r;
+
+    /* a malformed call is refused before polkit may ask the user for a password */
+    url = mf_remote_normalize_url(p.url);
+    if (url == NULL)
+        return sd_varlink_error_invalid_parameter_name(link, "url");
+    if (p.public_key != NULL) {
+        public_key = mf_public_key_normalize(p.public_key);
+        if (public_key == NULL)
+            return sd_varlink_error_invalid_parameter_name(link, "publicKey");
+    }
+
+    request = mfd_request_new(link,
+                              mfd_service_inspect_remote,
+                              MF_VARLINK_METHOD_INSPECT_REMOTE,
+                              MFD_POLKIT_ACTION_MANAGE_REMOTES,
+                              flags);
+    request->url = g_steal_pointer(&url);
+    request->public_key = g_steal_pointer(&public_key);
+
+    return mfd_service_authorize(service, request, p.flags);
+}
+
+/**
+ * mfd_varlink_method_add_remote:
+ */
+static int
+mfd_varlink_method_add_remote(sd_varlink *link,
+                              sd_json_variant *parameters,
+                              sd_varlink_method_flags_t flags,
+                              void *userdata)
+{
+    MfdService *service = userdata;
+    struct {
+        const char *remote_id;
+        const char *url;
+        const char *public_key;
+        sd_json_variant *channels;
+        MfTransactionFlags flags;
+    } p = {};
+    static const sd_json_dispatch_field dispatch_table[] = {
+        {"remoteId",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(p), remote_id),
+         SD_JSON_MANDATORY},
+        {"url",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(p), url),
+         SD_JSON_MANDATORY},
+        {"publicKey",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(p), public_key),
+         SD_JSON_MANDATORY},
+        {"channels",
+         _SD_JSON_VARIANT_TYPE_INVALID, sd_json_dispatch_variant_noref,
+         offsetof(typeof(p), channels),
+         0},
+        {"flags",
+         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
+         offsetof(typeof(p), flags),
+         0},
+        {},
+    };
+    g_autofree char *url = NULL;
+    g_autofree char *public_key = NULL;
+    g_auto(GStrv) channels = NULL;
+    MfdRequest *request;
+    int r;
+
+    r = sd_varlink_dispatch(link, parameters, dispatch_table, &p);
+    if (r != 0)
+        return r;
+
+    /* a malformed call is refused before polkit may ask the user for a password */
+    if (!mf_remote_id_is_valid(p.remote_id))
+        return sd_varlink_error_invalid_parameter_name(link, "remoteId");
+    url = mf_remote_normalize_url(p.url);
+    if (url == NULL)
+        return sd_varlink_error_invalid_parameter_name(link, "url");
+    public_key = mf_public_key_normalize(p.public_key);
+    if (public_key == NULL)
+        return sd_varlink_error_invalid_parameter_name(link, "publicKey");
+    if (!mfd_json_variant_get_strv(p.channels, &channels))
+        return sd_varlink_error_invalid_parameter_name(link, "channels");
+    for (gsize i = 0; channels != NULL && channels[i] != NULL; i++) {
+        if (!mf_remote_channel_is_valid(channels[i]) ||
+            g_strv_contains((const char *const *) channels + i + 1, channels[i]))
+            return sd_varlink_error_invalid_parameter_name(link, "channels");
+    }
+
+    request = mfd_request_new(link,
+                              mfd_service_add_remote,
+                              MF_VARLINK_METHOD_ADD_REMOTE,
+                              MFD_POLKIT_ACTION_MANAGE_REMOTES,
+                              flags);
+    request->remote_id = g_strdup(p.remote_id);
+    request->url = g_steal_pointer(&url);
+    request->public_key = g_steal_pointer(&public_key);
+    request->channels = g_steal_pointer(&channels);
+
+    return mfd_service_authorize(service, request, p.flags);
+}
+
+/**
+ * mfd_varlink_method_remove_remote:
+ */
+static int
+mfd_varlink_method_remove_remote(sd_varlink *link,
+                                 sd_json_variant *parameters,
+                                 sd_varlink_method_flags_t flags,
+                                 void *userdata)
+{
+    MfdService *service = userdata;
+    struct {
+        const char *remote_id;
+        MfTransactionFlags flags;
+    } p = {};
+    static const sd_json_dispatch_field dispatch_table[] = {
+        {"remoteId",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(p), remote_id),
+         SD_JSON_MANDATORY},
+        {"flags",
+         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
+         offsetof(typeof(p), flags),
+         0},
+        {},
+    };
+    MfdRequest *request;
+    int r;
+
+    r = sd_varlink_dispatch(link, parameters, dispatch_table, &p);
+    if (r != 0)
+        return r;
+
+    /* a malformed call is refused before polkit may ask the user for a password */
+    if (!mf_remote_id_is_valid(p.remote_id))
+        return sd_varlink_error_invalid_parameter_name(link, "remoteId");
+
+    request = mfd_request_new(link,
+                              mfd_service_remove_remote,
+                              MF_VARLINK_METHOD_REMOVE_REMOTE,
+                              MFD_POLKIT_ACTION_MANAGE_REMOTES,
+                              flags);
+    request->remote_id = g_strdup(p.remote_id);
 
     return mfd_service_authorize(service, request, p.flags);
 }
@@ -1404,7 +1707,13 @@ mfd_service_new(sd_event *event, GError **error)
                                            MF_VARLINK_METHOD_MARK_COMPONENT,
                                            mfd_varlink_method_mark_component,
                                            MF_VARLINK_METHOD_REFRESH,
-                                           mfd_varlink_method_refresh);
+                                           mfd_varlink_method_refresh,
+                                           MF_VARLINK_METHOD_INSPECT_REMOTE,
+                                           mfd_varlink_method_inspect_remote,
+                                           MF_VARLINK_METHOD_ADD_REMOTE,
+                                           mfd_varlink_method_add_remote,
+                                           MF_VARLINK_METHOD_REMOVE_REMOTE,
+                                           mfd_varlink_method_remove_remote);
     if (r < 0) {
         mf_set_error_from_errno(error, r, "Unable to bind Varlink methods");
         return NULL;

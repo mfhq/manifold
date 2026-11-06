@@ -76,6 +76,9 @@ MfRepoRootIndex *mf_repo_root_index_new_from_stored(GBytes     *data,
                                                     const char *remote_id,
                                                     GError    **error);
 MF_INTERNAL_VISIBLE
+char *mf_repo_root_index_read_id(GBytes  *data,
+                                 GError **error);
+MF_INTERNAL_VISIBLE
 void mf_repo_root_index_free(MfRepoRootIndex *index);
 MF_INTERNAL_VISIBLE
 MfRepoChannel *mf_repo_root_index_find_channel(MfRepoRootIndex *index,

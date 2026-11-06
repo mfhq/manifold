@@ -11,6 +11,7 @@
 #include <manifold.h>
 
 #include "mf-signer-private.h"
+#include "mf-trusted-keys-private.h"
 #include "mft-utils.h"
 
 typedef struct {
@@ -372,6 +373,38 @@ test_verify(Fixture *fixture, gconstpointer user_data)
 }
 
 static void
+test_public_key_normalize(Fixture *fixture, gconstpointer user_data)
+{
+    const char *valid = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f";
+    const char *invalid[] = {
+        "",
+        "ssh-ed25519",
+        "ssh-ed25519 AAAA\nssh-ed25519 BBBB",
+        "ssh-ed25519 AA!A",
+        "ssh ed25519\tAAAA",
+        "command=\"/bin/sh\" ssh-ed25519 AAAA",
+        "not a key",
+        /* the key itself says it is an RSA key */
+        "ssh-ed25519 AAAAB3NzaC1yc2F4eA==",
+    };
+
+    /* only the type and the key itself are kept */
+    for (gsize i = 0; i < 2; i++) {
+        g_autofree char *line = i == 0 ? g_strconcat(valid, " repo@example.org\n", NULL)
+                                       : g_strconcat("  ", valid, "  ", NULL);
+        g_autofree char *key = mf_public_key_normalize(line);
+
+        g_assert_cmpstr(key, ==, valid);
+    }
+
+    for (gsize i = 0; i < G_N_ELEMENTS(invalid); i++) {
+        g_autofree char *key = mf_public_key_normalize(invalid[i]);
+
+        g_assert_null(key);
+    }
+}
+
+static void
 test_trusted_key_dirs(Fixture *fixture, gconstpointer user_data)
 {
     g_autofree char *vendor_dir = NULL;
@@ -467,6 +500,7 @@ main(int argc, char **argv)
     add_test("key-selection", test_key_selection);
     add_test("agent", test_agent);
     add_test("verify", test_verify);
+    add_test("public-key-normalize", test_public_key_normalize);
     add_test("trusted-key-dirs", test_trusted_key_dirs);
 #undef add_test
 
