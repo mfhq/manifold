@@ -35,6 +35,7 @@ G_BEGIN_DECLS
  * @MF_ERROR_EXPIRED: The metadata of a repository has expired.
  * @MF_ERROR_DOWNLOAD_FAILED: A file could not be downloaded.
  * @MF_ERROR_AMBIGUOUS: The request matches more than one candidate, and has to be more specific.
+ * @MF_ERROR_REMOTE_EXISTS: A remote with this ID is configured already.
  *
  * Errors that can happen when managing the Manifold installation of a host.
  */
@@ -58,6 +59,7 @@ typedef enum {
     MF_ERROR_EXPIRED,
     MF_ERROR_DOWNLOAD_FAILED,
     MF_ERROR_AMBIGUOUS,
+    MF_ERROR_REMOTE_EXISTS,
     /*< private >*/
     MF_ERROR_LAST
 } MfError;

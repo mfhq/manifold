@@ -16,6 +16,7 @@
 #include "mf-component.h"
 #include "mf-error.h"
 #include "mf-progress.h"
+#include "mf-remote-info.h"
 #include "mf-result.h"
 
 G_BEGIN_DECLS
@@ -165,6 +166,58 @@ MfResult          *mf_manager_update(MfManager         *manager,
                                      gpointer           progress_data,
                                      GCancellable      *cancellable,
                                      GError           **error);
+
+void               mf_manager_inspect_remote_async(MfManager          *manager,
+                                                   const char         *url,
+                                                   const char         *public_key,
+                                                   GCancellable       *cancellable,
+                                                   GAsyncReadyCallback callback,
+                                                   gpointer            user_data);
+MfRemoteInfo      *mf_manager_inspect_remote_finish(MfManager    *manager,
+                                                    GAsyncResult *result,
+                                                    GError      **error);
+MfRemoteInfo      *mf_manager_inspect_remote(MfManager    *manager,
+                                             const char   *url,
+                                             const char   *public_key,
+                                             GCancellable *cancellable,
+                                             GError      **error);
+
+void               mf_manager_add_remote_async(MfManager          *manager,
+                                               const char         *remote_id,
+                                               const char         *url,
+                                               const char         *public_key,
+                                               const char *const  *channels,
+                                               MfProgressFunc      progress_func,
+                                               gpointer            progress_data,
+                                               GDestroyNotify      progress_data_destroy,
+                                               GCancellable       *cancellable,
+                                               GAsyncReadyCallback callback,
+                                               gpointer            user_data);
+MfResult          *mf_manager_add_remote_finish(MfManager    *manager,
+                                                GAsyncResult *result,
+                                                GError      **error);
+MfResult          *mf_manager_add_remote(MfManager         *manager,
+                                         const char        *remote_id,
+                                         const char        *url,
+                                         const char        *public_key,
+                                         const char *const *channels,
+                                         MfProgressFunc     progress_func,
+                                         gpointer           progress_data,
+                                         GCancellable      *cancellable,
+                                         GError           **error);
+
+void               mf_manager_remove_remote_async(MfManager          *manager,
+                                                  const char         *remote_id,
+                                                  GCancellable       *cancellable,
+                                                  GAsyncReadyCallback callback,
+                                                  gpointer            user_data);
+gboolean           mf_manager_remove_remote_finish(MfManager    *manager,
+                                                   GAsyncResult *result,
+                                                   GError      **error);
+gboolean           mf_manager_remove_remote(MfManager    *manager,
+                                            const char   *remote_id,
+                                            GCancellable *cancellable,
+                                            GError      **error);
 
 void               mf_manager_mark_component_async(MfManager          *manager,
                                                    const char         *component_id,

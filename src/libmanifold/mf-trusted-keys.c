@@ -5,7 +5,7 @@
  */
 
 #include "config.h"
-#include "mf-trusted-keys.h"
+#include "mf-trusted-keys-private.h"
 
 #include <string.h>
 #include <glib/gi18n-lib.h>
@@ -87,23 +87,27 @@ mf_trusted_keys_new(void)
 }
 
 /**
- * mf_trusted_key_new:
+ * mf_public_key_normalize:
  * @public_key: a public key in OpenSSH format, `<type> <base64 key> [comment]`
  *
- * Parse a public key. We only keep the type and the data of the key, because
- * we write keys into an allowed-signers file for ssh-keygen. Any other text
- * in that file could add options or more keys.
+ * Validate a public key, and remove its comment. We only keep the type and
+ * the data of the key, because we write keys into an allowed-signers file
+ * for ssh-keygen. Any other text in that file could add options or more keys.
  *
- * Returns: (transfer full) (nullable): the key, or %NULL if @public_key is not a valid public key
+ * Returns: (transfer full) (nullable): the key as `<type> <base64 key>`, or
+ *   %NULL if @public_key is not a valid public key
  */
-static MfTrustedKey *
-mf_trusted_key_new(const char *public_key)
+char *
+mf_public_key_normalize(const char *public_key)
 {
     g_autofree char *line = g_strstrip(g_strdup(public_key));
-    g_autoptr(MfTrustedKey) key = NULL;
     g_auto(GStrv) parts = NULL;
+    g_autofree guchar *blob = NULL;
+    gsize blob_len = 0;
+    gsize type_len;
+    guint32 encoded_len;
 
-    /* one key per file or string */
+    /* a file or string must only contain one key */
     if (strchr(line, '\n') != NULL)
         return NULL;
     parts = g_strsplit(line, " ", 3);
@@ -113,8 +117,35 @@ mf_trusted_key_new(const char *public_key)
         !mf_str_consists_of(parts[1], "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="))
         return NULL;
 
-    key = g_new0(MfTrustedKey, 1);
-    key->public_key = g_strdup_printf("%s %s", parts[0], parts[1]);
+    /* the key data starts with the key type, encoded as a string in the SSH wire format */
+    blob = g_base64_decode(parts[1], &blob_len);
+    type_len = strlen(parts[0]);
+    if (blob_len < sizeof(encoded_len) + type_len)
+        return NULL;
+    memcpy(&encoded_len, blob, sizeof(encoded_len));
+    if (GUINT32_FROM_BE(encoded_len) != type_len ||
+        memcmp(blob + sizeof(encoded_len), parts[0], type_len) != 0)
+        return NULL;
+
+    return g_strdup_printf("%s %s", parts[0], parts[1]);
+}
+
+/**
+ * mf_trusted_key_new:
+ * @public_key: a public key in OpenSSH format, `<type> <base64 key> [comment]`
+ *
+ * Parse a public key, and compute its fingerprint.
+ *
+ * Returns: (transfer full) (nullable): the key, or %NULL if @public_key is not a valid public key
+ */
+static MfTrustedKey *
+mf_trusted_key_new(const char *public_key)
+{
+    g_autoptr(MfTrustedKey) key = g_new0(MfTrustedKey, 1);
+
+    key->public_key = mf_public_key_normalize(public_key);
+    if (key->public_key == NULL)
+        return NULL;
     key->fingerprint = mf_ssh_key_fingerprint(key->public_key);
     if (key->fingerprint == NULL)
         return NULL;

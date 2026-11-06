@@ -18,6 +18,7 @@
 #include "mf-component-private.h"
 #include "mf-interface-private.h"
 #include "mf-progress-private.h"
+#include "mf-remote-info-private.h"
 #include "mf-result-private.h"
 #include "mf-sdautoptr-private.h"
 
@@ -1468,6 +1469,324 @@ mf_manager_update(MfManager *manager,
                             mf_on_sync_call_done,
                             &sync);
     return mf_manager_update_finish(manager, mf_sync_call_wait(&sync), error);
+}
+
+/**
+ * mf_manager_inspect_remote_async:
+ * @manager: an #MfManager
+ * @url: the https URL of a repository
+ * @public_key: (nullable): the public key that has to sign the repository, in OpenSSH
+ *   format, or %NULL to use the key the repository serves
+ * @cancellable: (nullable): a #GCancellable
+ * @callback: called when the inspection is done, or failed
+ * @user_data: passed to @callback
+ *
+ * Download the root index of a repository and the public key that signs it,
+ * and check that the key verifies the root index. This does not change the
+ * configuration of the host. Before the repository is added with
+ * mf_manager_add_remote(), the user should compare the fingerprint of the key
+ * and confirm that they trust it.
+ *
+ * A key that the repository serves is only as trustworthy as the server of
+ * the repository.
+ */
+void
+mf_manager_inspect_remote_async(MfManager *manager,
+                                const char *url,
+                                const char *public_key,
+                                GCancellable *cancellable,
+                                GAsyncReadyCallback callback,
+                                gpointer user_data)
+{
+    g_autoptr(sd_json_variant) parameters = NULL;
+    int r;
+
+    g_return_if_fail(MF_IS_MANAGER(manager));
+    g_return_if_fail(url != NULL);
+
+    r = sd_json_buildo(
+        &parameters,
+        SD_JSON_BUILD_PAIR_STRING("url", url),
+        SD_JSON_BUILD_PAIR_CONDITION(public_key != NULL, "publicKey", SD_JSON_BUILD_STRING(public_key)));
+    mf_manager_call_async(manager,
+                          MF_VARLINK_METHOD_INSPECT_REMOTE,
+                          r,
+                          parameters,
+                          -1,
+                          NULL,
+                          NULL,
+                          NULL,
+                          cancellable,
+                          callback,
+                          user_data,
+                          mf_manager_inspect_remote_async);
+}
+
+/**
+ * mf_manager_inspect_remote_finish:
+ * @manager: an #MfManager
+ * @result: the result passed to the callback
+ * @error: a #GError
+ *
+ * Returns: (transfer full): the description of the repository and its key, or %NULL on failure
+ */
+MfRemoteInfo *
+mf_manager_inspect_remote_finish(MfManager *manager, GAsyncResult *result, GError **error)
+{
+    g_autoptr(sd_json_variant)
+        reply = mf_manager_call_finish(manager, result, mf_manager_inspect_remote_async, error);
+
+    if (reply == NULL)
+        return NULL;
+    return mf_remote_info_new_from_reply(reply, error);
+}
+
+/**
+ * mf_manager_inspect_remote:
+ * @manager: an #MfManager
+ * @url: the https URL of a repository
+ * @public_key: (nullable): the public key that has to sign the repository, in OpenSSH
+ *   format, or %NULL to use the key the repository serves
+ * @cancellable: (nullable): a #GCancellable
+ * @error: a #GError
+ *
+ * Inspect a repository, see mf_manager_inspect_remote_async().
+ * This blocks until the inspection is done, or failed.
+ *
+ * Returns: (transfer full): the description of the repository and its key, or %NULL on failure
+ */
+MfRemoteInfo *
+mf_manager_inspect_remote(MfManager *manager,
+                          const char *url,
+                          const char *public_key,
+                          GCancellable *cancellable,
+                          GError **error)
+{
+    g_auto(MfSyncCall) sync = {};
+
+    g_return_val_if_fail(MF_IS_MANAGER(manager), NULL);
+    g_return_val_if_fail(url != NULL, NULL);
+
+    mf_sync_call_begin(&sync);
+    mf_manager_inspect_remote_async(manager, url, public_key, cancellable, mf_on_sync_call_done, &sync);
+    return mf_manager_inspect_remote_finish(manager, mf_sync_call_wait(&sync), error);
+}
+
+/**
+ * mf_manager_add_remote_async:
+ * @manager: an #MfManager
+ * @remote_id: the ID of the repository, as mf_manager_inspect_remote() returned it
+ * @url: the https URL of a repository
+ * @public_key: the public key that signs the repository, in OpenSSH format
+ * @channels: (nullable) (array zero-terminated=1): the channels to install from, or %NULL
+ *   for only `main`
+ * @progress_func: (nullable) (scope notified) (closure progress_data) (destroy progress_data_destroy):
+ *   called whenever the service reports progress
+ * @progress_data: passed to @progress_func
+ * @progress_data_destroy: (nullable): function to free @progress_data, called once the operation
+ *   has finished and @callback has run
+ * @cancellable: (nullable): a #GCancellable
+ * @callback: called when the remote was added, or adding it failed
+ * @user_data: passed to @callback
+ *
+ * Add a repository as a remote that trusts @public_key, and refresh it. The
+ * key has to verify the root index of the repository, and the repository has
+ * to have each of @channels for the architecture of this system. If refreshing
+ * the new remote fails, the remote stays configured, and the result has a warning
+ * with the reason.
+ */
+void
+mf_manager_add_remote_async(MfManager *manager,
+                            const char *remote_id,
+                            const char *url,
+                            const char *public_key,
+                            const char *const *channels,
+                            MfProgressFunc progress_func,
+                            gpointer progress_data,
+                            GDestroyNotify progress_data_destroy,
+                            GCancellable *cancellable,
+                            GAsyncReadyCallback callback,
+                            gpointer user_data)
+{
+    g_autoptr(sd_json_variant) parameters = NULL;
+    int r;
+
+    g_return_if_fail(MF_IS_MANAGER(manager));
+    g_return_if_fail(remote_id != NULL);
+    g_return_if_fail(url != NULL);
+    g_return_if_fail(public_key != NULL);
+
+    r = sd_json_buildo(
+        &parameters,
+        SD_JSON_BUILD_PAIR_STRING("remoteId", remote_id),
+        SD_JSON_BUILD_PAIR_STRING("url", url),
+        SD_JSON_BUILD_PAIR_STRING("publicKey", public_key),
+        SD_JSON_BUILD_PAIR_CONDITION(channels != NULL, "channels", SD_JSON_BUILD_STRV((char **) channels)));
+    mf_manager_call_async(manager,
+                          MF_VARLINK_METHOD_ADD_REMOTE,
+                          r,
+                          parameters,
+                          -1,
+                          progress_func,
+                          progress_data,
+                          progress_data_destroy,
+                          cancellable,
+                          callback,
+                          user_data,
+                          mf_manager_add_remote_async);
+}
+
+/**
+ * mf_manager_add_remote_finish:
+ * @manager: an #MfManager
+ * @result: the result passed to the callback
+ * @error: a #GError
+ *
+ * Returns: (transfer full): the result with the warnings of the first refresh, or %NULL on failure
+ */
+MfResult *
+mf_manager_add_remote_finish(MfManager *manager, GAsyncResult *result, GError **error)
+{
+    return mf_manager_result_finish(manager, result, mf_manager_add_remote_async, error);
+}
+
+/**
+ * mf_manager_add_remote:
+ * @manager: an #MfManager
+ * @remote_id: the ID of the repository, as mf_manager_inspect_remote() returned it
+ * @url: the https URL of a repository
+ * @public_key: the public key that signs the repository, in OpenSSH format
+ * @channels: (nullable) (array zero-terminated=1): the channels to install from, or %NULL
+ *   for only `main`
+ * @progress_func: (nullable) (scope call): called whenever the service reports progress
+ * @progress_data: passed to @progress_func
+ * @cancellable: (nullable): a #GCancellable
+ * @error: a #GError
+ *
+ * Add a remote, see mf_manager_add_remote_async().
+ * This blocks until the remote was added, or adding it failed.
+ *
+ * Returns: (transfer full): the result with the warnings of the first refresh, or %NULL on failure
+ */
+MfResult *
+mf_manager_add_remote(MfManager *manager,
+                      const char *remote_id,
+                      const char *url,
+                      const char *public_key,
+                      const char *const *channels,
+                      MfProgressFunc progress_func,
+                      gpointer progress_data,
+                      GCancellable *cancellable,
+                      GError **error)
+{
+    g_auto(MfSyncCall) sync = {};
+
+    g_return_val_if_fail(MF_IS_MANAGER(manager), NULL);
+    g_return_val_if_fail(remote_id != NULL, NULL);
+    g_return_val_if_fail(url != NULL, NULL);
+    g_return_val_if_fail(public_key != NULL, NULL);
+
+    mf_sync_call_begin(&sync);
+    mf_manager_add_remote_async(manager,
+                                remote_id,
+                                url,
+                                public_key,
+                                channels,
+                                progress_func,
+                                progress_data,
+                                NULL,
+                                cancellable,
+                                mf_on_sync_call_done,
+                                &sync);
+    return mf_manager_add_remote_finish(manager, mf_sync_call_wait(&sync), error);
+}
+
+/**
+ * mf_manager_remove_remote_async:
+ * @manager: an #MfManager
+ * @remote_id: the ID of the remote to remove
+ * @cancellable: (nullable): a #GCancellable
+ * @callback: called when the remote was removed, or removing it failed
+ * @user_data: passed to @callback
+ *
+ * Remove a remote and its cached metadata. A remote that the
+ * vendor of the system ships is masked instead. The components that were
+ * installed from the remote stay installed, but are not updated anymore.
+ */
+void
+mf_manager_remove_remote_async(MfManager *manager,
+                               const char *remote_id,
+                               GCancellable *cancellable,
+                               GAsyncReadyCallback callback,
+                               gpointer user_data)
+{
+    g_autoptr(sd_json_variant) parameters = NULL;
+    int r;
+
+    g_return_if_fail(MF_IS_MANAGER(manager));
+    g_return_if_fail(remote_id != NULL);
+
+    r = sd_json_buildo(&parameters, SD_JSON_BUILD_PAIR_STRING("remoteId", remote_id));
+    mf_manager_call_async(manager,
+                          MF_VARLINK_METHOD_REMOVE_REMOTE,
+                          r,
+                          parameters,
+                          -1,
+                          NULL,
+                          NULL,
+                          NULL,
+                          cancellable,
+                          callback,
+                          user_data,
+                          mf_manager_remove_remote_async);
+}
+
+/**
+ * mf_manager_remove_remote_finish:
+ * @manager: an #MfManager
+ * @result: the result passed to the callback
+ * @error: a #GError
+ *
+ * Returns: %TRUE if the remote was removed
+ */
+gboolean
+mf_manager_remove_remote_finish(MfManager *manager, GAsyncResult *result, GError **error)
+{
+    g_autoptr(GError) local_error = NULL;
+    g_autoptr(sd_json_variant)
+        reply = mf_manager_call_finish(manager, result, mf_manager_remove_remote_async, &local_error);
+
+    /* the reply is empty, so we can only detect a failed call by its error */
+    if (local_error != NULL) {
+        g_propagate_error(error, g_steal_pointer(&local_error));
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/**
+ * mf_manager_remove_remote:
+ * @manager: an #MfManager
+ * @remote_id: the ID of the remote to remove
+ * @cancellable: (nullable): a #GCancellable
+ * @error: a #GError
+ *
+ * Remove a remote, see mf_manager_remove_remote_async().
+ * This blocks until the remote was removed, or removing it failed.
+ *
+ * Returns: %TRUE if the remote was removed
+ */
+gboolean
+mf_manager_remove_remote(MfManager *manager, const char *remote_id, GCancellable *cancellable, GError **error)
+{
+    g_auto(MfSyncCall) sync = {};
+
+    g_return_val_if_fail(MF_IS_MANAGER(manager), FALSE);
+    g_return_val_if_fail(remote_id != NULL, FALSE);
+
+    mf_sync_call_begin(&sync);
+    mf_manager_remove_remote_async(manager, remote_id, cancellable, mf_on_sync_call_done, &sync);
+    return mf_manager_remove_remote_finish(manager, mf_sync_call_wait(&sync), error);
 }
 
 /**

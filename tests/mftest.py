@@ -170,7 +170,8 @@ class Daemon:
         replies = [json.loads(reply) for reply in result.stdout.split('\x1e') if reply.strip()]
         if result.returncode != 0:
             raise VarlinkError(result.stderr.strip(), replies[0] if replies else {})
-        return replies if more else replies[0]
+        # varlinkctl may print nothing at all for the reply of a method without output
+        return replies if more else (replies[0] if replies else {})
 
     def _call_passing_fd(self, method, parameters, more, fd):
         """
@@ -536,16 +537,22 @@ def _version_key(version):
 
 class Repository:
     """
-    A repository in the format of docs/repository-format.rst, which an
-    HttpsServer serves below /<id>. Components are added to channels, and
-    publish() puts their metadata on the server, signed with the key at `key`.
+    A repository in the format of docs/repository-format.rst. An HttpsServer
+    serves the repository below /<id>.
 
-    A component added with add_component() only has metadata, which is enough
-    to refresh. One added with add_image() can be installed: the repository
-    serves its manifest, and its image as a zchunk file that `zchunk_tool`
-    writes, in its pool unless `pool_images` is false. A channel with a path in
-    `image_paths` also serves its images there, behind a redirect like the
-    one of release assets on GitHub, and names that place as its image-url-prefix.
+    Components are added to channels first. A call to publish() then writes the
+    metadata to the server, and signs the root index with the private key file
+    `key`. The public key is served next to the root index as <id>_key.pub.
+
+    A component that was added with add_component() only has metadata, so a remote
+    can be refreshed from the repository, but the component can not be installed.
+    A component that was added with add_image() can be installed. The repository
+    serves its manifest, and its image as a zchunk file created by `zchunk_tool`.
+    The zchunk file is stored in the pool, unless `pool_images` is false.
+
+    `image_paths` maps channel names to a path on the server. Such a channel sets
+    the path as its image-url-prefix, and its images are available below the path
+    as well, behind a redirect like GitHub uses for release assets.
     """
 
     def __init__(self, server, repo_id, key, zchunk_tool=None):
@@ -712,5 +719,7 @@ class Repository:
             )
             with open(path + '.sig', 'rb') as f:
                 self._serve('repo-index.sig', f.read())
+        with open(self.key + '.pub', 'rb') as f:
+            self._serve(f'{self.id}_key.pub', f.read())
         self._serve('repo-index.json.zst', data)
         return data

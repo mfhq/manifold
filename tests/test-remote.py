@@ -10,8 +10,12 @@ the metadata of a repository on a local https server, and installs and
 updates components from it. manifoldd downloads everything with the
 download helper, which it starts itself.
 
+The tests use the manifold tool where it can show the behavior, and only
+call manifoldd directly for the details that the tool does not print.
+
 Usage: mf-test-sandbox test-remote.py --daemon manifoldd --fetch-helper manifold-fetch
-           --client manifold --remotes-dir DIR --zchunk-tool mf-test-zchunk
+           --client manifold --remotes-dir DIR --vendor-remotes-dir DIR
+           --zchunk-tool mf-test-zchunk
 """
 
 import argparse
@@ -36,11 +40,14 @@ from mftest import (  # noqa: E402
     HttpsServer,
     Image,
     Repository,
+    VarlinkError,
     host_architecture,
     zstd_available,
     zstd_compress,
 )
 
+INSPECT_REMOTE = 'org.freedesktop.manifold.InspectRemote'
+ADD_REMOTE = 'org.freedesktop.manifold.AddRemote'
 BLOCK_SIZE = 4096
 
 
@@ -55,6 +62,23 @@ def incompressible_data(seed, blocks):
 def make_key(path):
     subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', path], check=True)
     return path
+
+
+def public_key(path):
+    """Return the public key of the private key file `path`, without its comment."""
+    with open(f'{path}.pub', encoding='utf-8') as f:
+        return ' '.join(f.read().split()[:2])
+
+
+def fingerprint(path):
+    """Return the fingerprint of the key file `path`, in the format that ssh-keygen prints."""
+    result = subprocess.run(
+        ['ssh-keygen', '-l', '-E', 'sha256', '-f', f'{path}.pub'],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.split()[1]
 
 
 class RemoteTest(unittest.TestCase):
@@ -75,7 +99,7 @@ class RemoteTest(unittest.TestCase):
         shutil.rmtree(cls.work)
 
     def setUp(self):
-        for path in (STORE, ARGS.remotes_dir):
+        for path in (STORE, ARGS.remotes_dir, ARGS.vendor_remotes_dir):
             for name in os.listdir(path):
                 full = os.path.join(path, name)
                 if os.path.isdir(full) and not os.path.islink(full):
@@ -106,13 +130,16 @@ class RemoteTest(unittest.TestCase):
                 sys.stderr.write(f'--- the daemon logged:\n{f.read()}---\n')
         return result
 
-    def configure_remote(self, remote_id='example', channels=None, key=None):
+    def configure_remote(self, remote_id='example', channels=None, key=None, vendor=False):
         """
-        Write the configuration of a remote for the repository, like an administrator
-        does by hand. The remote trusts the public key of the key at `key`, or no key
-        at all if `key` is False.
+        Write the configuration of a remote for the repository. The configuration is
+        written to the directory for administrators, or to the directory for vendors
+        if `vendor` is set. The remote trusts the public key of the private key file
+        `key`, or no key at all if `key` is False.
         """
-        remote_dir = os.path.join(ARGS.remotes_dir, remote_id)
+        remote_dir = os.path.join(
+            ARGS.vendor_remotes_dir if vendor else ARGS.remotes_dir, remote_id
+        )
         os.makedirs(os.path.join(remote_dir, 'keys'), exist_ok=True)
         config = f'[Remote]\nURL={self.server.url}/{remote_id}\n'
         if channels is not None:
@@ -149,6 +176,35 @@ class RemoteTest(unittest.TestCase):
         """Run 'manifold update' with --no-refresh, so the update only uses the metadata
         that the test refreshed explicitly."""
         return self.manifold('update', '--no-refresh', *component_ids, expect=expect)
+
+    def inspect(self, url, key=None):
+        """Call InspectRemote directly, and return the description of the repository."""
+        parameters = {'url': url}
+        if key is not None:
+            parameters['publicKey'] = key
+        return self.daemon.call(INSPECT_REMOTE, parameters)['remote']
+
+    def call_add_remote(self, url, key, channels=None, remote_id='example'):
+        """Call AddRemote directly, and return its result."""
+        parameters = {'remoteId': remote_id, 'url': url, 'publicKey': key}
+        if channels is not None:
+            parameters['channels'] = channels
+        return self.daemon.call(ADD_REMOTE, parameters)['result']
+
+    def refused(self, call, error, *args, **kwargs):
+        """Make a call that has to fail with `error`, and return the error message."""
+        with self.assertRaises(VarlinkError) as refused:
+            call(*args, **kwargs)
+        self.assertIn(error, str(refused.exception))
+        return refused.exception.parameters.get('message', '')
+
+    def refused_parameter(self, call, parameter, *args, **kwargs):
+        """Make a call that has to be refused because `parameter` is invalid."""
+        with self.assertRaises(VarlinkError) as refused:
+            call(*args, **kwargs)
+        self.assertEqual(
+            refused.exception.parameters.get('parameter'), parameter, refused.exception
+        )
 
     def listed(self, output, heading):
         """Return the (ID, version) of the components that the tool listed below a heading
@@ -237,6 +293,105 @@ class RemoteTest(unittest.TestCase):
             sorted(self.server.requests),
             ['/example/repo-index.json.zst', '/example/repo-index.sig'],
         )
+
+    def test_inspect_remote(self):
+        self.repo.publisher = {'name': 'Example Inc.', 'email': 'repo@example.org'}
+        self.repo.add_component('main', 'org.example.App')
+        self.repo.add_component('beta', 'org.example.App', version='2.0')
+        self.repo.publish()
+
+        # the key that the repository serves verifies its root index
+        remote = self.inspect(f'{self.repo.url}/')
+        self.assertEqual(remote['id'], 'example')
+        self.assertEqual(remote['url'], self.repo.url)
+        self.assertEqual(remote['summary'], 'Example applications')
+        self.assertEqual(remote['publisherName'], 'Example Inc.')
+        self.assertEqual(remote['publisherEmail'], 'repo@example.org')
+        self.assertEqual(remote['validUntil'], '2099-06-01T12:00:00Z')
+        self.assertEqual(remote['channels'], ['main', 'beta'])
+        self.assertEqual(remote['publicKey'], public_key(self.key))
+        self.assertEqual(remote['fingerprint'], fingerprint(self.key))
+        # inspecting a repository changes nothing
+        self.assertEqual(os.listdir(ARGS.remotes_dir), [])
+        self.assertFalse(os.path.exists(f'{STORE}/remotes/example'))
+
+        # if the caller passes a key, the key has to verify the root index, and the repository
+        # does not need to serve a key
+        self.refused(self.inspect, 'VerificationFailed', self.repo.url, public_key(self.other_key))
+        del self.server.files['/example/example_key.pub']
+        self.refused(self.inspect, 'DownloadFailed', self.repo.url)
+        self.assertEqual(self.inspect(self.repo.url, public_key(self.key))['id'], 'example')
+
+        # the key that the repository serves has to be the key that signed its root index
+        with open(f'{self.other_key}.pub', 'rb') as f:
+            self.server.files['/example/example_key.pub'] = f.read()
+        self.refused(self.inspect, 'VerificationFailed', self.repo.url)
+        self.server.files['/example/example_key.pub'] = b'not a key\n'
+        self.refused(self.inspect, 'InvalidRepository', self.repo.url)
+
+        # a repository with expired metadata is refused, as no component could be installed from it
+        self.repo.valid_until = '2020-01-01T00:00:00Z'
+        self.repo.publish()
+        self.refused(self.inspect, 'Expired', self.repo.url)
+
+        # a malformed call is refused before anything is downloaded
+        self.server.requests.clear()
+        self.refused_parameter(self.inspect, 'url', 'http://example.org')
+        self.refused_parameter(self.inspect, 'publicKey', self.repo.url, 'not a key')
+        self.assertEqual(self.server.requests, [])
+
+    def test_add_remote_refused(self):
+        # the tool inspects the repository and checks most of this itself before it calls
+        # AddRemote, so the checks of the daemon are only reached with a direct call
+        arch = host_architecture()
+        self.repo.add_component('main', 'org.example.App')
+        self.repo.add_component('beta', 'org.example.App', version='2.0')
+        self.repo.publish()
+
+        # the key has to verify the root index, and the repository has to have the channels
+        self.refused(
+            self.call_add_remote, 'VerificationFailed', self.repo.url, public_key(self.other_key)
+        )
+        # the repository has to have the ID that the user confirmed
+        message = self.refused(
+            self.call_add_remote,
+            'VerificationFailed',
+            self.repo.url,
+            public_key(self.key),
+            remote_id='other',
+        )
+        self.assertIn('has the ID example, not other', message)
+        self.refused_parameter(
+            self.call_add_remote,
+            'remoteId',
+            self.repo.url,
+            public_key(self.key),
+            remote_id='not/valid',
+        )
+        message = self.refused(
+            self.call_add_remote,
+            'NotFound',
+            self.repo.url,
+            public_key(self.key),
+            channels=['main', 'extra'],
+        )
+        self.assertIn(f'no channel extra for {arch}, only: main, beta', message)
+        self.refused_parameter(
+            self.call_add_remote, 'channels', self.repo.url, public_key(self.key), ['main', 'main']
+        )
+        self.assertEqual(os.listdir(ARGS.remotes_dir), [])
+
+        # a remote that can not be refreshed stays, and the result says why
+        del self.server.files[f'/example/beta/{arch}/index.json.zst']
+        result = self.call_add_remote(
+            self.repo.url, public_key(self.key), channels=['main', 'beta']
+        )
+        self.assertTrue(
+            any('example was added, but refreshing it failed' in w for w in result['warnings']),
+            result,
+        )
+        self.assertTrue(os.path.isfile(os.path.join(ARGS.remotes_dir, 'example', 'remote.conf')))
+        self.assertFalse(os.path.exists(f'{STORE}/remotes/example'))
 
     def test_refresh_and_list_remotes(self):
         self.assertIn('There are no remotes', self.manifold('remote', 'list'))
@@ -626,10 +781,15 @@ if __name__ == '__main__':
     parser.add_argument('--fetch-helper', required=True)
     parser.add_argument('--client', required=True)
     parser.add_argument('--remotes-dir', required=True)
+    parser.add_argument('--vendor-remotes-dir', required=True)
     parser.add_argument('--zchunk-tool', required=True)
     ARGS, remaining = parser.parse_known_args()
-    # these tools make up the repository
-    missing = [tool for tool in ('b3sum', 'openssl', 'ssh-keygen') if shutil.which(tool) is None]
+    # we need these tools to create the repository, and varlinkctl to call the daemon
+    missing = [
+        tool
+        for tool in ('b3sum', 'varlinkctl', 'openssl', 'ssh-keygen')
+        if shutil.which(tool) is None
+    ]
     if not zstd_available():
         missing.append('zstd')
     if missing:

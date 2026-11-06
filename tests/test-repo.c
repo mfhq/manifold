@@ -282,6 +282,50 @@ test_root_index_refused(Fixture *f, gconstpointer user_data)
 }
 
 /**
+ * test_root_index_id:
+ */
+static void
+test_root_index_id(Fixture *f, gconstpointer user_data)
+{
+    const char *invalid[] = {
+        "{\"id\": \"../example\"}",
+        "{\"id\": \"manifold-local-example\"}",
+        "{\"id\": \"\"}",
+        "{\"id\": 1}",
+        "{\"summary\": \"Example applications\"}",
+    };
+
+    /* the ID of a root index can be read before its signature is checked, to find the key */
+    {
+        g_autoptr(GError) error = NULL;
+        g_autofree char *json = mft_root_index_json("example", "2027-05-04T14:57:58Z", "");
+        g_autoptr(GBytes) data = mft_zstd(json);
+        g_autofree char *remote_id = mf_repo_root_index_read_id(data, &error);
+
+        g_assert_no_error(error);
+        g_assert_cmpstr(remote_id, ==, "example");
+    }
+    {
+        g_autoptr(GError) error = NULL;
+        g_autoptr(GBytes) data = g_bytes_new_static("{\"id\": \"example\"}", 17);
+        g_autofree char *remote_id = mf_repo_root_index_read_id(data, &error);
+
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_REPOSITORY);
+        g_assert_null(remote_id);
+    }
+
+    /* the ID is used as a file name in the repository and as a directory name in the store */
+    for (gsize i = 0; i < G_N_ELEMENTS(invalid); i++) {
+        g_autoptr(GError) error = NULL;
+        g_autoptr(GBytes) data = mft_zstd(invalid[i]);
+        g_autofree char *remote_id = mf_repo_root_index_read_id(data, &error);
+
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_REPOSITORY);
+        g_assert_null(remote_id);
+    }
+}
+
+/**
  * mft_version_json:
  *
  * Returns: (transfer full): a version of org.example.App as the component index lists it
@@ -611,6 +655,7 @@ main(int argc, char **argv)
 #define add_test(name, func) g_test_add("/repo/" name, Fixture, NULL, mft_setup, func, mft_teardown)
     add_test("root-index", test_root_index);
     add_test("root-index-refused", test_root_index_refused);
+    add_test("root-index-id", test_root_index_id);
     add_test("component-index", test_component_index);
     add_test("manifest", test_manifest);
     add_test("icon-index", test_icon_index);
