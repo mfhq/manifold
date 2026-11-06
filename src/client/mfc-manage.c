@@ -26,6 +26,18 @@ static const GOptionEntry install_options[] = {
     G_OPTION_ENTRY_NULL,
 };
 
+/* the value of the --no-refresh option of the update command */
+static gboolean optn_no_refresh = FALSE;
+
+static const GOptionEntry update_options[] = {
+    {"no-refresh",
+     0, 0,
+     G_OPTION_ARG_NONE, &optn_no_refresh,
+     N_("Do not refresh the remotes first, and update from the cached metadata."),
+     NULL},
+    G_OPTION_ENTRY_NULL,
+};
+
 /**
  * mfc_on_progress:
  *
@@ -116,24 +128,6 @@ mfc_print_result(MfResult *result)
         /* TRANSLATORS: something went wrong, but the operation still succeeded */
         g_printerr(_("Warning: %s\n"), shown);
     }
-}
-
-/**
- * mfc_argument_is_bundle_file:
- *
- * Check if an argument of the install command is the path of a bundle file.
- *
- * A bundle file has to be given as a path that starts with `/`, `./` or `../`.
- * A plain name is always a component ID, even if a file with that name exists
- * in the current directory.
- *
- * Returns: %TRUE if @argument is a bundle file, %FALSE if it is a component ID
- */
-static gboolean
-mfc_argument_is_bundle_file(const char *argument)
-{
-    return g_str_has_prefix(argument, "/") || g_str_has_prefix(argument, "./") ||
-           g_str_has_prefix(argument, "../");
 }
 
 /**
@@ -311,6 +305,24 @@ mfc_install_component(MfcContext *ctx, const char *component_id, const char *ori
     mfc_print_result(result);
 
     return MFC_EXIT_SUCCESS;
+}
+
+/**
+ * mfc_argument_is_bundle_file:
+ *
+ * Check if an argument of the install command is the path of a bundle file.
+ *
+ * A bundle file has to be given as a path that starts with `/`, `./` or `../`.
+ * A plain name is always a component ID, even if a file with that name exists
+ * in the current directory.
+ *
+ * Returns: %TRUE if @argument is a bundle file, %FALSE if it is a component ID
+ */
+static gboolean
+mfc_argument_is_bundle_file(const char *argument)
+{
+    return g_str_has_prefix(argument, "/") || g_str_has_prefix(argument, "./") ||
+           g_str_has_prefix(argument, "../");
 }
 
 /**
@@ -583,6 +595,81 @@ mfc_run_refresh_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
 }
 
 /**
+ * mfc_refresh_before_update:
+ *
+ * Refresh all remotes before we update.
+ *
+ * A failed refresh is only a warning, the update then uses the cached metadata.
+ */
+static void
+mfc_refresh_before_update(MfcContext *ctx)
+{
+    g_autoptr(MfResult) result = NULL;
+    g_autoptr(GError) error = NULL;
+
+    result = mf_manager_refresh(mfc_context_get_manager(ctx), NULL, mfc_on_progress, ctx, NULL, &error);
+    mfc_progress_bar_finish(ctx->progress_bar);
+    if (result == NULL) {
+        /* TRANSLATORS: the update continues after this warning, %s is the reason why the refresh failed */
+        g_printerr(_("Warning: Unable to refresh, updating from the cached metadata: %s\n"), error->message);
+        return;
+    }
+    mfc_print_result(result);
+}
+
+/**
+ * mfc_run_update_command:
+ *
+ * Update all components that were installed from remotes, or only the named ones.
+ */
+static int
+mfc_run_update_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
+{
+    g_autoptr(GOptionContext) context = NULL;
+    g_autoptr(MfResult) result = NULL;
+    g_autoptr(GPtrArray) component_ids = g_ptr_array_new();
+    g_autoptr(GError) error = NULL;
+    int ret;
+
+    context = mfc_option_context_for_command(cmd, update_options);
+    ret = mfc_parse_command_options(context, cmd, &argc, &argv);
+    if (ret != MFC_EXIT_SUCCESS)
+        return ret;
+    for (int i = 1; i < argc; i++) {
+        if (!mf_component_id_is_valid(argv[i])) {
+            g_printerr(_("'%s' is not a valid component identifier.\n"), argv[i]);
+            return MFC_EXIT_INVALID_CMD;
+        }
+        g_ptr_array_add(component_ids, argv[i]);
+    }
+    g_ptr_array_add(component_ids, NULL);
+
+    if (!optn_no_refresh)
+        mfc_refresh_before_update(ctx);
+
+    result = mf_manager_update(mfc_context_get_manager(ctx),
+                               argc > 1 ? (const char *const *) component_ids->pdata : NULL,
+                               mfc_on_progress,
+                               ctx,
+                               NULL,
+                               &error);
+    mfc_progress_bar_finish(ctx->progress_bar);
+    if (result == NULL) {
+        g_printerr(_("Unable to update: %s\n"), error->message);
+        return MFC_EXIT_FAILURE;
+    }
+
+    /* components that could not be updated are listed in the warnings, the command still succeeds */
+    if (mf_result_get_installed(result)->len == 0 && mf_result_get_warnings(result)->len == 0) {
+        g_print("%s\n", _("There are no updates."));
+        return MFC_EXIT_SUCCESS;
+    }
+    mfc_print_result(result);
+
+    return MFC_EXIT_SUCCESS;
+}
+
+/**
  * mfc_run_mark_command:
  *
  * Set the install mode of a version of a component. A version with the mode
@@ -674,6 +761,12 @@ mfc_register_manage_commands(MfcContext *ctx)
         /* TRANSLATORS: `manifold refresh` command description */
         _("Download the metadata of the remotes, so their components can be installed."),
         mfc_run_refresh_command);
+    mfc_context_register_command(ctx,
+                                 "update",
+                                 "[COMPONENT-ID...]",
+                                 /* TRANSLATORS: `manifold update` command description */
+                                 _("Update the components that were installed from remotes."),
+                                 mfc_run_update_command);
     mfc_context_register_command(
         ctx,
         "mark",
