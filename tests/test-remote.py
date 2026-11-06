@@ -5,10 +5,10 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 
 """
-End-to-end tests of remotes, in the sandbox: the manifold tool refreshes
-the metadata of a repository on a local https server, and installs and
-updates components from it. manifoldd downloads everything with the
-download helper, which it starts itself.
+End-to-end tests of remotes, in the sandbox: the manifold tool adds and
+removes remotes, refreshes the metadata of a repository on a local https
+server, and installs and updates components from it. manifoldd downloads
+everything with the download helper, which it starts itself.
 
 The tests use the manifold tool where it can show the behavior, and only
 call manifoldd directly for the details that the tool does not print.
@@ -22,6 +22,7 @@ import argparse
 import hashlib
 import json
 import os
+import pty
 import shutil
 import subprocess
 import sys
@@ -149,15 +150,28 @@ class RemoteTest(unittest.TestCase):
                 f'{key or self.key}.pub', os.path.join(remote_dir, 'keys', f'{remote_id}.pub')
             )
 
-    def manifold(self, *args, expect=0):
-        """Run the manifold tool, check its exit status, and return all it printed."""
-        result = subprocess.run(
-            [ARGS.client, '--socket', self.daemon.socket_path, *args],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+    def manifold(self, *args, expect=0, answer=None):
+        """
+        Run the manifold tool, check its exit status, and return all it printed. With `answer`,
+        its input is a terminal, on which that answer to its question was typed already.
+        """
+        terminal = None
+        stdin = subprocess.DEVNULL
+        if answer is not None:
+            terminal, stdin = pty.openpty()
+            os.write(terminal, f'{answer}\n'.encode())
+        try:
+            result = subprocess.run(
+                [ARGS.client, '--socket', self.daemon.socket_path, *args],
+                stdin=stdin,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            if terminal is not None:
+                os.close(terminal)
+                os.close(stdin)
         self.assertEqual(result.returncode, expect, result.stdout + result.stderr)
         return result.stdout + result.stderr
 
@@ -174,6 +188,18 @@ class RemoteTest(unittest.TestCase):
         """Run 'manifold update' without the refresh that an update starts with, so that
         the tests decide which metadata the update sees."""
         return self.manifold('update', '--no-refresh', *component_ids, expect=expect)
+
+    def remote_add(self, key=None, channels=(), expect=0):
+        """Run 'manifold remote add' for the repository, with the public key of the key at
+        `key` as the trusted key."""
+        options = ['--key', f'{key or self.key}.pub']
+        for channel in channels:
+            options += ['--channel', channel]
+        return self.manifold('remote', 'add', *options, self.repo.url, expect=expect)
+
+    def remote_remove(self, remote_id, expect=0):
+        """Run 'manifold remote remove'."""
+        return self.manifold('remote', 'remove', remote_id, expect=expect)
 
     def inspect(self, url, key=None):
         """Call InspectRemote directly, and return the description of the repository."""
@@ -335,6 +361,31 @@ class RemoteTest(unittest.TestCase):
         self.refused_parameter(self.inspect, 'publicKey', self.repo.url, 'not a key')
         self.assertEqual(self.server.requests, [])
 
+    def test_add_remote(self):
+        for image in (self.core, self.kit, self.app):
+            self.repo.add_image('main', image)
+        self.repo.add_component('beta', 'org.example.Other')
+        self.repo.publish()
+
+        self.assertNotIn('Warning', self.remote_add())
+        remote_dir = os.path.join(ARGS.remotes_dir, 'example')
+        with open(os.path.join(remote_dir, 'remote.conf'), encoding='utf-8') as f:
+            config = f.read()
+        self.assertIn(f'URL={self.repo.url}\n', config)
+        self.assertIn('Channels=main;\n', config)
+        with open(os.path.join(remote_dir, 'keys', 'example.pub'), encoding='utf-8') as f:
+            self.assertEqual(f.read(), f'{public_key(self.key)}\n')
+
+        # the remote is refreshed, so its components can be installed right away
+        self.assertEqual(
+            self.stored('remotes/example/repo-index.json.zst'), self.served('repo-index.json.zst')
+        )
+        self.install(APP_ID)
+        self.assertEqual(len(self.installed()), 3)
+
+        # a remote that is configured already is not added again
+        self.assertIn('There is a remote example already', self.remote_add(expect=1))
+
     def test_add_remote_refused(self):
         # the tool inspects the repository and checks most of this itself before it calls
         # AddRemote, so the checks of the daemon are only reached with a direct call
@@ -387,6 +438,38 @@ class RemoteTest(unittest.TestCase):
         )
         self.assertTrue(os.path.isfile(os.path.join(ARGS.remotes_dir, 'example', 'remote.conf')))
         self.assertFalse(os.path.exists(f'{STORE}/remotes/example'))
+
+    def test_remove_remote(self):
+        self.publish_app()
+        self.install(APP_ID)
+        installed = self.installed()
+
+        self.assertIn('Removed the remote example.', self.remote_remove('example'))
+        self.assertFalse(os.path.exists(os.path.join(ARGS.remotes_dir, 'example')))
+        self.assertFalse(os.path.exists(f'{STORE}/remotes/example'))
+        self.assertEqual(os.listdir(f'{STORE}/catalog/xml'), [])
+        self.assertFalse(os.path.exists(f'{STORE}/catalog/icons/example-main'))
+        # what was installed from the remote stays
+        self.assertEqual(self.installed(), installed)
+        self.assertIn('There is no remote example', self.remote_remove('example', expect=1))
+        self.assertIn(
+            'The ID of the remote is not valid', self.remote_remove('../example', expect=1)
+        )
+
+        # a remote of the vendor is masked
+        self.configure_remote(vendor=True)
+        self.refresh()
+        self.remote_remove('example')
+        config = os.path.join(ARGS.remotes_dir, 'example', 'remote.conf')
+        self.assertEqual(os.readlink(config), '/dev/null')
+        self.assertIn('There are no remotes', self.manifold('remote', 'list'))
+        self.assertFalse(os.path.exists(f'{STORE}/remotes/example'))
+        self.remote_remove('example', expect=1)
+
+        # and adding it again defines it again
+        self.remote_add()
+        self.assertFalse(os.path.islink(config))
+        self.assertIn('example: Example applications', self.manifold('remote', 'list'))
 
     def test_refresh_and_list_remotes(self):
         self.assertIn('There are no remotes', self.manifold('remote', 'list'))
@@ -720,6 +803,68 @@ class RemoteTest(unittest.TestCase):
         # we stop at the first component that fails, and name the ones that were not installed
         out = self.manifold('install', 'org.example.Missing', APP_ID, expect=1)
         self.assertIn(f'The rest was not installed: {APP_ID}', out)
+
+    def test_remote_add_asks_before_it_trusts_a_key(self):
+        self.repo.publisher = {'name': 'Example Inc.', 'email': 'repo@example.org'}
+        self.repo.add_component('main', 'org.example.App')
+        self.repo.add_component('beta', 'org.example.App', version='2.0')
+        self.repo.publish()
+        config = os.path.join(ARGS.remotes_dir, 'example', 'remote.conf')
+
+        # without a terminal, the key has to be trusted with --yes, or given with --key
+        self.assertIn('--yes', self.manifold('remote', 'add', self.repo.url, expect=2))
+        self.assertEqual(self.server.requests, [])
+
+        # the user sees the fingerprint of the key the repository serves, and decides
+        out = self.manifold('remote', 'add', self.repo.url, answer='n', expect=1)
+        self.assertIn('example: Example applications', out)
+        self.assertIn('Publisher: Example Inc. <repo@example.org>', out)
+        # the channels are the ones the remote would install from, not all the repository has
+        self.assertIn('Channels: main\n', out)
+        self.assertIn(f'Key: {fingerprint(self.key)}', out)
+        self.assertIn('Trust this key, and add the remote? [y/N]', out)
+        self.assertIn('Aborted.', out)
+        self.assertFalse(os.path.exists(config))
+        out = self.manifold('remote', 'add', self.repo.url, answer='y')
+        self.assertIn('Added the remote example, which installs from main.', out)
+        self.assertIn('Valid until: 2099-06-01', self.manifold('remote', 'list'))
+
+        # a remote is not added twice, and one that was removed can be added again
+        self.assertIn(
+            'There is a remote example already',
+            self.manifold('remote', 'add', '--yes', self.repo.url, expect=1),
+        )
+        self.assertIn('Removed the remote example.', self.manifold('remote', 'remove', 'example'))
+        self.assertFalse(os.path.exists(config))
+        self.assertIn(
+            'There is no remote example', self.manifold('remote', 'remove', 'example', expect=1)
+        )
+
+        # a key that is given is not asked about, but it has to be the one that signs the repository
+        self.assertIn(
+            'not made by a trusted key',
+            self.manifold(
+                'remote', 'add', '--key', f'{self.other_key}.pub', self.repo.url, expect=1
+            ),
+        )
+        self.assertIn(
+            'Unable to read',
+            self.manifold('remote', 'add', '--key', 'missing.pub', self.repo.url, expect=3),
+        )
+        key_option = ('--key', f'{self.key}.pub')
+        self.assertIn(
+            'has no channel extra for this system',
+            self.manifold(
+                'remote', 'add', *key_option, '--channel', 'extra', self.repo.url, expect=1
+            ),
+        )
+        out = self.manifold(
+            'remote', 'add', *key_option, '--channel', 'main', '--channel', 'beta', self.repo.url
+        )
+        self.assertIn('Added the remote example, which installs from main, beta.', out)
+        self.assertNotIn('[y/N]', out)
+        with open(config, encoding='utf-8') as f:
+            self.assertIn('Channels=main;beta;\n', f.read())
 
     def test_update_refreshes_first(self):
         self.publish_app()

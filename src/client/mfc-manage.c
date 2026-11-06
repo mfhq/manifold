@@ -39,95 +39,20 @@ static const GOptionEntry update_options[] = {
 };
 
 /**
- * mfc_on_progress:
+ * mfc_argument_is_bundle_file:
  *
- * Draw the progress of an operation, one bar per item.
- */
-static void
-mfc_on_progress(const MfProgress *progress, gpointer user_data)
-{
-    MfcContext *ctx = user_data;
-    const MfItemProgress *item = mf_progress_get_item(progress);
-    g_autofree char *label = NULL;
-
-    if (item == NULL)
-        return;
-    const char *subject = mf_item_progress_get_subject(item);
-    const char *version = mf_item_progress_get_version(item);
-
-    switch (mf_item_progress_get_action(item)) {
-    case MF_ACTION_INSTALL:
-        /* TRANSLATORS: label of a progress bar, with the component and its version */
-        label = g_strdup_printf(_("Installing %s %s"), subject, version ? version : "");
-        break;
-    case MF_ACTION_REMOVE:
-        /* TRANSLATORS: label of a progress bar, with the component and its version */
-        label = g_strdup_printf(_("Removing %s %s"), subject, version ? version : "");
-        break;
-    case MF_ACTION_CLEANUP:
-        /* TRANSLATORS: label of a progress bar, with the component and its version */
-        label = g_strdup_printf(_("Cleaning up %s %s"), subject, version ? version : "");
-        break;
-    case MF_ACTION_REFRESH:
-        /* TRANSLATORS: label of a progress bar, with the ID of a remote */
-        label = g_strdup_printf(_("Refreshing %s"), subject);
-        break;
-    default:
-        label = g_strdup(subject);
-        break;
-    }
-
-    if (!mfc_progress_bar_is_for(ctx->progress_bar, item))
-        mfc_progress_bar_start(ctx->progress_bar, item, label);
-    mfc_progress_bar_update(ctx->progress_bar,
-                            mf_item_progress_get_percent(item),
-                            mf_item_progress_get_bytes_done(item));
-}
-
-/**
- * mfc_print_result:
+ * A bundle file is given as a path that starts with `/`, `./` or `../`. We do
+ * not look at what exists in the current directory, so a file there can
+ * never be installed in place of a component that has the same name.
  *
- * Print the results of an operation.
+ * Returns: %TRUE if an argument of the install command names a bundle file,
+ *   and not the ID of a component
  */
-static void
-mfc_print_result(MfResult *result)
+static gboolean
+mfc_argument_is_bundle_file(const char *argument)
 {
-    GPtrArray *installed = mf_result_get_installed(result);
-    GPtrArray *removed = mf_result_get_removed(result);
-    GPtrArray *warnings = mf_result_get_warnings(result);
-    guint n_images = mf_result_get_removed_images(result)->len;
-
-    if (installed->len > 0) {
-        g_print("%s\n", _("Installed:"));
-        mfc_print_components(installed, FALSE);
-    }
-    if (removed->len > 0) {
-        g_print("%s\n", _("Removed:"));
-        mfc_print_components(removed, FALSE);
-    }
-    if (n_images > 0)
-        g_print(g_dngettext(GETTEXT_PACKAGE,
-                            "Removed %u image nothing uses anymore.\n",
-                            "Removed %u images nothing uses anymore.\n",
-                            n_images),
-                n_images);
-    if (mf_result_get_bytes_added(result) > 0) {
-        g_autofree char *size = g_format_size(mf_result_get_bytes_added(result));
-
-        g_print(_("Disk space used: %s\n"), size);
-    }
-    if (mf_result_get_bytes_freed(result) > 0) {
-        g_autofree char *size = g_format_size(mf_result_get_bytes_freed(result));
-
-        g_print(_("Disk space freed: %s\n"), size);
-    }
-    for (guint i = 0; i < warnings->len; i++) {
-        /* a warning can quote a tool of the host, which can quote a file of a bundle */
-        g_autofree char *shown = g_strescape(g_ptr_array_index(warnings, i), NULL);
-
-        /* TRANSLATORS: something went wrong, but the operation still succeeded */
-        g_printerr(_("Warning: %s\n"), shown);
-    }
+    return g_str_has_prefix(argument, "/") || g_str_has_prefix(argument, "./") ||
+           g_str_has_prefix(argument, "../");
 }
 
 /**
@@ -304,23 +229,6 @@ mfc_install_component(MfcContext *ctx, const char *component_id, const char *ori
     mfc_print_result(result);
 
     return MFC_EXIT_SUCCESS;
-}
-
-/**
- * mfc_argument_is_bundle_file:
- *
- * A bundle file is given as a path that starts with `/`, `./` or `../`. We do
- * not look at what exists in the current directory, so a file there can
- * never be installed in place of a component that has the same name.
- *
- * Returns: %TRUE if an argument of the install command names a bundle file,
- *   and not the ID of a component
- */
-static gboolean
-mfc_argument_is_bundle_file(const char *argument)
-{
-    return g_str_has_prefix(argument, "/") || g_str_has_prefix(argument, "./") ||
-           g_str_has_prefix(argument, "../");
 }
 
 /**
