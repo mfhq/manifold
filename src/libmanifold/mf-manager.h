@@ -148,6 +148,24 @@ MfResult          *mf_manager_refresh(MfManager         *manager,
                                       GCancellable      *cancellable,
                                       GError           **error);
 
+void               mf_manager_update_async(MfManager          *manager,
+                                           const char *const  *component_ids,
+                                           MfProgressFunc      progress_func,
+                                           gpointer            progress_data,
+                                           GDestroyNotify      progress_data_destroy,
+                                           GCancellable       *cancellable,
+                                           GAsyncReadyCallback callback,
+                                           gpointer            user_data);
+MfResult          *mf_manager_update_finish(MfManager    *manager,
+                                            GAsyncResult *result,
+                                            GError      **error);
+MfResult          *mf_manager_update(MfManager         *manager,
+                                     const char *const *component_ids,
+                                     MfProgressFunc     progress_func,
+                                     gpointer           progress_data,
+                                     GCancellable      *cancellable,
+                                     GError           **error);
+
 void               mf_manager_mark_component_async(MfManager          *manager,
                                                    const char         *component_id,
                                                    const char         *version,

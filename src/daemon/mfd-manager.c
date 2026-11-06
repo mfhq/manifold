@@ -1651,6 +1651,8 @@ mfd_manager_install_set(MfdManager *manager,
             tracker.total++;
     }
     result = mf_result_new();
+    for (guint i = 0; i < set->warnings->len; i++)
+        mfd_emit_warning(result, "%s", (const char *) g_ptr_array_index(set->warnings, i));
     for (guint i = 0; i < plans->len; i++) {
         MfdInstallPlan *plan = &g_array_index(plans, MfdInstallPlan, i);
         guint64 image_bytes;
@@ -1919,8 +1921,11 @@ mfd_manager_refresh_for_retry(MfdManager *manager,
  * Find the versions that a request installs in the origins of the remotes,
  * together with the bases they need that are not installed, and create an
  * install set from them. We download the manifests, but not the images yet.
+ * A component that an update request can not update is left out, and the
+ * set has a warning about it.
  *
- * Returns: (transfer full): the set, or %NULL on error
+ * Returns: (transfer full): the set, which may have no items for an update
+ *   request, or %NULL on error
  */
 MfdInstallSet *
 mfd_manager_resolve(MfdManager *manager, MfdRepoRequest *request, GError **error)
@@ -1939,19 +1944,37 @@ mfd_manager_resolve(MfdManager *manager, MfdRepoRequest *request, GError **error
 
     for (;;) {
         g_autoptr(MfdOriginSet) origin_set = mfd_origin_set_load(root, error);
+        g_autoptr(GPtrArray) failures = g_ptr_array_new_with_free_func((GDestroyNotify) g_error_free);
         g_autoptr(MfdInstallSet) set = NULL;
         g_autoptr(GError) local_error = NULL;
+        gboolean retry = FALSE;
 
         if (origin_set == NULL)
             return NULL;
 
         set = mfd_install_set_new();
-        if (mfd_resolver_resolve(request, set, manager->store, fetcher, origin_set, &local_error))
-            return g_steal_pointer(&set);
-        if (!mfd_manager_refresh_for_retry(manager, request, set, local_error)) {
+        if (!mfd_resolver_resolve(request,
+                                  set,
+                                  manager->store,
+                                  fetcher,
+                                  origin_set,
+                                  failures,
+                                  &local_error)) {
+            if (mfd_manager_refresh_for_retry(manager, request, set, local_error))
+                continue;
             g_propagate_error(error, g_steal_pointer(&local_error));
             return NULL;
         }
+
+        /* a refresh may fix an update that could not be resolved */
+        for (guint i = 0; i < failures->len && !retry; i++)
+            retry = mfd_manager_refresh_for_retry(manager, request, set, g_ptr_array_index(failures, i));
+        if (retry)
+            continue;
+
+        for (guint i = 0; i < failures->len; i++)
+            g_ptr_array_add(set->warnings, g_strdup(((GError *) g_ptr_array_index(failures, i))->message));
+        return g_steal_pointer(&set);
     }
 }
 

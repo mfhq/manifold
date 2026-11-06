@@ -45,6 +45,22 @@ mfd_repo_request_new_install(const char *component_id, const char *origin)
 }
 
 /**
+ * mfd_repo_request_new_update:
+ * @component_ids: (nullable) (array zero-terminated=1): the components to update,
+ *   or %NULL for every component that was installed from a remote
+ *
+ * Returns: (transfer full): a request to update components from their remotes
+ */
+MfdRepoRequest *
+mfd_repo_request_new_update(const char *const *component_ids)
+{
+    MfdRepoRequest *request = g_new0(MfdRepoRequest, 1);
+
+    request->update_ids = g_strdupv((GStrv) component_ids);
+    return request;
+}
+
+/**
  * mfd_repo_request_free:
  */
 void
@@ -54,6 +70,7 @@ mfd_repo_request_free(MfdRepoRequest *request)
         return;
     g_free(request->component_id);
     g_free(request->origin);
+    g_strfreev(request->update_ids);
     g_free(request);
 }
 
@@ -233,6 +250,8 @@ mfd_resolver_find_item(MfdResolver *resolver, const char *component_id, MfRepoVe
 /**
  * mfd_resolver_add_with_bases:
  * @dependency: whether the version is only installed because another component needs it
+ * @need_bases: %TRUE to fail if no origin has a needed base, %FALSE to leave
+ *   the base out, so the installation reports that it is missing
  *
  * Add a version of a component to the set, together with the bases it needs
  * that are neither installed nor in the set.
@@ -245,6 +264,7 @@ mfd_resolver_add_with_bases(MfdResolver *resolver,
                             const char *component_id,
                             MfRepoVersion *version,
                             gboolean dependency,
+                            gboolean need_bases,
                             GError **error)
 {
     MfdInstallItem *item = mfd_resolver_find_item(resolver, component_id, version);
@@ -287,8 +307,17 @@ mfd_resolver_add_with_bases(MfdResolver *resolver,
             continue;
         }
 
-        /* no origin has the base, so we leave it out, and the installation reports that it is missing */
-        return TRUE;
+        if (need_bases)
+            g_set_error(error,
+                        MF_ERROR,
+                        MF_ERROR_MISSING_BASE,
+                        /* TRANSLATORS: a component and its version, then its base and the version of that */
+                        _("%s %s needs the base %s %s, which is not available in any remote"),
+                        mf_manifest_get_component_id(item->manifest),
+                        mf_manifest_get_version(item->manifest),
+                        mf_manifest_get_base_id(item->manifest),
+                        mf_manifest_get_base_version(item->manifest));
+        return !need_bases;
     }
 }
 
@@ -423,7 +452,253 @@ mfd_resolver_resolve_component(MfdResolver *resolver, MfdRepoRequest *request, G
         0);
     g_info("Installing %s %s from %s", request->component_id, version->version, origin->name);
 
-    return mfd_resolver_add_with_bases(resolver, origin, request->component_id, version, FALSE, error);
+    return mfd_resolver_add_with_bases(resolver, origin, request->component_id, version, FALSE, FALSE, error);
+}
+
+/* an update of a component to the newest version in its origin */
+typedef struct {
+    MfComponent *component; /* the installed version */
+    MfdOrigin *origin;
+    MfRepoVersion *version; /* owned by the component index of @origin */
+} MfdUpdate;
+
+static void
+mfd_update_free(MfdUpdate *update)
+{
+    g_object_unref(update->component);
+    mfd_origin_unref(update->origin);
+    g_free(update);
+}
+
+/**
+ * mfd_component_is_dependency:
+ *
+ * Returns: %TRUE if @component is a runtime that was installed as a dependency
+ *   of another component
+ */
+static gboolean
+mfd_component_is_dependency(MfComponent *component)
+{
+    return mf_component_get_install_mode(component) == MF_INSTALL_MODE_AUTO &&
+           !mf_component_kind_is_always_auto(mf_component_get_kind(component),
+                                             mf_component_is_sdk(component));
+}
+
+/**
+ * mfd_find_followed_bases:
+ * @installed: (element-type MfComponent): every installed version
+ *
+ * Returns: (transfer full) (element-type utf8): the IDs of all components
+ *   that an installed version uses as its base through the `current` link
+ */
+static GHashTable *
+mfd_find_followed_bases(GPtrArray *installed)
+{
+    GHashTable *followed = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+
+    for (guint i = 0; i < installed->len; i++) {
+        g_autoptr(MfBaseLink) link = mf_store_read_base_link(g_ptr_array_index(installed, i), NULL);
+
+        if (link != NULL && link->version_name == NULL)
+            g_hash_table_add(followed, g_strdup(link->component_id));
+    }
+    return followed;
+}
+
+/**
+ * mfd_find_current:
+ *
+ * Returns: (transfer none) (nullable): the current version of a component
+ */
+static MfComponent *
+mfd_find_current(GPtrArray *installed, const char *component_id)
+{
+    for (guint i = 0; i < installed->len; i++) {
+        MfComponent *component = g_ptr_array_index(installed, i);
+
+        if (mf_component_is_current(component) && g_str_equal(mf_component_get_id(component), component_id))
+            return component;
+    }
+    return NULL;
+}
+
+/**
+ * mfd_check_update:
+ * @warnings: (element-type utf8): the list to add a warning to if @component can not be updated
+ *
+ * Check whether the origin of a component has a newer version of it.
+ *
+ * Returns: (transfer full) (nullable): the update, or %NULL if there is none
+ */
+static MfdUpdate *
+mfd_check_update(MfdOriginSet *origin_set, MfComponent *component, GPtrArray *warnings)
+{
+    const char *component_id = mf_component_get_id(component);
+    const char *origin_name = mf_component_get_origin(component);
+    MfdOrigin *origin = mfd_origin_set_find(origin_set, origin_name);
+    MfdUpdate *update;
+    MfRepoVersion *newest;
+    GPtrArray *versions;
+
+    if (origin == NULL) {
+        const GError *problem = mfd_origin_set_find_problem(origin_set, origin_name);
+
+        if (problem != NULL)
+            g_ptr_array_add(warnings,
+                            g_strdup_printf(_("Unable to update %s: %s"), component_id, problem->message));
+        else
+            g_ptr_array_add(warnings,
+                            g_strdup_printf(_("%s was installed from %s, which is no longer configured"),
+                                            component_id,
+                                            origin_name));
+        return NULL;
+    }
+    versions = mf_repo_component_index_get_versions(origin->components, component_id);
+    if (versions == NULL) {
+        g_ptr_array_add(warnings,
+                        g_strdup_printf(_("%s no longer has %s"), origin_name, component_id));
+        return NULL;
+    }
+    newest = g_ptr_array_index(versions, 0);
+    if (mf_version_compare_with_rev(newest->version,
+                                    newest->revision,
+                                    mf_component_get_version(component),
+                                    mf_component_get_revision(component)) <= 0)
+        return NULL;
+
+    update = g_new0(MfdUpdate, 1);
+    update->component = g_object_ref(component);
+    update->origin = mfd_origin_ref(origin);
+    update->version = newest;
+    return update;
+}
+
+/**
+ * mfd_resolver_find_updates:
+ * @component_ids: (nullable) (array zero-terminated=1): the components to
+ *   update, or %NULL for every component from a remote
+ * @warnings: (element-type utf8): the list to add warnings to about components
+ *   that can not be updated
+ * @error: a #GError
+ *
+ * Find the components that have a newer version in their origin.
+ *
+ * Without @component_ids we check every component that was installed from a
+ * remote. We skip runtimes that were installed as a dependency, unless an
+ * installed component uses them through their `current` link. A newer version
+ * of such a runtime would not be used by anything, and the next cleanup would
+ * remove it again.
+ *
+ * Returns: (transfer full) (element-type MfdUpdate): the updates, or %NULL if
+ *   one of @component_ids is not installed, or not from a remote
+ */
+static GPtrArray *
+mfd_resolver_find_updates(MfdResolver *resolver,
+                          const char *const *component_ids,
+                          GPtrArray *warnings,
+                          GError **error)
+{
+    g_autoptr(GPtrArray)
+        installed = mf_store_list_components(resolver->store, NULL, MF_COMPONENT_KIND_UNKNOWN, error);
+    g_autoptr(GPtrArray) candidates = g_ptr_array_new();
+    g_autoptr(GPtrArray) updates = NULL;
+
+    if (installed == NULL)
+        return NULL;
+
+    if (component_ids != NULL) {
+        for (guint i = 0; component_ids[i] != NULL; i++) {
+            MfComponent *component = mfd_find_current(installed, component_ids[i]);
+
+            if (component == NULL) {
+                g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s is not installed"), component_ids[i]);
+                return NULL;
+            }
+            if (g_str_equal(mf_component_get_origin(component), MF_BUNDLE_CATALOG_ORIGIN)) {
+                g_set_error(error,
+                            MF_ERROR,
+                            MF_ERROR_NOT_FOUND,
+                            _("%s was installed from a bundle, so no remote has updates for it"),
+                            component_ids[i]);
+                return NULL;
+            }
+            g_ptr_array_add(candidates, component);
+        }
+    } else {
+        g_autoptr(GHashTable) followed = mfd_find_followed_bases(installed);
+
+        for (guint i = 0; i < installed->len; i++) {
+            MfComponent *component = g_ptr_array_index(installed, i);
+
+            if (!mf_component_is_current(component) ||
+                g_str_equal(mf_component_get_origin(component), MF_BUNDLE_CATALOG_ORIGIN))
+                continue;
+            if (mfd_component_is_dependency(component) &&
+                !g_hash_table_contains(followed, mf_component_get_id(component)))
+                continue;
+            g_ptr_array_add(candidates, component);
+        }
+    }
+
+    updates = g_ptr_array_new_with_free_func((GDestroyNotify) mfd_update_free);
+    for (guint i = 0; i < candidates->len; i++) {
+        MfdUpdate *update = mfd_check_update(resolver->origin_set,
+                                             g_ptr_array_index(candidates, i),
+                                             warnings);
+
+        if (update != NULL)
+            g_ptr_array_add(updates, update);
+    }
+
+    return g_steal_pointer(&updates);
+}
+
+/**
+ * mfd_resolver_resolve_updates:
+ * @updates: (element-type MfdUpdate): the updates to add to the set
+ * @failures: (element-type GError): the list to add an error to for each
+ *   update that could not be resolved
+ *
+ * Add the new versions of the updates to the set, with the bases they need
+ * that are not installed. An update that can not be resolved, e.g. because
+ * a manifest could not be downloaded, is left out, so the other updates are
+ * still installed. A runtime that was installed as a dependency stays
+ * a dependency.
+ */
+static void
+mfd_resolver_resolve_updates(MfdResolver *resolver, GPtrArray *updates, GPtrArray *failures)
+{
+    MfdInstallSet *set = resolver->set;
+
+    for (guint i = 0; i < updates->len; i++) {
+        MfdUpdate *update = g_ptr_array_index(updates, i);
+        const char *component_id = mf_component_get_id(update->component);
+        guint n_items = set->items->len;
+        g_autoptr(GError) error = NULL;
+
+        g_info("Updating %s %s to %s from %s",
+               component_id,
+               mf_component_get_full_version(update->component),
+               update->version->version,
+               update->origin->name);
+        if (mfd_resolver_add_with_bases(resolver,
+                                        update->origin,
+                                        component_id,
+                                        update->version,
+                                        mfd_component_is_dependency(update->component),
+                                        TRUE,
+                                        &error))
+            continue;
+
+        /* remove the items that the failed update added to the set */
+        g_ptr_array_set_size(set->items, n_items);
+        g_ptr_array_add(failures,
+                        g_error_new(error->domain,
+                                    error->code,
+                                    _("Unable to update %s: %s"),
+                                    component_id,
+                                    error->message));
+    }
 }
 
 /**
@@ -433,16 +708,20 @@ mfd_resolver_resolve_component(MfdResolver *resolver, MfdRepoRequest *request, G
  * @store: the store, which has to be loaded
  * @fetcher: the fetcher to download manifests with
  * @origin_set: the origins of the remotes
+ * @failures: (element-type GError): the list to add an error to for each
+ *   update that could not be resolved
  * @error: a #GError
  *
  * Find the versions that a request installs, and add them to @set with the
  * bases they need. We download and verify their manifests, but not their
- * images.
+ * images. A component that an update request can not update is left out,
+ * and @set has a warning about it.
  *
  * NOTE: Even if this function fails, @set lists the remotes that manifests
  * were downloaded from, so the caller can refresh these remotes and try again.
  *
- * Returns: %TRUE if @set has what the request installs
+ * Returns: %TRUE if the versions to install were added to @set. An update
+ *   request adds no versions if no component has an update.
  */
 gboolean
 mfd_resolver_resolve(MfdRepoRequest *request,
@@ -450,9 +729,22 @@ mfd_resolver_resolve(MfdRepoRequest *request,
                      MfStore *store,
                      MfdFetcher *fetcher,
                      MfdOriginSet *origin_set,
+                     GPtrArray *failures,
                      GError **error)
 {
     MfdResolver resolver = {set, store, fetcher, origin_set};
+    g_autoptr(GPtrArray) updates = NULL;
 
-    return mfd_resolver_resolve_component(&resolver, request, error);
+    if (request->component_id != NULL)
+        return mfd_resolver_resolve_component(&resolver, request, error);
+
+    updates = mfd_resolver_find_updates(&resolver,
+                                        (const char *const *) request->update_ids,
+                                        set->warnings,
+                                        error);
+    if (updates == NULL)
+        return FALSE;
+    mfd_resolver_resolve_updates(&resolver, updates, failures);
+
+    return TRUE;
 }
