@@ -37,8 +37,8 @@ MF_BEGIN_PRIVATE_DECLS
 
 extern const sd_varlink_interface vl_interface_org_freedesktop_manifold;
 
-const char *mf_error_to_varlink_id(MfError code);
-gboolean    mf_error_from_varlink_id(const char *error_id,
-                                     MfError    *ret_code);
+const char                       *mf_error_to_varlink_id(MfError code);
+gboolean                          mf_error_from_varlink_id(const char *error_id,
+                                                           MfError    *ret_code);
 
 MF_END_PRIVATE_DECLS

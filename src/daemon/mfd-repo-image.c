@@ -40,8 +40,8 @@ constexpr guint CHUNK_SOURCES_MAX = 4;
 typedef struct {
     MfStore *store;
     MfdFetcher *fetcher;
-    MfdOrigin *origin;
-    MfRepoVersion *version; /* owned by the component index of @origin */
+    MfdRemoteChannel *channel;
+    MfRepoVersion *version; /* owned by the component index of @channel */
 } MfdRepoSource;
 
 static void
@@ -49,7 +49,7 @@ mfd_repo_source_free(MfdRepoSource *source)
 {
     g_object_unref(source->store);
     mfd_fetcher_unref(source->fetcher);
-    mfd_origin_unref(source->origin);
+    mfd_remote_channel_unref(source->channel);
     g_free(source);
 }
 
@@ -330,9 +330,9 @@ mfd_write_repo_image(MfdInstallItem *item,
                      GError **error)
 {
     MfdRepoSource *source = item->source;
-    const char *prefix = source->origin->image_url_prefix;
+    const char *prefix = source->channel->image_url_prefix;
     g_autofree char *location = mf_repo_version_build_image_location(source->version);
-    g_autofree char *url = mf_remote_build_url(source->origin->remote, location);
+    g_autofree char *url = mf_remote_build_url(source->channel->remote, location);
 
     if (prefix != NULL) {
         g_autofree char *external_url = g_strconcat(prefix,
@@ -366,8 +366,8 @@ mfd_write_repo_image(MfdInstallItem *item,
  * @item: an item of an install set
  * @store: the store, which we search for reusable chunks
  * @fetcher: the fetcher to download with
- * @origin: the origin the component is installed from
- * @version: the version of the component, owned by the component index of @origin
+ * @channel: the channel the component is installed from
+ * @version: the version of the component, owned by the component index of @channel
  *
  * Make an item of an install set download its image from a remote.
  */
@@ -375,14 +375,14 @@ void
 mfd_repo_image_set_source(MfdInstallItem *item,
                           MfStore *store,
                           MfdFetcher *fetcher,
-                          MfdOrigin *origin,
+                          MfdRemoteChannel *channel,
                           MfRepoVersion *version)
 {
     MfdRepoSource *source = g_new0(MfdRepoSource, 1);
 
     source->store = g_object_ref(store);
     source->fetcher = mfd_fetcher_ref(fetcher);
-    source->origin = mfd_origin_ref(origin);
+    source->channel = mfd_remote_channel_ref(channel);
     source->version = version;
     item->write_image = mfd_write_repo_image;
     item->source = source;

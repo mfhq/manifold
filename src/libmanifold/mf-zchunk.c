@@ -530,10 +530,11 @@ mf_zchunk_assembly_new(int partial_fd, guint64 header_size, const char *header_s
         !zck_set_soption(assembly->zck, ZCK_VAL_HEADER_DIGEST, header_sha256, strlen(header_sha256)) ||
         !zck_set_ioption(assembly->zck, ZCK_VAL_HEADER_LENGTH, (ssize_t) header_size) ||
         !zck_read_lead(assembly->zck) || !zck_read_header(assembly->zck)) {
-        mf_set_error_from_zck(error,
-                              MF_ERROR_VERIFICATION_FAILED,
-                              assembly->zck,
-                              _("The zchunk file does not have the expected header that matches repo metadata"));
+        mf_set_error_from_zck(
+            error,
+            MF_ERROR_VERIFICATION_FAILED,
+            assembly->zck,
+            _("The zchunk file does not have the expected header that matches repo metadata"));
         return NULL;
     }
     if (zck_get_chunk_hash_type(assembly->zck) != ZCK_HASH_SHA256) {

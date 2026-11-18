@@ -20,7 +20,7 @@
 #include "mfd-image-reader.h"
 #include "mfd-install-set.h"
 #include "mfd-integrator.h"
-#include "mfd-origin.h"
+#include "mfd-remote-channel.h"
 #include "mfd-refresh.h"
 #include "mfd-resolver.h"
 #include "mfd-store-writer.h"
@@ -1930,7 +1930,7 @@ mfd_manager_refresh_for_retry(MfdManager *manager,
  * @request: the request to resolve
  * @error: a #GError
  *
- * Find the versions that a request installs in the origins of the remotes,
+ * Find the versions that a request installs in the channels of the remotes,
  * together with the bases they need that are not installed, and create an
  * install set from them. We download the manifests, but not the images yet.
  * A component that an update request can not update is left out, and the
@@ -1955,13 +1955,13 @@ mfd_manager_resolve(MfdManager *manager, MfdRepoRequest *request, GError **error
     fetcher = mfd_manager_new_fetcher(manager);
 
     for (;;) {
-        g_autoptr(MfdOriginSet) origin_set = mfd_origin_set_load(root, error);
+        g_autoptr(MfdRemoteChannelSet) channel_set = mfd_remote_channel_set_load(root, error);
         g_autoptr(GPtrArray) failures = g_ptr_array_new_with_free_func((GDestroyNotify) g_error_free);
         g_autoptr(MfdInstallSet) set = NULL;
         g_autoptr(GError) local_error = NULL;
         gboolean retry = FALSE;
 
-        if (origin_set == NULL)
+        if (channel_set == NULL)
             return NULL;
 
         set = mfd_install_set_new();
@@ -1969,7 +1969,7 @@ mfd_manager_resolve(MfdManager *manager, MfdRepoRequest *request, GError **error
                                   set,
                                   manager->store,
                                   fetcher,
-                                  origin_set,
+                                  channel_set,
                                   failures,
                                   &local_error)) {
             if (mfd_manager_refresh_for_retry(manager, request, set, local_error))
