@@ -17,7 +17,7 @@
 #include <systemd/sd-varlink.h>
 
 #include <manifold.h>
-#include "mf-interface-private.h"
+#include "mf-manager-interface.h"
 #include "mf-remote-private.h"
 #include "mf-sdautoptr-private.h"
 #include "mf-trusted-keys-private.h"

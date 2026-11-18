@@ -35,11 +35,8 @@ MF_BEGIN_PRIVATE_DECLS
 /* transaction flags */
 #define MF_VARLINK_TRANSACTION_FLAG_ALLOW_INTERACTIVE "allowInteractive"
 
-/* exported so the daemon can serve it */
-MF_INTERNAL_VISIBLE
 extern const sd_varlink_interface vl_interface_org_freedesktop_manifold;
 
-MF_INTERNAL_VISIBLE
 const char *mf_error_to_varlink_id(MfError code);
 gboolean    mf_error_from_varlink_id(const char *error_id,
                                      MfError    *ret_code);

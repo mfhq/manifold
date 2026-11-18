@@ -2,8 +2,6 @@
 # manifold-rund: Service composing mount trees and managing the runtime lifecycle
 #
 
-mf_rund_inc_dir = include_directories('.')
-
 mf_rund_src = [
     'mfr-capture.c',
     'mfr-capture.h',
@@ -13,8 +11,6 @@ mf_rund_src = [
     'mfr-app.h',
     'mfr-image-mounts.c',
     'mfr-image-mounts.h',
-    'mfr-run-interface.c',
-    'mfr-run-interface.h',
     'mfr-service.c',
     'mfr-service.h',
     'mfr-tree.c',
@@ -23,7 +19,8 @@ mf_rund_src = [
 
 manifold_rund_lib = static_library('manifold-rund',
     [mf_rund_src,
-     mf_daemon_shared_src],
+     mf_daemon_shared_src,
+     mf_run_varlink_src],
     c_args: hardening_c_args + ['-DG_LOG_DOMAIN="manifold-rund"'],
     include_directories: [root_inc_dir, shared_inc_dir],
     dependencies: [

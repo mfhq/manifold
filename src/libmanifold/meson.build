@@ -11,7 +11,6 @@ mflib_src = [
     'mf-component.c',
     'mf-error.c',
     'mf-integration.c',
-    'mf-interface.c',
     'mf-json.c',
     'mf-manifest.c',
     'mf-progress.c',
@@ -51,7 +50,6 @@ mflib_priv_headers = [
     'mf-bundle-private.h',
     'mf-component-private.h',
     'mf-integration-private.h',
-    'mf-interface-private.h',
     'mf-json-private.h',
     'mf-macros-private.h',
     'mf-manifest-private.h',
@@ -85,7 +83,8 @@ manifold_lib = library('manifold',
     [mflib_src,
      mflib_pub_headers,
      mflib_priv_headers,
-     mf_version_h],
+     mf_version_h,
+     mf_mngmt_varlink_src],
     soversion: mf_api_level,
     version: mf_version,
     dependencies: [
@@ -102,7 +101,7 @@ manifold_lib = library('manifold',
     # give every function and variable a section of its own, so the linker can drop unused ones
     # when linking against manifold_static_lib
     c_args: ['-ffunction-sections', '-fdata-sections'],
-    include_directories: [root_inc_dir],
+    include_directories: [root_inc_dir, shared_inc_dir],
     install: true,
 )
 

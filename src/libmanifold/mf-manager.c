@@ -16,7 +16,7 @@
 #include <systemd/sd-varlink.h>
 
 #include "mf-component-private.h"
-#include "mf-interface-private.h"
+#include "mf-manager-interface.h"
 #include "mf-progress-private.h"
 #include "mf-remote-info-private.h"
 #include "mf-result-private.h"
