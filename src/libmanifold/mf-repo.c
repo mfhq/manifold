@@ -586,6 +586,34 @@ mf_repo_root_index_is_expired(MfRepoRootIndex *index, GDateTime *now)
     return g_date_time_compare(now, index->valid_until) >= 0;
 }
 
+/**
+ * mf_repo_root_index_check_expiry:
+ * @index: a root index
+ *
+ * Check that a root index has not expired. We do not install anything from
+ * a repository with an expired root index.
+ *
+ * Returns: %TRUE if @index has not expired yet
+ */
+gboolean
+mf_repo_root_index_check_expiry(MfRepoRootIndex *index, GError **error)
+{
+    g_autoptr(GDateTime) now = g_date_time_new_now_utc();
+    g_autofree char *valid_until = NULL;
+
+    if (!mf_repo_root_index_is_expired(index, now))
+        return TRUE;
+
+    valid_until = g_date_time_format_iso8601(index->valid_until);
+    g_set_error(error,
+                MF_ERROR,
+                MF_ERROR_EXPIRED,
+                _("The root index of %s expired at %s"),
+                index->id,
+                valid_until);
+    return FALSE;
+}
+
 static void
 mf_repo_version_free(MfRepoVersion *version)
 {

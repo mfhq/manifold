@@ -19,9 +19,10 @@
 
 /*
  * Find the components to install from the remotes. We look up the requested
- * components in the origins, together with the bases they need that are not
- * installed yet. We download and verify their manifests, and add them to an
- * install set. The images are only downloaded when the set is installed.
+ * components in the channels of the remotes, together with the bases they
+ * need that are not installed yet. We download and verify their manifests,
+ * and add them to an install set. The images are only downloaded when the
+ * set is installed.
  */
 
 /* the highest number of bases that we resolve for one component, each one building on the next */
@@ -30,7 +31,7 @@ constexpr guint BASE_DEPTH_MAX = 8;
 /**
  * mfd_repo_request_new_install:
  * @component_id: the component to install
- * @origin: (nullable): the origin to install it from, or %NULL if only one origin has it
+ * @origin: (nullable): the origin to install it from, or %NULL if only one channel has it
  *
  * Returns: (transfer full): a request to install a component from the remotes
  */
@@ -79,7 +80,7 @@ typedef struct {
     MfdInstallSet *set;
     MfStore *store;
     MfdFetcher *fetcher;
-    MfdOriginSet *origin_set;
+    MfdRemoteChannelSet *channel_set;
 } MfdResolver;
 
 /**
@@ -91,15 +92,15 @@ typedef struct {
  */
 static MfManifest *
 mfd_resolver_fetch_manifest(MfdResolver *resolver,
-                            MfdOrigin *origin,
+                            MfdRemoteChannel *channel,
                             const char *component_id,
                             MfRepoVersion *version,
                             GError **error)
 {
-    g_autofree char *url = mf_remote_build_url(origin->remote, version->manifest_location);
+    g_autofree char *url = mf_remote_build_url(channel->remote, version->manifest_location);
     g_autoptr(GBytes) data = NULL;
 
-    mfd_install_set_add_remote(resolver->set, origin->remote);
+    mfd_install_set_add_remote(resolver->set, channel->remote);
     data = mfd_fetcher_download_file(resolver->fetcher, url, version->manifest.size, error);
     if (data == NULL)
         return NULL;
@@ -116,15 +117,15 @@ mfd_resolver_fetch_manifest(MfdResolver *resolver,
  */
 static MfdInstallItem *
 mfd_resolver_add(MfdResolver *resolver,
-                 MfdOrigin *origin,
+                 MfdRemoteChannel *channel,
                  MfRepoVersion *version,
                  MfManifest *manifest,
                  gboolean dependency)
 {
-    MfdInstallItem *item = mfd_install_set_add(resolver->set, manifest, version->bundle, origin->name);
+    MfdInstallItem *item = mfd_install_set_add(resolver->set, manifest, version->bundle, channel->origin);
 
     item->is_dependency = dependency;
-    mfd_repo_image_set_source(item, resolver->store, resolver->fetcher, origin, version);
+    mfd_repo_image_set_source(item, resolver->store, resolver->fetcher, channel, version);
     return item;
 }
 
@@ -164,10 +165,11 @@ mfd_resolver_has_base(MfdResolver *resolver, MfManifest *manifest)
 
 /**
  * mfd_resolver_find_base:
- * @origin: the origin of the component, which is searched first
- * @ret_item: (out) (transfer none): the item of the base, or %NULL if no origin has it
+ * @channel: the channel of the component, which is searched first
+ * @ret_item: (out) (transfer none): the item of the base, or %NULL if no channel has it
  *
- * Find the base of a component in the origins, and add it to the set.
+ * Find the base of a component in the channels of the remotes, and add it
+ * to the set.
  *
  * A component that needs its exact base only accepts the version and revision
  * its manifest names. Any other component accepts every version that provides
@@ -179,7 +181,7 @@ mfd_resolver_has_base(MfdResolver *resolver, MfManifest *manifest)
  */
 static gboolean
 mfd_resolver_find_base(MfdResolver *resolver,
-                       MfdOrigin *origin,
+                       MfdRemoteChannel *channel,
                        MfManifest *manifest,
                        MfdInstallItem **ret_item,
                        GError **error)
@@ -188,19 +190,19 @@ mfd_resolver_find_base(MfdResolver *resolver,
     const char *base_version = mf_manifest_get_base_version(manifest);
     guint64 base_revision = mf_manifest_get_base_revision(manifest);
     gboolean exact = mf_manifest_needs_exact_base(manifest);
-    GPtrArray *origins = resolver->origin_set->origins;
+    GPtrArray *channels = resolver->channel_set->channels;
     g_autoptr(GPtrArray) order = g_ptr_array_new();
 
     *ret_item = NULL;
-    g_ptr_array_add(order, origin);
-    for (guint i = 0; i < origins->len; i++) {
-        if (g_ptr_array_index(origins, i) != origin)
-            g_ptr_array_add(order, g_ptr_array_index(origins, i));
+    g_ptr_array_add(order, channel);
+    for (guint i = 0; i < channels->len; i++) {
+        if (g_ptr_array_index(channels, i) != channel)
+            g_ptr_array_add(order, g_ptr_array_index(channels, i));
     }
 
     for (guint i = 0; i < order->len; i++) {
-        MfdOrigin *candidate_origin = g_ptr_array_index(order, i);
-        GPtrArray *versions = mf_repo_component_index_get_versions(candidate_origin->components, base_id);
+        MfdRemoteChannel *candidate_channel = g_ptr_array_index(order, i);
+        GPtrArray *versions = mf_repo_component_index_get_versions(candidate_channel->components, base_id);
 
         /* the first pass tries the named version, the second pass all other versions, newest first */
         for (guint pass = 0; versions != NULL && pass < (exact ? 1 : 2); pass++) {
@@ -212,12 +214,12 @@ mfd_resolver_find_base(MfdResolver *resolver,
 
                 if (named != (pass == 0))
                     continue;
-                candidate = mfd_resolver_fetch_manifest(resolver, candidate_origin, base_id, version, error);
+                candidate = mfd_resolver_fetch_manifest(resolver, candidate_channel, base_id, version, error);
                 if (candidate == NULL)
                     return FALSE;
                 if (g_str_equal(mf_manifest_get_identity(candidate),
                                 mf_manifest_get_base_identity(manifest))) {
-                    *ret_item = mfd_resolver_add(resolver, candidate_origin, version, candidate, TRUE);
+                    *ret_item = mfd_resolver_add(resolver, candidate_channel, version, candidate, TRUE);
                     return TRUE;
                 }
             }
@@ -250,7 +252,7 @@ mfd_resolver_find_item(MfdResolver *resolver, const char *component_id, MfRepoVe
 /**
  * mfd_resolver_add_with_bases:
  * @dependency: whether the version is only installed because another component needs it
- * @need_bases: %TRUE to fail if no origin has a needed base, %FALSE to leave
+ * @need_bases: %TRUE to fail if no channel has a needed base, %FALSE to leave
  *   the base out, so the installation reports that it is missing
  *
  * Add a version of a component to the set, together with the bases it needs
@@ -260,7 +262,7 @@ mfd_resolver_find_item(MfdResolver *resolver, const char *component_id, MfRepoVe
  */
 static gboolean
 mfd_resolver_add_with_bases(MfdResolver *resolver,
-                            MfdOrigin *origin,
+                            MfdRemoteChannel *channel,
                             const char *component_id,
                             MfRepoVersion *version,
                             gboolean dependency,
@@ -276,10 +278,10 @@ mfd_resolver_add_with_bases(MfdResolver *resolver,
         return TRUE;
     }
 
-    manifest = mfd_resolver_fetch_manifest(resolver, origin, component_id, version, error);
+    manifest = mfd_resolver_fetch_manifest(resolver, channel, component_id, version, error);
     if (manifest == NULL)
         return FALSE;
-    item = mfd_resolver_add(resolver, origin, version, manifest, dependency);
+    item = mfd_resolver_add(resolver, channel, version, manifest, dependency);
 
     for (guint depth = 0;; depth++) {
         MfdInstallItem *base = NULL;
@@ -297,7 +299,7 @@ mfd_resolver_add_with_bases(MfdResolver *resolver,
             return FALSE;
         }
         if (!mfd_resolver_find_base(resolver,
-                                    mfd_origin_set_find(resolver->origin_set, item->origin),
+                                    mfd_remote_channel_set_find(resolver->channel_set, item->origin),
                                     item->manifest,
                                     &base,
                                     error))
@@ -323,9 +325,9 @@ mfd_resolver_add_with_bases(MfdResolver *resolver,
 
 /**
  * mfd_set_error_not_found:
- * @problems: (element-type MfdOriginProblem): the remotes and channels we can not use
+ * @problems: (element-type MfdRemoteProblem): the remotes and channels we can not use
  *
- * Set an error for a component that no origin has. If some remotes can not
+ * Set an error for a component that no remote has. If some remotes can not
  * be used, the error lists the reasons, as one of those remotes may have the
  * component.
  */
@@ -341,7 +343,7 @@ mfd_set_error_not_found(GError **error, GPtrArray *problems, const char *compone
     }
 
     for (guint i = 0; i < problems->len; i++)
-        g_ptr_array_add(messages, ((MfdOriginProblem *) g_ptr_array_index(problems, i))->error->message);
+        g_ptr_array_add(messages, ((MfdRemoteProblem *) g_ptr_array_index(problems, i))->error->message);
     g_ptr_array_sort_values(messages, (GCompareFunc) g_strcmp0);
     g_ptr_array_add(messages, NULL);
     joined = g_strjoinv("; ", (char **) messages->pdata);
@@ -355,62 +357,58 @@ mfd_set_error_not_found(GError **error, GPtrArray *problems, const char *compone
 }
 
 /**
- * mfd_resolver_choose_origin:
- * @origin_name: (nullable): the origin that was asked for
+ * mfd_resolver_choose_channel:
+ * @origin: (nullable): the origin that was asked for
  *
- * Find the origin to install a component from. This is the requested origin,
- * or the only origin that has the component if none was requested.
+ * Find the channel to install a component from. This is the channel with the
+ * requested origin, or the only channel that has the component if no origin
+ * was requested.
  *
- * Returns: (transfer none): the origin, or %NULL on error
+ * Returns: (transfer none): the channel, or %NULL on error
  */
-static MfdOrigin *
-mfd_resolver_choose_origin(MfdResolver *resolver,
-                           const char *component_id,
-                           const char *origin_name,
-                           GError **error)
+static MfdRemoteChannel *
+mfd_resolver_choose_channel(MfdResolver *resolver,
+                            const char *component_id,
+                            const char *origin,
+                            GError **error)
 {
-    GPtrArray *origins = resolver->origin_set->origins;
+    GPtrArray *channels = resolver->channel_set->channels;
     g_autoptr(GPtrArray) candidates = g_ptr_array_new();
     g_autoptr(GString) names = NULL;
 
-    for (guint i = 0; i < origins->len; i++) {
-        MfdOrigin *origin = g_ptr_array_index(origins, i);
-        gboolean has_component = mf_repo_component_index_get_versions(origin->components, component_id) !=
+    for (guint i = 0; i < channels->len; i++) {
+        MfdRemoteChannel *channel = g_ptr_array_index(channels, i);
+        gboolean has_component = mf_repo_component_index_get_versions(channel->components, component_id) !=
                                  NULL;
 
-        if (origin_name == NULL) {
+        if (origin == NULL) {
             if (has_component)
-                g_ptr_array_add(candidates, origin);
+                g_ptr_array_add(candidates, channel);
             continue;
         }
-        if (!g_str_equal(origin->name, origin_name))
+        if (!g_str_equal(channel->origin, origin))
             continue;
         if (has_component)
-            return origin;
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_NOT_FOUND,
-                    _("%s has no component %s"),
-                    origin_name,
-                    component_id);
+            return channel;
+        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s has no component %s"), origin, component_id);
         return NULL;
     }
 
-    if (origin_name != NULL) {
-        const GError *problem = mfd_origin_set_find_problem(resolver->origin_set, origin_name);
+    if (origin != NULL) {
+        const GError *problem = mfd_remote_channel_set_find_problem(resolver->channel_set, origin);
 
-        /* the requested origin may be one that can not be used */
+        /* the requested channel may be one that can not be used */
         if (problem != NULL)
             g_propagate_error(error, g_error_copy(problem));
         else
-            g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("There is no origin %s"), origin_name);
+            g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("There is no origin %s"), origin);
         return NULL;
     }
 
     if (candidates->len == 1)
         return g_ptr_array_index(candidates, 0);
     if (candidates->len == 0) {
-        mfd_set_error_not_found(error, resolver->origin_set->problems, component_id);
+        mfd_set_error_not_found(error, resolver->channel_set->problems, component_id);
         return NULL;
     }
 
@@ -419,7 +417,7 @@ mfd_resolver_choose_origin(MfdResolver *resolver,
         g_string_append_printf(names,
                                "%s%s",
                                i > 0 ? ", " : "",
-                               ((MfdOrigin *) g_ptr_array_index(candidates, i))->name);
+                               ((MfdRemoteChannel *) g_ptr_array_index(candidates, i))->origin);
     g_set_error(error,
                 MF_ERROR,
                 MF_ERROR_AMBIGUOUS,
@@ -442,31 +440,37 @@ static gboolean
 mfd_resolver_resolve_component(MfdResolver *resolver, MfdRepoRequest *request, GError **error)
 {
     MfRepoVersion *version;
-    MfdOrigin *origin;
+    MfdRemoteChannel *channel;
 
-    origin = mfd_resolver_choose_origin(resolver, request->component_id, request->origin, error);
-    if (origin == NULL)
+    channel = mfd_resolver_choose_channel(resolver, request->component_id, request->origin, error);
+    if (channel == NULL)
         return FALSE;
     version = g_ptr_array_index(
-        mf_repo_component_index_get_versions(origin->components, request->component_id),
+        mf_repo_component_index_get_versions(channel->components, request->component_id),
         0);
-    g_info("Installing %s %s from %s", request->component_id, version->version, origin->name);
+    g_info("Installing %s %s from %s", request->component_id, version->version, channel->origin);
 
-    return mfd_resolver_add_with_bases(resolver, origin, request->component_id, version, FALSE, FALSE, error);
+    return mfd_resolver_add_with_bases(resolver,
+                                       channel,
+                                       request->component_id,
+                                       version,
+                                       FALSE,
+                                       FALSE,
+                                       error);
 }
 
-/* an update of a component to the newest version in its origin */
+/* an update of a component to the newest version in the channel it came from */
 typedef struct {
     MfComponent *component; /* the installed version */
-    MfdOrigin *origin;
-    MfRepoVersion *version; /* owned by the component index of @origin */
+    MfdRemoteChannel *channel;
+    MfRepoVersion *version; /* owned by the component index of @channel */
 } MfdUpdate;
 
 static void
 mfd_update_free(MfdUpdate *update)
 {
     g_object_unref(update->component);
-    mfd_origin_unref(update->origin);
+    mfd_remote_channel_unref(update->channel);
     g_free(update);
 }
 
@@ -526,22 +530,23 @@ mfd_find_current(GPtrArray *installed, const char *component_id)
  * mfd_check_update:
  * @warnings: (element-type utf8): the list to add a warning to if @component can not be updated
  *
- * Check whether the origin of a component has a newer version of it.
+ * Check whether the channel that a component came from has a newer version
+ * of it.
  *
  * Returns: (transfer full) (nullable): the update, or %NULL if there is none
  */
 static MfdUpdate *
-mfd_check_update(MfdOriginSet *origin_set, MfComponent *component, GPtrArray *warnings)
+mfd_check_update(MfdRemoteChannelSet *channel_set, MfComponent *component, GPtrArray *warnings)
 {
     const char *component_id = mf_component_get_id(component);
-    const char *origin_name = mf_component_get_origin(component);
-    MfdOrigin *origin = mfd_origin_set_find(origin_set, origin_name);
+    const char *origin = mf_component_get_origin(component);
+    MfdRemoteChannel *channel = mfd_remote_channel_set_find(channel_set, origin);
     MfdUpdate *update;
     MfRepoVersion *newest;
     GPtrArray *versions;
 
-    if (origin == NULL) {
-        const GError *problem = mfd_origin_set_find_problem(origin_set, origin_name);
+    if (channel == NULL) {
+        const GError *problem = mfd_remote_channel_set_find_problem(channel_set, origin);
 
         if (problem != NULL)
             g_ptr_array_add(warnings,
@@ -550,13 +555,12 @@ mfd_check_update(MfdOriginSet *origin_set, MfComponent *component, GPtrArray *wa
             g_ptr_array_add(warnings,
                             g_strdup_printf(_("%s was installed from %s, which is no longer configured"),
                                             component_id,
-                                            origin_name));
+                                            origin));
         return NULL;
     }
-    versions = mf_repo_component_index_get_versions(origin->components, component_id);
+    versions = mf_repo_component_index_get_versions(channel->components, component_id);
     if (versions == NULL) {
-        g_ptr_array_add(warnings,
-                        g_strdup_printf(_("%s no longer has %s"), origin_name, component_id));
+        g_ptr_array_add(warnings, g_strdup_printf(_("%s no longer has %s"), origin, component_id));
         return NULL;
     }
     newest = g_ptr_array_index(versions, 0);
@@ -568,7 +572,7 @@ mfd_check_update(MfdOriginSet *origin_set, MfComponent *component, GPtrArray *wa
 
     update = g_new0(MfdUpdate, 1);
     update->component = g_object_ref(component);
-    update->origin = mfd_origin_ref(origin);
+    update->channel = mfd_remote_channel_ref(channel);
     update->version = newest;
     return update;
 }
@@ -581,7 +585,7 @@ mfd_check_update(MfdOriginSet *origin_set, MfComponent *component, GPtrArray *wa
  *   that can not be updated
  * @error: a #GError
  *
- * Find the components that have a newer version in their origin.
+ * Find the components that have a newer version in the channel they came from.
  *
  * Without @component_ids we check every component that was installed from a
  * remote. We skip runtimes that were installed as a dependency, unless an
@@ -642,7 +646,7 @@ mfd_resolver_find_updates(MfdResolver *resolver,
 
     updates = g_ptr_array_new_with_free_func((GDestroyNotify) mfd_update_free);
     for (guint i = 0; i < candidates->len; i++) {
-        MfdUpdate *update = mfd_check_update(resolver->origin_set,
+        MfdUpdate *update = mfd_check_update(resolver->channel_set,
                                              g_ptr_array_index(candidates, i),
                                              warnings);
 
@@ -680,9 +684,9 @@ mfd_resolver_resolve_updates(MfdResolver *resolver, GPtrArray *updates, GPtrArra
                component_id,
                mf_component_get_full_version(update->component),
                update->version->version,
-               update->origin->name);
+               update->channel->origin);
         if (mfd_resolver_add_with_bases(resolver,
-                                        update->origin,
+                                        update->channel,
                                         component_id,
                                         update->version,
                                         mfd_component_is_dependency(update->component),
@@ -707,7 +711,7 @@ mfd_resolver_resolve_updates(MfdResolver *resolver, GPtrArray *updates, GPtrArra
  * @set: an empty set, to which the versions to install are added
  * @store: the store, which has to be loaded
  * @fetcher: the fetcher to download manifests with
- * @origin_set: the origins of the remotes
+ * @channel_set: the channels of the remotes
  * @failures: (element-type GError): the list to add an error to for each
  *   update that could not be resolved
  * @error: a #GError
@@ -728,11 +732,11 @@ mfd_resolver_resolve(MfdRepoRequest *request,
                      MfdInstallSet *set,
                      MfStore *store,
                      MfdFetcher *fetcher,
-                     MfdOriginSet *origin_set,
+                     MfdRemoteChannelSet *channel_set,
                      GPtrArray *failures,
                      GError **error)
 {
-    MfdResolver resolver = {set, store, fetcher, origin_set};
+    MfdResolver resolver = {set, store, fetcher, channel_set};
     g_autoptr(GPtrArray) updates = NULL;
 
     if (request->component_id != NULL)

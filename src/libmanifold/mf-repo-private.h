@@ -89,6 +89,9 @@ MfRepoArchitecture *mf_repo_channel_find_architecture(MfRepoChannel *channel,
 MF_INTERNAL_VISIBLE
 gboolean mf_repo_root_index_is_expired(MfRepoRootIndex *index,
                                        GDateTime       *now);
+MF_INTERNAL_VISIBLE
+gboolean mf_repo_root_index_check_expiry(MfRepoRootIndex *index,
+                                         GError         **error);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfRepoRootIndex, mf_repo_root_index_free)
 

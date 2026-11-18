@@ -12,7 +12,7 @@
 
 #include "mfd-fetcher.h"
 #include "mfd-install-set.h"
-#include "mfd-origin.h"
+#include "mfd-remote-channel.h"
 
 G_BEGIN_DECLS
 
@@ -35,12 +35,12 @@ void            mfd_repo_request_free(MfdRepoRequest *request);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdRepoRequest, mfd_repo_request_free)
 
-gboolean mfd_resolver_resolve(MfdRepoRequest *request,
-                              MfdInstallSet  *set,
-                              MfStore        *store,
-                              MfdFetcher     *fetcher,
-                              MfdOriginSet   *origin_set,
-                              GPtrArray      *failures,
-                              GError        **error);
+gboolean mfd_resolver_resolve(MfdRepoRequest      *request,
+                              MfdInstallSet       *set,
+                              MfStore             *store,
+                              MfdFetcher          *fetcher,
+                              MfdRemoteChannelSet *channel_set,
+                              GPtrArray           *failures,
+                              GError             **error);
 
 G_END_DECLS

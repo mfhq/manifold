@@ -18,7 +18,7 @@
 #include "mf-repo-private.h"
 #include "mf-store-private.h"
 #include "mf-utils-private.h"
-#include "mfd-origin.h"
+#include "mfd-remote-channel.h"
 #include "mfd-utils.h"
 
 /*
@@ -404,7 +404,7 @@ static MfRepoRootIndex *
 mfd_read_cached_index(const char *root, MfRemote *remote, MfTrustedKeys *keys, GBytes **ret_data)
 {
     g_autoptr(GError) error = NULL;
-    MfRepoRootIndex *index = mfd_origin_read_root_index(root, remote, keys, ret_data, &error);
+    MfRepoRootIndex *index = mfd_remote_read_cached_root_index(root, remote, keys, ret_data, &error);
 
     /* the trusted keys of the remote may have changed since the last refresh */
     if (index == NULL && !g_error_matches(error, MF_ERROR, MF_ERROR_NOT_FOUND))
@@ -457,7 +457,7 @@ mfd_check_freshness(const char *root,
     }
     *ret_changed = cached == NULL || !g_bytes_equal(data, cached_data);
 
-    return mfd_origin_check_expiry(index, error);
+    return mf_repo_root_index_check_expiry(index, error);
 }
 
 /**

@@ -13,7 +13,6 @@
 #include "mf-remote-private.h"
 #include "mf-signer-private.h"
 #include "mf-trusted-keys-private.h"
-#include "mfd-origin.h"
 #include "mfd-refresh.h"
 #include "mfd-utils.h"
 
@@ -183,7 +182,7 @@ mfd_remotes_inspect(MfdFetcher *fetcher,
     inspection->index = mf_repo_root_index_new_from_signed(index_data, signature, keys, remote_id, error);
     if (inspection->index == NULL)
         return NULL;
-    if (!mfd_origin_check_expiry(inspection->index, error))
+    if (!mf_repo_root_index_check_expiry(inspection->index, error))
         return NULL;
 
     return g_steal_pointer(&inspection);
