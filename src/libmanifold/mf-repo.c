@@ -781,6 +781,77 @@ mf_repo_component_index_get_versions(MfRepoComponentIndex *index, const char *co
     return g_hash_table_lookup(index->components, component_id);
 }
 
+/**
+ * mf_repo_version_read_manifest:
+ * @version: a version of a component, from a component index
+ * @data: the manifest of @version, as the repository serves it
+ * @component_id: the ID of the component that @version belongs to
+ * @architecture: the architecture of the component index
+ *
+ * Verify the manifest of a version against its entry, and parse it. The
+ * manifest has to describe the component, version and architecture that it
+ * is listed for.
+ *
+ * Returns: (transfer full): the manifest, or %NULL
+ */
+MfManifest *
+mf_repo_version_read_manifest(MfRepoVersion *version,
+                              GBytes *data,
+                              const char *component_id,
+                              const char *architecture,
+                              GError **error)
+{
+    g_autofree char *name = g_strdup_printf(_("The manifest of %s"), version->bundle);
+    g_autoptr(GBytes) text = NULL;
+    g_autoptr(MfManifest) manifest = NULL;
+
+    text = mf_repo_open_file(data, &version->manifest, name, MANIFEST_SIZE_MAX, error);
+    if (text == NULL)
+        return NULL;
+    manifest = mf_manifest_new_from_bytes(text, error);
+    if (manifest == NULL) {
+        g_prefix_error(error, "%s: ", version->bundle);
+        return NULL;
+    }
+
+    if (!g_str_equal(mf_manifest_get_component_id(manifest), component_id) ||
+        !g_str_equal(mf_manifest_get_version(manifest), version->version) ||
+        mf_manifest_get_revision(manifest) != version->revision ||
+        !g_str_equal(mf_manifest_get_architecture(manifest), architecture)) {
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_INVALID_REPOSITORY,
+                    /* TRANSLATORS: a bundle ID, then the component, version, revision and architecture
+                     * of what its manifest describes instead */
+                    _("The manifest of %s describes %s %s (revision %" G_GUINT64_FORMAT ") for %s"),
+                    version->bundle,
+                    mf_manifest_get_component_id(manifest),
+                    mf_manifest_get_version(manifest),
+                    mf_manifest_get_revision(manifest),
+                    mf_manifest_get_architecture(manifest));
+        return NULL;
+    }
+
+    return g_steal_pointer(&manifest);
+}
+
+/**
+ * mf_repo_version_build_image_location:
+ *
+ * The image of a version is in the same directory as its manifest, and has
+ * the same base name.
+ *
+ * Returns: (transfer full): the path of the image of @version, relative to
+ *   the repository root
+ */
+char *
+mf_repo_version_build_image_location(MfRepoVersion *version)
+{
+    int stem_length = (int) (strlen(version->manifest_location) - strlen(MANIFEST_SUFFIX));
+
+    return g_strdup_printf("%.*s%s", stem_length, version->manifest_location, MF_REPO_IMAGE_SUFFIX);
+}
+
 /*
  * The icon index
  */

@@ -74,6 +74,26 @@ MfResult          *mf_manager_install_file(MfManager     *manager,
                                            GCancellable  *cancellable,
                                            GError       **error);
 
+void               mf_manager_install_component_async(MfManager          *manager,
+                                                      const char         *component_id,
+                                                      const char         *origin,
+                                                      MfProgressFunc      progress_func,
+                                                      gpointer            progress_data,
+                                                      GDestroyNotify      progress_data_destroy,
+                                                      GCancellable       *cancellable,
+                                                      GAsyncReadyCallback callback,
+                                                      gpointer            user_data);
+MfResult          *mf_manager_install_component_finish(MfManager    *manager,
+                                                       GAsyncResult *result,
+                                                       GError      **error);
+MfResult          *mf_manager_install_component(MfManager     *manager,
+                                                const char    *component_id,
+                                                const char    *origin,
+                                                MfProgressFunc progress_func,
+                                                gpointer       progress_data,
+                                                GCancellable  *cancellable,
+                                                GError       **error);
+
 void               mf_manager_remove_component_async(MfManager          *manager,
                                                      const char         *component_id,
                                                      const char         *version,

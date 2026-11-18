@@ -32,14 +32,15 @@ GPtrArray *mf_remote_list_for_dirs(const char *vendor_dir,
                                    GError    **error);
 
 MF_INTERNAL_VISIBLE
+char *mf_remote_build_url(MfRemote   *remote,
+                          const char *location);
+
+MF_INTERNAL_VISIBLE
 char *mf_origin_build_name(const char *remote_id,
                            const char *channel);
 MF_INTERNAL_VISIBLE
 gboolean mf_origin_split_name(const char  *origin,
                               char       **ret_remote_id,
                               const char **ret_channel);
-MF_INTERNAL_VISIBLE
-char *mf_remote_build_url(MfRemote   *remote,
-                          const char *location);
 
 MF_END_PRIVATE_DECLS

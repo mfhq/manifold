@@ -7,10 +7,11 @@
   <vendor>Manifold</vendor>
   <vendor_url>https://github.com/ximion/manifold</vendor_url>
 
-  <!-- A trusted bundle is one whose signature verifies against a key the host trusts -->
+  <!-- Trusted components come from a configured remote, or from a bundle whose signature
+       verifies against a key the host trusts -->
   <action id="org.freedesktop.manifold.install">
     <description>Install trusted components</description>
-    <message>Authentication is required to install a software bundle</message>
+    <message>Authentication is required to install software from a configured repository</message>
     <defaults>
       <allow_any>auth_admin</allow_any>
       <allow_inactive>auth_admin</allow_inactive>

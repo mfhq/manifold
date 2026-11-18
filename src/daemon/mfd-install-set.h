@@ -40,8 +40,8 @@ struct _MfdInstallItem {
     MfManifest      *manifest;
     char            *name;          /* the name of the item in log and error messages */
     char            *origin;        /* the origin of the component, see mf_component_get_origin() */
-    GBytes          *catalog;       /* the catalog data of a bundle */
-    GHashTable      *icons;         /* (element-type utf8 GBytes): the icons of a bundle */
+    GBytes          *catalog;       /* the catalog data of a bundle, or NULL for a component of a remote */
+    GHashTable      *icons;         /* (element-type utf8 GBytes): the icons of a bundle, or NULL */
     gboolean         is_dependency; /* the component is only installed because another one needs it */
 
     MfdItemWriteFunc write_image;
@@ -55,11 +55,20 @@ struct _MfdInstallItem {
  * The set of components that one operation installs.
  */
 typedef struct {
-    GPtrArray *items; /* (element-type MfdInstallItem) */
+    GPtrArray *items;   /* (element-type MfdInstallItem) */
+    GPtrArray *remotes; /* (element-type MfRemote): the remotes that manifests were downloaded from */
 } MfdInstallSet;
 
+MfdInstallSet  *mfd_install_set_new(void);
 MfdInstallSet  *mfd_install_set_new_for_bundle(MfBundle *bundle);
 void            mfd_install_set_free(MfdInstallSet *set);
+
+MfdInstallItem *mfd_install_set_add(MfdInstallSet *set,
+                                    MfManifest    *manifest,
+                                    const char    *name,
+                                    const char    *origin);
+void            mfd_install_set_add_remote(MfdInstallSet *set,
+                                           MfRemote      *remote);
 
 MfdInstallItem *mfd_install_set_find_identity(MfdInstallSet *set,
                                               const char    *identity);

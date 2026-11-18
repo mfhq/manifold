@@ -11,6 +11,7 @@
 #include <appstream.h>
 
 #include "mf-component-private.h"
+#include "mf-manifest-private.h"
 #include "mf-result-private.h"
 #include "mf-store-private.h"
 #include "mf-progress-private.h"
@@ -19,7 +20,9 @@
 #include "mfd-image-reader.h"
 #include "mfd-install-set.h"
 #include "mfd-integrator.h"
+#include "mfd-origin.h"
 #include "mfd-refresh.h"
+#include "mfd-resolver.h"
 #include "mfd-store-writer.h"
 #include "mfd-utils.h"
 
@@ -775,9 +778,7 @@ mfd_manager_plan_item_install(MfdManager *manager,
         MfComponentKind base_kind;
         gboolean base_sdk;
 
-        /* a platform and an SDK need the exact version they were built against,
-         * everything else builds on whatever provides the identity of its base */
-        if (sdk || kind == MF_COMPONENT_KIND_PLATFORM) {
+        if (mf_manifest_needs_exact_base(manifest)) {
             if (!mfd_manager_resolve_exact_base(manager, set, manifest, iplan, &base_kind, &base_sdk)) {
                 g_autofree char *base_version_name = mf_build_full_version(
                     base_version,
@@ -1437,10 +1438,12 @@ mfd_manager_execute_install_plan(MfdManager *manager,
     *ret_bytes_added = 0;
     /* before we write anything else, build the catalog data for the local origin,
      * so a failure leaves nothing behind */
-    catalog = mfd_make_local_appstream_catalog(item->catalog, error);
-    if (catalog == NULL) {
-        g_prefix_error(error, "%s: ", component_id);
-        return FALSE;
+    if (item->catalog != NULL) {
+        catalog = mfd_make_local_appstream_catalog(item->catalog, error);
+        if (catalog == NULL) {
+            g_prefix_error(error, "%s: ", component_id);
+            return FALSE;
+        }
     }
 
     if (iplan->add_image)
@@ -1852,6 +1855,119 @@ mfd_manager_set_fetch_helper(MfdManager *manager, const char *helper_path, const
 }
 
 /**
+ * mfd_manager_new_fetcher:
+ *
+ * Returns: (transfer full): a fetcher for the download helper
+ */
+static MfdFetcher *
+mfd_manager_new_fetcher(MfdManager *manager)
+{
+    return mfd_fetcher_new(manager->fetch_helper, manager->fetch_ca_file);
+}
+
+/**
+ * mfd_manager_refresh_for_retry:
+ * @manager: an #MfdManager
+ * @request: the request that failed
+ * @set: the set that was resolved or installed for @request
+ * @failure: the error that @request failed with
+ *
+ * Refresh the remotes that a failed request downloaded from, if that may fix
+ * the failure.
+ *
+ * The files of a repository change when it publishes a new root index. The
+ * files we download then do not match the cached metadata anymore, and the
+ * verification or the download fails. In this case we refresh the remotes,
+ * and the caller tries the request again. We do this only once for a request.
+ *
+ * Returns: %TRUE if the caller should try again, because a remote has a new
+ *   root index now
+ */
+gboolean
+mfd_manager_refresh_for_retry(MfdManager *manager,
+                              MfdRepoRequest *request,
+                              MfdInstallSet *set,
+                              const GError *failure)
+{
+    g_autoptr(MfdFetcher) fetcher = NULL;
+    gboolean changed = FALSE;
+
+    g_return_val_if_fail(MFD_IS_MANAGER(manager), FALSE);
+
+    if (request->refreshed || set->remotes->len == 0 ||
+        !(g_error_matches(failure, MF_ERROR, MF_ERROR_VERIFICATION_FAILED) ||
+          g_error_matches(failure, MF_ERROR, MF_ERROR_DOWNLOAD_FAILED)))
+        return FALSE;
+    request->refreshed = TRUE;
+
+    fetcher = mfd_manager_new_fetcher(manager);
+    for (guint i = 0; i < set->remotes->len; i++) {
+        MfRemote *remote = g_ptr_array_index(set->remotes, i);
+        g_autoptr(GError) local_error = NULL;
+        gboolean remote_changed = FALSE;
+
+        g_message("Refreshing %s, as its files may have changed: %s",
+                  mf_remote_get_id(remote),
+                  failure->message);
+        if (!mfd_refresh_remote(mf_store_get_path(manager->store),
+                                fetcher,
+                                remote,
+                                NULL,
+                                &remote_changed,
+                                &local_error))
+            g_warning("Unable to refresh %s: %s", mf_remote_get_id(remote), local_error->message);
+        changed |= remote_changed;
+    }
+
+    return changed;
+}
+
+/**
+ * mfd_manager_resolve:
+ * @manager: an #MfdManager
+ * @request: the request to resolve
+ * @error: a #GError
+ *
+ * Find the versions that a request installs in the origins of the remotes,
+ * together with the bases they need that are not installed, and create an
+ * install set from them. We download the manifests, but not the images yet.
+ *
+ * Returns: (transfer full): the set, or %NULL on error
+ */
+MfdInstallSet *
+mfd_manager_resolve(MfdManager *manager, MfdRepoRequest *request, GError **error)
+{
+    g_autoptr(MfdFetcher) fetcher = NULL;
+    const char *root;
+
+    g_return_val_if_fail(MFD_IS_MANAGER(manager), NULL);
+
+    if (!mfd_store_writer_ensure_root(manager->writer, error))
+        return NULL;
+    if (!mf_store_load(manager->store, error))
+        return NULL;
+    root = mf_store_get_path(manager->store);
+    fetcher = mfd_manager_new_fetcher(manager);
+
+    for (;;) {
+        g_autoptr(MfdOriginSet) origin_set = mfd_origin_set_load(root, error);
+        g_autoptr(MfdInstallSet) set = NULL;
+        g_autoptr(GError) local_error = NULL;
+
+        if (origin_set == NULL)
+            return NULL;
+
+        set = mfd_install_set_new();
+        if (mfd_resolver_resolve(request, set, manager->store, fetcher, origin_set, &local_error))
+            return g_steal_pointer(&set);
+        if (!mfd_manager_refresh_for_retry(manager, request, set, local_error)) {
+            g_propagate_error(error, g_steal_pointer(&local_error));
+            return NULL;
+        }
+    }
+}
+
+/**
  * mfd_manager_refresh:
  * @manager: an #MfdManager
  * @remote_ids: (nullable) (array zero-terminated=1): the remotes to refresh, or %NULL for all
@@ -1902,7 +2018,7 @@ mfd_manager_refresh(MfdManager *manager,
         }
     }
 
-    fetcher = mfd_fetcher_new(manager->fetch_helper, manager->fetch_ca_file);
+    fetcher = mfd_manager_new_fetcher(manager);
 
     tracker.total = remotes->len;
     for (guint i = 0; i < remotes->len; i++) {

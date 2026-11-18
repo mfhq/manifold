@@ -10,7 +10,7 @@ the metadata of a repository on a local https server. manifoldd downloads
 everything with the download helper, which it starts itself.
 
 Usage: mf-test-sandbox test-remote.py --daemon manifoldd --fetch-helper manifold-fetch
-           --client manifold --remotes-dir DIR
+           --client manifold --remotes-dir DIR --zchunk-tool mf-test-zchunk
 """
 
 import argparse
@@ -63,7 +63,7 @@ class RemoteTest(unittest.TestCase):
                     else os.unlink(full)
                 )
         self.server.reset()
-        self.repo = Repository(self.server, 'example', self.key)
+        self.repo = Repository(self.server, 'example', self.key, ARGS.zchunk_tool)
         self.daemon = Daemon(
             ARGS.daemon,
             f'{RUNTIME_DIR}/test-manifoldd.sock',
@@ -74,6 +74,16 @@ class RemoteTest(unittest.TestCase):
 
     def tearDown(self):
         self.daemon.stop()
+
+    def run(self, result=None):
+        """Run a test, and if it fails, show what the daemon logged."""
+        result = result if result is not None else self.defaultTestResult()
+        problems = len(result.failures) + len(result.errors)
+        super().run(result)
+        if len(result.failures) + len(result.errors) > problems:
+            with open(os.path.join(self.work, 'manifoldd.log'), encoding='utf-8') as f:
+                sys.stderr.write(f'--- the daemon logged:\n{f.read()}---\n')
+        return result
 
     def configure_remote(self, remote_id='example', channels=None, key=None):
         """
@@ -274,6 +284,7 @@ if __name__ == '__main__':
     parser.add_argument('--fetch-helper', required=True)
     parser.add_argument('--client', required=True)
     parser.add_argument('--remotes-dir', required=True)
+    parser.add_argument('--zchunk-tool', required=True)
     ARGS, remaining = parser.parse_known_args()
     # these tools make up the repository
     missing = [tool for tool in ('b3sum', 'openssl', 'ssh-keygen') if shutil.which(tool) is None]

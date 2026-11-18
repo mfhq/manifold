@@ -789,6 +789,22 @@ mf_manifest_get_image_checksum(MfManifest *manifest, MfChecksumKind kind)
 }
 
 /**
+ * mf_manifest_needs_exact_base:
+ *
+ * A platform and an SDK need the exact version and revision of the base they
+ * were built against. All other components work with any version that
+ * provides the identity of their base.
+ *
+ * Returns: %TRUE if @manifest needs the exact version and revision of its base
+ */
+gboolean
+mf_manifest_needs_exact_base(MfManifest *manifest)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), FALSE);
+    return mf_manifest_is_sdk(manifest) || mf_manifest_get_kind(manifest) == MF_COMPONENT_KIND_PLATFORM;
+}
+
+/**
  * mf_manifest_image_matches:
  * @entry: the size and hashes of a file
  *

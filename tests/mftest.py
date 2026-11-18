@@ -493,26 +493,57 @@ class HttpsServer:
         self.server.server_close()
 
 
+def _version_key(version):
+    """Sort versions the way they compare, closely enough for the versions of the tests."""
+    return [
+        (0, int(part), '') if part.isdigit() else (1, 0, part)
+        for part in re.findall(r'\d+|\D+', version)
+    ]
+
+
 class Repository:
     """
     A repository in the format of docs/repository-format.rst, which an
     HttpsServer serves below /<id>. Components are added to channels, and
     publish() puts their metadata on the server, signed with the key at `key`.
+
+    A component added with add_component() only has metadata, which is enough
+    to refresh. One added with add_image() can be installed: the repository
+    serves its manifest, and its image as a zchunk file that `zchunk_tool`
+    writes, in its pool unless `pool_images` is false. A channel with a path in
+    `image_paths` also serves its images there, behind a redirect like the
+    one of release assets on GitHub, and names that place as its image-url-prefix.
     """
 
-    def __init__(self, server, repo_id, key):
+    def __init__(self, server, repo_id, key, zchunk_tool=None):
         self.server = server
         self.id = repo_id
         self.key = key
+        self.zchunk_tool = zchunk_tool
         self.serial = 1
         self.summary = 'Example applications'
         self.publisher = None
         self.valid_until = '2099-06-01T12:00:00Z'
         self.channels = {}
+        self.image_paths = {}
+        self.pool_images = True
         self.url = f'{server.url}/{repo_id}'
+        self._zchunk_files = {}
 
     def add_component(self, channel, component_id, version='1.0', icon=None):
-        self.channels.setdefault(channel, {})[component_id] = (version, icon)
+        """Add a component in one version, which has no manifest or image to download."""
+        self.channels.setdefault(channel, {})[component_id] = [
+            {'version': version, 'revision': 1, 'icon': icon, 'image': None}
+        ]
+
+    def add_image(self, channel, image, icon=None):
+        """Add a version of a component that can be installed, next to the versions it has."""
+        versions = self.channels.setdefault(channel, {}).setdefault(image.component, [])
+        versions[:] = [v for v in versions if v['version'] != image.version]
+        versions.append(
+            {'version': image.version, 'revision': image.revision, 'icon': icon, 'image': image}
+        )
+        versions.sort(key=lambda v: (_version_key(v['version']), v['revision']), reverse=True)
 
     def remove_component(self, channel, component_id):
         del self.channels[channel][component_id]
@@ -520,28 +551,73 @@ class Repository:
     def _serve(self, path, data):
         self.server.files[f'/{self.id}/{path}'] = data
 
+    def zchunk_file(self, image):
+        """The zchunk file of an image, and its header size and checksum."""
+        if image.data not in self._zchunk_files:
+            with tempfile.TemporaryDirectory() as work:
+                with open(f'{work}/image.raw', 'wb') as f:
+                    f.write(image.data)
+                result = subprocess.run(
+                    [self.zchunk_tool, f'{work}/image.raw', f'{work}/image.raw.zck'],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                with open(f'{work}/image.raw.zck', 'rb') as f:
+                    size, sha256 = result.stdout.split()
+                    self._zchunk_files[image.data] = (f.read(), int(size), sha256)
+        return self._zchunk_files[image.data]
+
+    def image_url(self, channel, image):
+        """Return the path of the external copy of an image, which redirects to the image."""
+        return f'{self.image_paths[channel]}/{image.verity_hash}.raw.zck'
+
+    def _version_entry(self, channel, component_id, version):
+        """Make the entry of a version in the component index, and put the files it names on
+        the server."""
+        arch = host_architecture()
+        image = version['image']
+        if image is None:
+            return {
+                'bundle': f'{arch}/{component_id}/{version["version"]}',
+                'version': version['version'],
+                'revision': version['revision'],
+                'manifest': {
+                    'location': f'pool/{component_id}/{fake_hash(component_id + version["version"])}.json.zst',
+                    'size': 100,
+                    'sha256': fake_hash('sha256'),
+                    'blake3': fake_hash('blake3'),
+                },
+                'zck-header': {'size': 100, 'sha256': fake_hash('zck')},
+            }
+
+        manifest = zstd_compress(json.dumps(image.manifest(), indent=3).encode())
+        zchunk, header_size, header_sha256 = self.zchunk_file(image)
+        self._serve(f'pool/{image.verity_hash}.json.zst', manifest)
+        if self.pool_images:
+            self._serve(f'pool/{image.verity_hash}.raw.zck', zchunk)
+        if channel in self.image_paths:
+            location = f'/objects/{image.verity_hash}'
+            self.server.redirects[self.image_url(channel, image)] = f'{self.server.url}{location}'
+            self.server.files[location] = zchunk
+        return {
+            'bundle': f'{arch}/{component_id}/{image.version}',
+            'version': image.version,
+            'revision': image.revision,
+            'manifest': {'location': f'pool/{image.verity_hash}.json.zst', **file_entry(manifest)},
+            'zck-header': {'size': header_size, 'sha256': header_sha256},
+        }
+
     def _publish_channel(self, name, components):
         arch = host_architecture()
         index = {'components': {}}
         catalog = []
         icons = {}
-        for component_id, (version, icon) in components.items():
+        for component_id, versions in components.items():
             index['components'][component_id] = {
-                'versions': [
-                    {
-                        'bundle': f'{arch}/{component_id}/{version}',
-                        'version': version,
-                        'revision': 1,
-                        'manifest': {
-                            'location': f'pool/{component_id}/{fake_hash(component_id + version)}.json.zst',
-                            'size': 100,
-                            'sha256': fake_hash('sha256'),
-                            'blake3': fake_hash('blake3'),
-                        },
-                        'zck-header': {'size': 100, 'sha256': fake_hash('zck')},
-                    }
-                ]
+                'versions': [self._version_entry(name, component_id, v) for v in versions]
             }
+            version, icon = versions[0]['version'], versions[0]['icon']
             icon_xml = ''
             if icon is not None:
                 location = f'{name}/{arch}/media/{component_id}/{hashlib.sha256(icon).hexdigest()[:16]}.jxl'
@@ -564,11 +640,14 @@ class Repository:
         }
         for file_name, data in files.items():
             self._serve(f'{name}/{arch}/{file_name}', data)
-        return {
+        channel = {
             'architectures': {
                 arch: {file_name: file_entry(data) for file_name, data in files.items()}
             }
         }
+        if name in self.image_paths:
+            channel['image-url-prefix'] = f'{self.server.url}{self.image_paths[name]}'
+        return channel
 
     def publish(self):
         """Put the metadata on the server, and return the root index as served."""

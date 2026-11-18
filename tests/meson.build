@@ -29,6 +29,13 @@ test_sandbox_exe = executable('mf-test-sandbox',
     dependencies: [mft_test_utils_dep],
 )
 
+# writes the zchunk files of the repositories that the end-to-end tests make up
+test_zchunk_exe = executable('mf-test-zchunk',
+    ['mft-zchunk-main.c'],
+    include_directories: [root_inc_dir],
+    dependencies: [manifold_dep],
+)
+
 #
 # Unit tests
 #
@@ -163,13 +170,14 @@ test('installer',
     timeout: 120,
 )
 
-# refreshes remotes from a local https server, in the sandbox
+# refreshes remotes from a local https server, and installs from them, in the sandbox
 test('remotes',
     test_sandbox_exe,
     args: [python_exe.full_path(), files('test-remote.py'),
            '--daemon', manifoldd_exe.full_path(), '--fetch-helper', manifold_fetch_exe.full_path(),
-           '--client', manifold_exe.full_path(), '--remotes-dir', mf_sysconfdir / 'remotes'],
-    depends: [manifoldd_exe, manifold_fetch_exe, manifold_exe],
+           '--client', manifold_exe.full_path(), '--remotes-dir', mf_sysconfdir / 'remotes',
+           '--zchunk-tool', test_zchunk_exe.full_path()],
+    depends: [manifoldd_exe, manifold_fetch_exe, manifold_exe, test_zchunk_exe],
     suite: 'e2e',
     timeout: 120,
 )
