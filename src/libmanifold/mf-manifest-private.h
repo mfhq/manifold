@@ -15,4 +15,7 @@ MF_BEGIN_PRIVATE_DECLS
 gboolean mf_manifest_image_matches(MfManifest        *manifest,
                                    const MfFileEntry *entry);
 
+MF_INTERNAL_VISIBLE
+gboolean mf_manifest_needs_exact_base(MfManifest *manifest);
+
 MF_END_PRIVATE_DECLS

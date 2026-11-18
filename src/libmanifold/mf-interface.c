@@ -136,6 +136,17 @@ static SD_VARLINK_DEFINE_METHOD_FULL(
     MF_OPERATION_OUTPUT);
 
 static SD_VARLINK_DEFINE_METHOD_FULL(
+    InstallComponent,
+    SD_VARLINK_SUPPORTS_MORE,
+    SD_VARLINK_FIELD_COMMENT("Identifier of the component to install, in its newest version."),
+    SD_VARLINK_DEFINE_INPUT(componentId, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The origin to install the component from, '<remote>-<channel>'. "
+                             "Only needed if more than one origin has the component."),
+    SD_VARLINK_DEFINE_INPUT(origin, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    MF_TRANSACTION_FLAGS_INPUT,
+    MF_OPERATION_OUTPUT);
+
+static SD_VARLINK_DEFINE_METHOD_FULL(
     RemoveComponent,
     SD_VARLINK_SUPPORTS_MORE,
     SD_VARLINK_FIELD_COMMENT("Identifier of the component to remove."),
@@ -278,6 +289,10 @@ static SD_VARLINK_DEFINE_ERROR(
     DownloadFailed,
     MF_ERROR_MESSAGE_FIELD);
 
+static SD_VARLINK_DEFINE_ERROR(
+    Ambiguous,
+    MF_ERROR_MESSAGE_FIELD);
+
 SD_VARLINK_DEFINE_INTERFACE(
     org_freedesktop_manifold,
     MF_INTERFACE,
@@ -305,6 +320,9 @@ SD_VARLINK_DEFINE_INTERFACE(
     SD_VARLINK_SYMBOL_COMMENT("Install the components of a bundle, which is passed as a file descriptor. "
                               "Called with the 'more' flag, reports its progress. Privileged."),
     &vl_method_InstallFile,
+    SD_VARLINK_SYMBOL_COMMENT("Install a component from the remotes, with the bases it needs that are not installed. "
+                              "Called with the 'more' flag, reports its progress. Privileged."),
+    &vl_method_InstallComponent,
     SD_VARLINK_SYMBOL_COMMENT("Remove a component, or one version of it. "
                               "Called with the 'more' flag, reports its progress. Privileged."),
     &vl_method_RemoveComponent,
@@ -351,7 +369,10 @@ SD_VARLINK_DEFINE_INTERFACE(
     SD_VARLINK_SYMBOL_COMMENT("The metadata of a repository has expired, so no component is installed from the repository."),
     &vl_error_Expired,
     SD_VARLINK_SYMBOL_COMMENT("A file could not be downloaded."),
-    &vl_error_DownloadFailed);
+    &vl_error_DownloadFailed,
+    SD_VARLINK_SYMBOL_COMMENT("The request is ambiguous, e.g. several origins have the "
+                              "component. The message names them."),
+    &vl_error_Ambiguous);
 
 /* clang-format on */
 
@@ -377,6 +398,7 @@ static const struct {
     {MF_ERROR_INVALID_REPOSITORY,  MF_INTERFACE ".InvalidRepository" },
     {MF_ERROR_EXPIRED,             MF_INTERFACE ".Expired"           },
     {MF_ERROR_DOWNLOAD_FAILED,     MF_INTERFACE ".DownloadFailed"    },
+    {MF_ERROR_AMBIGUOUS,           MF_INTERFACE ".Ambiguous"         },
 };
 
 /**

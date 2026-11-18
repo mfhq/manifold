@@ -128,7 +128,8 @@ mfd_store_writer_add_image(MfdStoreWriter *writer,
     g_autofree char *path = mf_store_image_path_at(mf_store_get_path(writer->store), verity_hash);
     g_autofree char *images_dir = mfd_store_writer_get_path(writer, MF_STORE_IMAGES_SUBDIR, NULL);
 
-    if (!glnx_open_tmpfile_linkable_at(AT_FDCWD, images_dir, O_WRONLY | O_CLOEXEC, &tmpf, error))
+    /* we open the file for reading too, so the write function can verify the data that it wrote */
+    if (!glnx_open_tmpfile_linkable_at(AT_FDCWD, images_dir, O_RDWR | O_CLOEXEC, &tmpf, error))
         return FALSE;
     if (!write_func(tmpf.fd, user_data, error))
         return FALSE;
@@ -367,8 +368,10 @@ mfd_store_writer_write_files(const char *version_dir, const char *subdir, GHashT
  * @writer: the #MfdStoreWriter
  * @manifest: the manifest of the component, as it was in the bundle
  * @base: (nullable): link to the base of the component, or %NULL for a core
- * @catalog: the AppStream catalog data of the component, for the local origin
- * @icons: (element-type utf8 GBytes): the icons of the component by their size directory and file name
+ * @catalog: (nullable): the AppStream catalog data of the component, for the local origin,
+ *   or %NULL if its origin has a catalog of its own
+ * @icons: (nullable) (element-type utf8 GBytes): the icons of the component by their size
+ *   directory and file name, or %NULL
  * @exports: (nullable) (element-type utf8 GBytes): the files the component installs on the host,
  *   by their export path
  * @origin: the origin of the component, see mf_component_get_origin()
@@ -460,13 +463,13 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
                                  (gssize) manifest_size,
                                  error))
         goto out;
-    if (!mfd_write_contents_safe(tmp_dir,
-                                 catalog_name,
-                                 g_bytes_get_data(catalog, NULL),
-                                 (gssize) g_bytes_get_size(catalog),
-                                 error))
+    if (catalog != NULL && !mfd_write_contents_safe(tmp_dir,
+                                                    catalog_name,
+                                                    g_bytes_get_data(catalog, NULL),
+                                                    (gssize) g_bytes_get_size(catalog),
+                                                    error))
         goto out;
-    if (!mfd_store_writer_write_files(tmp_dir, MF_STORE_ICONS_NAME, icons, error))
+    if (icons != NULL && !mfd_store_writer_write_files(tmp_dir, MF_STORE_ICONS_NAME, icons, error))
         goto out;
     if (exports != NULL && !mfd_store_writer_write_files(tmp_dir, MF_STORE_EXPORTS_NAME, exports, error))
         goto out;

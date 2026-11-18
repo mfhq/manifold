@@ -87,6 +87,21 @@ mfd_install_set_has_app_on(MfdInstallSet *set, MfManifest *manifest)
 }
 
 /**
+ * mfd_install_set_new:
+ *
+ * Returns: (transfer full): an empty set
+ */
+MfdInstallSet *
+mfd_install_set_new(void)
+{
+    MfdInstallSet *set = g_new0(MfdInstallSet, 1);
+
+    set->items = g_ptr_array_new_with_free_func((GDestroyNotify) mfd_install_item_free);
+    set->remotes = g_ptr_array_new_with_free_func(g_object_unref);
+    return set;
+}
+
+/**
  * mfd_install_set_new_for_bundle:
  * @bundle: a bundle, read and verified
  *
@@ -99,25 +114,23 @@ MfdInstallSet *
 mfd_install_set_new_for_bundle(MfBundle *bundle)
 {
     GPtrArray *images = mf_bundle_get_images(bundle);
-    MfdInstallSet *set = g_new0(MfdInstallSet, 1);
+    MfdInstallSet *set = mfd_install_set_new();
 
-    set->items = g_ptr_array_new_with_free_func((GDestroyNotify) mfd_install_item_free);
     for (guint i = 0; i < images->len; i++) {
         MfBundleImage *image = g_ptr_array_index(images, i);
-        MfdInstallItem *item = g_new0(MfdInstallItem, 1);
+        MfdInstallItem *item = mfd_install_set_add(set,
+                                                   mf_bundle_image_get_manifest(image),
+                                                   mf_bundle_image_get_manifest_name(image),
+                                                   MF_BUNDLE_CATALOG_ORIGIN);
         MfdBundleSource *source = g_new0(MfdBundleSource, 1);
 
         source->bundle = g_object_ref(bundle);
         source->image = g_object_ref(image);
-        item->manifest = g_object_ref(mf_bundle_image_get_manifest(image));
-        item->name = g_strdup(mf_bundle_image_get_manifest_name(image));
-        item->origin = g_strdup(MF_BUNDLE_CATALOG_ORIGIN);
         item->catalog = g_bytes_ref(mf_bundle_image_get_catalog(image));
         item->icons = g_hash_table_ref(mf_bundle_image_get_icons(image));
         item->write_image = mfd_write_bundle_image;
         item->source = source;
         item->source_free = (GDestroyNotify) mfd_bundle_source_free;
-        g_ptr_array_add(set->items, item);
     }
 
     for (guint i = 0; i < set->items->len; i++) {
@@ -138,7 +151,45 @@ mfd_install_set_free(MfdInstallSet *set)
     if (set == NULL)
         return;
     g_ptr_array_unref(set->items);
+    g_ptr_array_unref(set->remotes);
     g_free(set);
+}
+
+/**
+ * mfd_install_set_add:
+ * @manifest: the manifest of the component
+ * @name: the name of the item in log and error messages
+ * @origin: the origin of the component
+ *
+ * Add an item to the set. The caller has to set the function that writes its image.
+ *
+ * Returns: (transfer none): the new item, owned by the set
+ */
+MfdInstallItem *
+mfd_install_set_add(MfdInstallSet *set, MfManifest *manifest, const char *name, const char *origin)
+{
+    MfdInstallItem *item = g_new0(MfdInstallItem, 1);
+
+    item->manifest = g_object_ref(manifest);
+    item->name = g_strdup(name);
+    item->origin = g_strdup(origin);
+    g_ptr_array_add(set->items, item);
+    return item;
+}
+
+/**
+ * mfd_install_set_add_remote:
+ *
+ * Record that manifests for the set were downloaded from @remote.
+ */
+void
+mfd_install_set_add_remote(MfdInstallSet *set, MfRemote *remote)
+{
+    for (guint i = 0; i < set->remotes->len; i++) {
+        if (g_str_equal(mf_remote_get_id(g_ptr_array_index(set->remotes, i)), mf_remote_get_id(remote)))
+            return;
+    }
+    g_ptr_array_add(set->remotes, g_object_ref(remote));
 }
 
 /**

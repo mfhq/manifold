@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <poll.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <systemd/sd-json.h>
@@ -17,6 +18,7 @@
 
 #include <manifold.h>
 #include "mf-interface-private.h"
+#include "mf-remote-private.h"
 #include "mf-sdautoptr-private.h"
 
 #include "mfd-manager.h"
@@ -93,12 +95,14 @@ struct _MfdRequest {
     MfTransactionFlags flags; /* the transaction flags of the call */
     sd_bus_slot *polkit_slot; /* the authorization check in progress, or NULL */
 
-    int bundle_fd;              /* the bundle to install, or -1 */
-    MfdInstallSet *install_set; /* the components to install, set once the bundle was read */
-    char *component_id;         /* the component to remove or mark */
-    char *version;              /* the version to remove or mark, or NULL for all of them */
-    MfInstallMode mode;         /* how to mark the component */
-    GStrv remote_ids;           /* the remotes to refresh, or NULL for all of them */
+    int bundle_fd; /* the bundle to install, or -1 */
+    MfdInstallSet *
+        install_set; /* the components to install, set once the bundle was read or the request was resolved */
+    MfdRepoRequest *repo_request; /* the request to install from the remotes, or NULL */
+    char *component_id;           /* the component to remove or mark */
+    char *version;                /* the version to remove or mark, or NULL for all of them */
+    MfInstallMode mode;           /* the install mode to mark the component with */
+    GStrv remote_ids;             /* the remotes to refresh, or NULL for all of them */
 };
 
 /**
@@ -139,6 +143,7 @@ mfd_request_free(MfdRequest *request)
     g_clear_pointer(&request->install_set, mfd_install_set_free);
     if (request->bundle_fd >= 0)
         close(request->bundle_fd);
+    g_clear_pointer(&request->repo_request, mfd_repo_request_free);
     g_free(request->component_id);
     g_free(request->version);
     g_strfreev(request->remote_ids);
@@ -243,6 +248,7 @@ mfd_error_is_about_request(const GError *error)
     case MF_ERROR_INVALID_REPOSITORY:
     case MF_ERROR_EXPIRED:
     case MF_ERROR_DOWNLOAD_FAILED:
+    case MF_ERROR_AMBIGUOUS:
         return TRUE;
     default:
         return FALSE;
@@ -884,6 +890,96 @@ mfd_service_install_bundle(MfdService *service, MfdRequest *request)
 }
 
 /**
+ * mfd_service_needs_privileged:
+ *
+ * Returns: %TRUE if the request needs a second authorization from polkit,
+ *   because a component of its install set can gain root access to the host
+ */
+static gboolean
+mfd_service_needs_privileged(MfdRequest *request)
+{
+    return !mf_peer_is_privileged(request->uid) &&
+           !g_str_equal(request->action_id, MFD_POLKIT_ACTION_INSTALL_PRIVILEGED) &&
+           mfd_install_set_is_privileged(request->install_set);
+}
+
+/**
+ * mfd_service_install_from_remotes:
+ *
+ * Install the components of the request from the remotes, with the bases
+ * they need, and reply to the call.
+ *
+ * Like for bundles, a component that can gain root access to the host needs
+ * a second authorization. We can only ask for it once we have the manifest
+ * of the component. If the installation fails because a repository has
+ * changed since the last refresh, we refresh the remotes once and resolve
+ * the request again. The new install set is checked for privileged
+ * components again as well.
+ */
+static int
+mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
+{
+    g_auto(MfdErrorDetail) detail = {};
+    g_autoptr(MfResult) result = NULL;
+    g_autoptr(GError) error = NULL;
+
+    for (;;) {
+        if (request->install_set == NULL) {
+            request->install_set = mfd_manager_resolve(service->manager, request->repo_request, &error);
+            if (request->install_set == NULL) {
+                mfd_service_reply_error(request->link, error, NULL);
+                return 0;
+            }
+            if (mfd_service_needs_privileged(request)) {
+                request->action_id = MFD_POLKIT_ACTION_INSTALL_PRIVILEGED;
+                mfd_service_ask_polkit(service, request);
+                return MFD_REQUEST_DEFERRED;
+            }
+        }
+
+        result = mfd_manager_install_set(service->manager,
+                                         request->install_set,
+                                         request->report_progress ? mfd_service_on_progress : NULL,
+                                         request->link,
+                                         &detail,
+                                         &error);
+        if (result != NULL)
+            return mfd_service_reply_result(request->link, result);
+        if (!mfd_manager_refresh_for_retry(service->manager,
+                                           request->repo_request,
+                                           request->install_set,
+                                           error)) {
+            mfd_service_reply_error(request->link, error, &detail);
+            return 0;
+        }
+
+        g_clear_pointer(&request->install_set, mfd_install_set_free);
+        g_clear_error(&error);
+        mfd_error_detail_clear(&detail);
+    }
+}
+
+/**
+ * mfd_service_install_component:
+ *
+ * Install a component from the remotes, and reply to the call.
+ */
+static int
+mfd_service_install_component(MfdService *service, MfdRequest *request)
+{
+    MfdRepoRequest *repo_request = request->repo_request;
+
+    if (request->install_set == NULL)
+        g_message("User %u requested to install %s%s%s",
+                  (unsigned int) request->uid,
+                  repo_request->component_id,
+                  repo_request->origin != NULL ? " from " : "",
+                  repo_request->origin != NULL ? repo_request->origin : "");
+
+    return mfd_service_install_from_remotes(service, request);
+}
+
+/**
  * mfd_varlink_method_install_file:
  */
 static int
@@ -937,6 +1033,55 @@ mfd_varlink_method_install_file(sd_varlink *link,
      * so that a trusted bundle only needs the less strict action.
      */
     return mfd_service_authorize(service, g_steal_pointer(&request), p.flags);
+}
+
+/**
+ * mfd_varlink_method_install_component:
+ */
+static int
+mfd_varlink_method_install_component(sd_varlink *link,
+                                     sd_json_variant *parameters,
+                                     sd_varlink_method_flags_t flags,
+                                     void *userdata)
+{
+    MfdService *service = userdata;
+    struct {
+        const char *component_id;
+        const char *origin;
+        MfTransactionFlags flags;
+    } p = {};
+    static const sd_json_dispatch_field dispatch_table[] = {
+        {"componentId",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
+         offsetof(typeof(p), component_id),
+         SD_JSON_MANDATORY},
+        {"origin", SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string, offsetof(typeof(p), origin), 0},
+        {"flags",
+         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
+         offsetof(typeof(p), flags),
+         0},
+        {},
+    };
+    MfdRequest *request;
+    int r;
+
+    r = sd_varlink_dispatch(link, parameters, dispatch_table, &p);
+    if (r != 0)
+        return r;
+
+    if (!mf_component_id_is_valid(p.component_id))
+        return sd_varlink_error_invalid_parameter_name(link, "componentId");
+    if (p.origin != NULL && !mf_origin_split_name(p.origin, NULL, NULL))
+        return sd_varlink_error_invalid_parameter_name(link, "origin");
+
+    request = mfd_request_new(link,
+                              mfd_service_install_component,
+                              MF_VARLINK_METHOD_INSTALL_COMPONENT,
+                              MFD_POLKIT_ACTION_INSTALL,
+                              flags);
+    request->repo_request = mfd_repo_request_new_install(p.component_id, p.origin);
+
+    return mfd_service_authorize(service, request, p.flags);
 }
 
 /**
@@ -1171,6 +1316,8 @@ mfd_service_new(sd_event *event, GError **error)
     r = sd_varlink_server_bind_method_many(service->server,
                                            MF_VARLINK_METHOD_INSTALL_FILE,
                                            mfd_varlink_method_install_file,
+                                           MF_VARLINK_METHOD_INSTALL_COMPONENT,
+                                           mfd_varlink_method_install_component,
                                            MF_VARLINK_METHOD_REMOVE_COMPONENT,
                                            mfd_varlink_method_remove_component,
                                            MF_VARLINK_METHOD_CLEANUP,

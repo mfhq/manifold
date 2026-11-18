@@ -395,6 +395,98 @@ test_component_index(Fixture *f, gconstpointer user_data)
 }
 
 /**
+ * mft_read_manifest:
+ * @manifest: the compressed manifest that the component index records for org.example.App 1.2
+ * @served: the compressed manifest that the repository serves
+ *
+ * Returns: (transfer full): the manifest, or %NULL
+ */
+static MfManifest *
+mft_read_manifest(GBytes *manifest, GBytes *served, GError **error)
+{
+    g_autofree char *entry = mft_entry_json(manifest);
+    g_autofree char *version_json = g_strdup_printf(
+        "{\"bundle\": \"x86_64/org.example.App/1.2\", "
+        "\"version\": \"1.2\", \"revision\": 1, "
+        "\"manifest\": {\"location\": \"pool/b.json.zst\", %s}, "
+        "\"zck-header\": {\"size\": 2184, \"sha256\": \"%064d\"}}",
+        entry,
+        3);
+    g_autoptr(GError) local_error = NULL;
+    g_autoptr(MfRepoComponentIndex) index = mft_read_component_index(version_json, &local_error);
+    MfRepoVersion *version;
+    g_autofree char *image_location = NULL;
+
+    g_assert_no_error(local_error);
+    version = g_ptr_array_index(mf_repo_component_index_get_versions(index, "org.example.App"), 0);
+    image_location = mf_repo_version_build_image_location(version);
+    g_assert_cmpstr(image_location, ==, "pool/b.raw.zck");
+
+    return mf_repo_version_read_manifest(version, served, "org.example.App", ARCH, error);
+}
+
+/**
+ * test_manifest:
+ */
+static void
+test_manifest(Fixture *f, gconstpointer user_data)
+{
+    MftTestManifest listed = {.component_id = "org.example.App", .kind = "core", .version = "1.2"};
+    MftTestManifest other_component = listed;
+    MftTestManifest other_version = listed;
+    MftTestManifest other_revision = listed;
+    MftTestManifest other_arch = listed;
+    MftTestManifest *others[] = {&other_component, &other_version, &other_revision, &other_arch};
+    g_autofree char *json = mft_manifest_json(&listed);
+    g_autoptr(GBytes) data = mft_zstd(json);
+    g_autoptr(GError) error = NULL;
+    g_autoptr(MfManifest) manifest = NULL;
+
+    manifest = mft_read_manifest(data, data, &error);
+    g_assert_no_error(error);
+    g_assert_nonnull(manifest);
+    g_assert_cmpstr(mf_manifest_get_component_id(manifest), ==, "org.example.App");
+    /* the data of the manifest is the decompressed file, byte for byte */
+    g_assert_cmpstr(g_bytes_get_data(mf_manifest_get_data(manifest), NULL), ==, json);
+
+    /* a served manifest that does not match the hash that the component index records */
+    {
+        g_autofree char *other_json = g_strconcat(json, " ", NULL);
+        g_autoptr(GBytes) other = mft_zstd(other_json);
+        g_autoptr(MfManifest) refused = mft_read_manifest(data, other, &error);
+
+        g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
+        g_assert_null(refused);
+        g_clear_error(&error);
+    }
+
+    /* a manifest that matches the hash in the component index, but describes a different component,
+     * version, revision or architecture than its entry */
+    other_component.component_id = "org.example.Other";
+    other_version.version = "1.3";
+    other_revision.revision = 2;
+    other_arch.architecture = "aarch64";
+    for (gsize i = 0; i < G_N_ELEMENTS(others); i++) {
+        g_autofree char *other_json = mft_manifest_json(others[i]);
+        g_autoptr(GBytes) other = mft_zstd(other_json);
+        g_autoptr(MfManifest) refused = mft_read_manifest(other, other, &error);
+
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_REPOSITORY);
+        g_assert_null(refused);
+        g_clear_error(&error);
+    }
+
+    /* a file that matches the hash in the component index, but is not a manifest */
+    {
+        g_autoptr(GBytes) other = mft_zstd("{}");
+        g_autoptr(MfManifest) refused = mft_read_manifest(other, other, &error);
+
+        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+        g_assert_null(refused);
+    }
+}
+
+/**
  * mft_read_icon_index:
  */
 static GPtrArray *
@@ -520,6 +612,7 @@ main(int argc, char **argv)
     add_test("root-index", test_root_index);
     add_test("root-index-refused", test_root_index_refused);
     add_test("component-index", test_component_index);
+    add_test("manifest", test_manifest);
     add_test("icon-index", test_icon_index);
     add_test("catalog", test_catalog);
 #undef add_test

@@ -9,6 +9,7 @@
 #include <glib.h>
 
 #include "mf-error.h"
+#include "mf-manifest.h"
 #include "mf-trusted-keys.h"
 #include "mf-macros-private.h"
 #include "mf-utils-private.h"
@@ -21,6 +22,9 @@ MF_BEGIN_PRIVATE_DECLS
 #define MF_REPO_COMPONENT_INDEX_NAME "index.json.zst"
 #define MF_REPO_CATALOG_NAME         "components.xml.zst"
 #define MF_REPO_ICON_INDEX_NAME      "icons.json.zst"
+
+/* the suffix of an image file. The file is named like its manifest, or after its verity hash. */
+#define MF_REPO_IMAGE_SUFFIX ".raw.zck"
 
 /**
  * MfRepoArchitecture:
@@ -119,6 +123,15 @@ void mf_repo_component_index_free(MfRepoComponentIndex *index);
 MF_INTERNAL_VISIBLE
 GPtrArray *mf_repo_component_index_get_versions(MfRepoComponentIndex *index,
                                                 const char           *component_id);
+
+MF_INTERNAL_VISIBLE
+MfManifest *mf_repo_version_read_manifest(MfRepoVersion *version,
+                                          GBytes        *data,
+                                          const char    *component_id,
+                                          const char    *architecture,
+                                          GError       **error);
+MF_INTERNAL_VISIBLE
+char *mf_repo_version_build_image_location(MfRepoVersion *version);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfRepoComponentIndex, mf_repo_component_index_free)
 

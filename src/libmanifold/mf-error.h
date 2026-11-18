@@ -34,6 +34,7 @@ G_BEGIN_DECLS
  * @MF_ERROR_INVALID_REPOSITORY: The data of a repository is not valid.
  * @MF_ERROR_EXPIRED: The metadata of a repository has expired.
  * @MF_ERROR_DOWNLOAD_FAILED: A file could not be downloaded.
+ * @MF_ERROR_AMBIGUOUS: The request matches more than one candidate, and has to be more specific.
  *
  * Errors that can happen when managing the Manifold installation of a host.
  */
@@ -56,6 +57,7 @@ typedef enum {
     MF_ERROR_INVALID_REPOSITORY,
     MF_ERROR_EXPIRED,
     MF_ERROR_DOWNLOAD_FAILED,
+    MF_ERROR_AMBIGUOUS,
     /*< private >*/
     MF_ERROR_LAST
 } MfError;

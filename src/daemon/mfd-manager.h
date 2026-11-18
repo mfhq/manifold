@@ -11,6 +11,7 @@
 #include <manifold.h>
 
 #include "mfd-install-set.h"
+#include "mfd-resolver.h"
 
 G_BEGIN_DECLS
 
@@ -102,6 +103,14 @@ MfResult       *mfd_manager_remove(MfdManager     *manager,
                                    gpointer        user_data,
                                    MfdErrorDetail *ret_detail,
                                    GError        **error);
+
+MfdInstallSet  *mfd_manager_resolve(MfdManager     *manager,
+                                    MfdRepoRequest *request,
+                                    GError        **error);
+gboolean        mfd_manager_refresh_for_retry(MfdManager     *manager,
+                                              MfdRepoRequest *request,
+                                              MfdInstallSet  *set,
+                                              const GError   *failure);
 
 void            mfd_manager_set_fetch_helper(MfdManager *manager,
                                              const char *helper_path,

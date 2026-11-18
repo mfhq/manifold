@@ -1,0 +1,43 @@
+/*
+ * Copyright (C) 2025-2026 Matthias Klumpp <matthias@tenstral.net>
+ *
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ */
+
+#pragma once
+
+#include <glib.h>
+
+#include <manifold.h>
+
+#include "mfd-fetcher.h"
+#include "mfd-install-set.h"
+#include "mfd-origin.h"
+
+G_BEGIN_DECLS
+
+/**
+ * MfdRepoRequest:
+ *
+ * A request to install a component from the remotes.
+ */
+typedef struct {
+    char    *component_id; /* the component to install */
+    char    *origin;       /* the origin to install the component from, or NULL */
+    gboolean refreshed;    /* whether remotes were refreshed for the request, which we do only once */
+} MfdRepoRequest;
+
+MfdRepoRequest *mfd_repo_request_new_install(const char *component_id,
+                                             const char *origin);
+void            mfd_repo_request_free(MfdRepoRequest *request);
+
+G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdRepoRequest, mfd_repo_request_free)
+
+gboolean mfd_resolver_resolve(MfdRepoRequest *request,
+                              MfdInstallSet  *set,
+                              MfStore        *store,
+                              MfdFetcher     *fetcher,
+                              MfdOriginSet   *origin_set,
+                              GError        **error);
+
+G_END_DECLS
