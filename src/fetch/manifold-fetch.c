@@ -9,8 +9,10 @@
 #include <locale.h>
 #include <poll.h>
 #include <stdlib.h>
+#include <sys/socket.h>
 #include <curl/curl.h>
 #include <glib.h>
+#include <systemd/sd-daemon.h>
 #include <systemd/sd-event.h>
 #include <systemd/sd-json.h>
 #include <systemd/sd-varlink.h>
@@ -248,20 +250,6 @@ mff_method_fetch(sd_varlink *link,
                               SD_JSON_BUILD_PAIR_VARIANT("results", results));
 }
 
-#if !HAVE_SD_VARLINK_SERVER_FD_PASSING
-/**
- * mff_on_connect:
- *
- * systemd < 258 can only allow receiving file descriptors per connection, so we
- * enable it for every new connection.
- */
-static int
-mff_on_connect(sd_varlink_server *server, sd_varlink *link, void *userdata)
-{
-    return sd_varlink_set_allow_fd_passing_input(link, true);
-}
-#endif
-
 /**
  * mff_on_disconnect:
  *
@@ -314,13 +302,25 @@ mff_run(int connection_fd, const char *ca_file)
         g_critical("Unable to bind the Fetch method: %s", g_strerror(-r));
         return EXIT_FAILURE;
     }
-#if !HAVE_SD_VARLINK_SERVER_FD_PASSING
-    sd_varlink_server_bind_connect(server, mff_on_connect);
-#endif
     sd_varlink_server_bind_disconnect(server, mff_on_disconnect);
 
+#if !HAVE_SD_VARLINK_SERVER_FD_PASSING
+    /* systemd < 258 can only allow receiving file descriptors per connection, and it does
+     * not run the connect callback for connections it did not accept itself. So we add the
+     * connection systemd accepted for us ourselves, like the one of --connection-fd. */
+    if (connection_fd < 0 && sd_listen_fds(TRUE) == 1 &&
+        sd_is_socket(SD_LISTEN_FDS_START, AF_UNIX, SOCK_STREAM, 0) > 0)
+        connection_fd = SD_LISTEN_FDS_START;
+#endif
+
     if (connection_fd >= 0) {
-        r = sd_varlink_server_add_connection(server, connection_fd, NULL);
+        sd_varlink *link = NULL;
+
+        r = sd_varlink_server_add_connection(server, connection_fd, &link);
+#if !HAVE_SD_VARLINK_SERVER_FD_PASSING
+        if (r >= 0)
+            r = sd_varlink_set_allow_fd_passing_input(link, true);
+#endif
     } else {
         /* systemd passes us the connection it accepted, see manifold-fetch.socket */
         r = sd_varlink_server_listen_auto(server);

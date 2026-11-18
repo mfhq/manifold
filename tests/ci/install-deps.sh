@@ -83,6 +83,9 @@ case " $ID ${ID_LIKE:-} " in
             shared-mime-info
             # the tests make real images, and read from them
             erofs-utils
+            # the tests make certificates and compress repository files with these
+            openssl
+            zstd
         )
         source_build_packages=(cmake curl)
 
@@ -132,6 +135,9 @@ case " $ID ${ID_LIKE:-} " in
             'pkgconfig(xmlb)'
             # the tests make real images, and read from them
             erofs-utils
+            # the tests make certificates and compress repository files with these
+            openssl
+            zstd
         )
         source_build_packages=(cmake curl)
 
@@ -170,6 +176,7 @@ case " $ID ${ID_LIKE:-} " in
             b3sum
             openssh
             erofs-utils
+            openssl
         )
         source_build_packages=(cmake)
 
