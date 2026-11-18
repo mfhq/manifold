@@ -5,7 +5,7 @@
  */
 
 #define _GNU_SOURCE
-#include "mf-interface-private.h"
+#include "mf-manager-interface.h"
 
 #include <systemd/sd-varlink.h>
 

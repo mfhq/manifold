@@ -25,7 +25,7 @@
 #include <systemd/sd-json.h>
 #include <systemd/sd-varlink.h>
 
-#include "mfr-run-interface.h"
+#include "mf-run-interface.h"
 
 /*
  * manifold-run is the runner that users call. It asks the compose service

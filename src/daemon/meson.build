@@ -36,7 +36,10 @@ manifoldd_src = [
 manifoldd_c_args = hardening_c_args + ['-DG_LOG_DOMAIN="manifoldd"']
 
 manifoldd_lib = static_library('manifoldd',
-    [manifoldd_src, mf_daemon_shared_src, mf_fetch_interface_src],
+    [manifoldd_src,
+     mf_daemon_shared_src,
+     mf_mngmt_varlink_src,
+     mf_mngmt_fetch_varlink_src],
     c_args: manifoldd_c_args,
     include_directories: [root_inc_dir, shared_inc_dir],
     dependencies: [

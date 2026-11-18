@@ -16,7 +16,7 @@
 #include "mf-sdautoptr-private.h"
 #include "mf-varlink-util.h"
 #include "mfr-composer.h"
-#include "mfr-run-interface.h"
+#include "mf-run-interface.h"
 
 /**
  * MfrService:
