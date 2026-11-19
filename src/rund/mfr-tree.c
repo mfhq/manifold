@@ -754,8 +754,8 @@ static gboolean
 mfr_tree_has_program(MfrTree *tree, const char *path)
 {
     struct open_how how = {.flags = O_PATH | O_CLOEXEC, .resolve = RESOLVE_IN_ROOT};
-    glnx_autofd int root_fd = open(tree->mount_path, O_PATH | O_DIRECTORY | O_CLOEXEC);
-    glnx_autofd int fd = root_fd >= 0 ? (int) syscall(SYS_openat2, root_fd, path, &how, sizeof(how)) : -1;
+    g_autofd int root_fd = open(tree->mount_path, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    g_autofd int fd = root_fd >= 0 ? (int) syscall(SYS_openat2, root_fd, path, &how, sizeof(how)) : -1;
     struct stat st;
 
     return fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) && (st.st_mode & 0111) != 0;

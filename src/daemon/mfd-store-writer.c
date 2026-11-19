@@ -340,7 +340,7 @@ static gboolean
 mfd_store_writer_write_files(const char *version_dir, const char *subdir, GHashTable *files, GError **error)
 {
     g_autofree char *dir = g_build_filename(version_dir, subdir, NULL);
-    glnx_autofd int dfd = -1;
+    g_autofd int dfd = -1;
     GHashTableIter iter;
     gpointer key;
     gpointer value;
@@ -352,7 +352,7 @@ mfd_store_writer_write_files(const char *version_dir, const char *subdir, GHashT
     while (g_hash_table_iter_next(&iter, &key, &value)) {
         g_autofree char *file_dir = g_path_get_dirname(key);
         g_autofree char *name = g_path_get_basename(key);
-        glnx_autofd int file_dir_fd = mfd_make_dir_below(dfd, file_dir, error);
+        g_autofd int file_dir_fd = mfd_make_dir_below(dfd, file_dir, error);
 
         if (file_dir_fd < 0)
             return FALSE;

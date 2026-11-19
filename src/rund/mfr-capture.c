@@ -1505,8 +1505,8 @@ mfr_capture_job_resolve_core_path(MfrCaptureJob *job, const char *path)
 {
     /* links are followed as if the core was the root, so an absolute one stays within it */
     struct open_how how = {.flags = O_PATH | O_CLOEXEC, .resolve = RESOLVE_IN_ROOT};
-    glnx_autofd int core_fd = open(job->core_mount, O_PATH | O_DIRECTORY | O_CLOEXEC);
-    glnx_autofd int fd = core_fd >= 0 ? (int) syscall(SYS_openat2, core_fd, path, &how, sizeof(how)) : -1;
+    g_autofd int core_fd = open(job->core_mount, O_PATH | O_DIRECTORY | O_CLOEXEC);
+    g_autofd int fd = core_fd >= 0 ? (int) syscall(SYS_openat2, core_fd, path, &how, sizeof(how)) : -1;
     g_autofree char *fd_path = g_strdup_printf("/proc/self/fd/%d", fd);
     g_autofree char *resolved = fd >= 0 ? g_file_read_link(fd_path, NULL) : NULL;
 

@@ -125,7 +125,7 @@ mfr_varlink_method_prepare_launch(sd_varlink *link,
     g_autoptr(GError) error = NULL;
     const char *component_id = NULL;
     g_autoptr(MfrTree) tree = NULL;
-    glnx_autofd int mount_fd = -1;
+    g_autofd int mount_fd = -1;
     uid_t peer_uid;
 
     int r = mf_varlink_get_peer_uid(link, &peer_uid);
@@ -153,7 +153,7 @@ mfr_varlink_method_prepare_launch(sd_varlink *link,
                   g_strerror(-mount_index));
         return sd_varlink_error_errno(link, mount_index);
     }
-    mount_fd = -1;
+    g_steal_fd(&mount_fd);
 
     return sd_varlink_replybo(
         link,

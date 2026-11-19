@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <curl/curl.h>
 #include <gio/gio.h>
+#include <glib/gstdio.h>
 
 /* the maximum number of parallel transfers. With HTTP/2, they are multiplexed over a few connections. */
 constexpr guint TRANSFERS_MAX = 16;
@@ -79,8 +80,7 @@ mff_request_new(const char *url, int fd, guint64 max_size, GArray *ranges)
 void
 mff_request_free(MffRequest *request)
 {
-    if (request->fd >= 0)
-        close(request->fd);
+    g_clear_fd(&request->fd, NULL);
     g_free(request->url);
     g_clear_pointer(&request->ranges, g_array_unref);
     g_free(request->message);

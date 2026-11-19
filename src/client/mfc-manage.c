@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <glib/gi18n-lib.h>
+#include <glib/gstdio.h>
 
 #include "mfc-util.h"
 
@@ -176,7 +177,7 @@ mfc_install_bundle(MfcContext *ctx, const char *fname)
     g_autofree char *basename = NULL;
     g_autoptr(GError) error = NULL;
 
-    int fd = open(fname, O_RDONLY | O_CLOEXEC);
+    g_autofd int fd = open(fname, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         g_printerr(_("Unable to open %s: %s\n"), fname, g_strerror(errno));
         return MFC_EXIT_BAD_INPUT;
@@ -187,7 +188,6 @@ mfc_install_bundle(MfcContext *ctx, const char *fname)
     basename = g_path_get_basename(fname);
     result = mf_manager_install_file(mfc_context_get_manager(ctx), fd, mfc_on_progress, ctx, NULL, &error);
     mfc_progress_bar_finish(ctx->progress_bar);
-    close(fd);
     if (result == NULL) {
         g_printerr(_("Unable to install %s: %s\n"), basename, error->message);
         return MFC_EXIT_FAILURE;

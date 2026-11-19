@@ -149,6 +149,8 @@ mfd_fetcher_spawn_helper(MfdFetcher *fetcher, GError **error)
     g_autofree char *fd_arg = g_strdup_printf("%d", HELPER_CONNECTION_FD);
     int target_fds[] = {HELPER_CONNECTION_FD};
     int pair[2];
+    g_autofd int our_fd = -1;
+    g_autofd int helper_fd = -1;
     gboolean ret;
 
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) < 0) {
@@ -159,6 +161,8 @@ mfd_fetcher_spawn_helper(MfdFetcher *fetcher, GError **error)
                     g_strerror(errno));
         return -1;
     }
+    our_fd = pair[0];
+    helper_fd = pair[1];
 
     g_ptr_array_add(argv, fetcher->helper_path);
     g_ptr_array_add(argv, (gpointer) "--connection-fd");
@@ -178,7 +182,7 @@ mfd_fetcher_spawn_helper(MfdFetcher *fetcher, GError **error)
                                            -1,
                                            -1,
                                            -1,
-                                           &pair[1],
+                                           &helper_fd,
                                            target_fds,
                                            1,
                                            &fetcher->helper_pid,
@@ -186,12 +190,9 @@ mfd_fetcher_spawn_helper(MfdFetcher *fetcher, GError **error)
                                            NULL,
                                            NULL,
                                            error);
-    close(pair[1]);
-    if (!ret) {
-        close(pair[0]);
+    if (!ret)
         return -1;
-    }
-    return pair[0];
+    return g_steal_fd(&our_fd);
 }
 
 /**
@@ -229,13 +230,14 @@ mfd_fetcher_connect(MfdFetcher *fetcher, GError **error)
     if (fetcher->helper_path == NULL) {
         r = sd_varlink_connect_address(&fetcher->link, MF_FETCH_SOCKET_PATH);
     } else {
-        int fd = mfd_fetcher_spawn_helper(fetcher, error);
+        g_autofd int fd = mfd_fetcher_spawn_helper(fetcher, error);
 
         if (fd < 0)
             return FALSE;
+        /* the connection only takes the descriptor if it was set up */
         r = sd_varlink_connect_fd(&fetcher->link, fd);
-        if (r < 0)
-            close(fd);
+        if (r >= 0)
+            g_steal_fd(&fd);
     }
     if (r < 0) {
         g_set_error(error,

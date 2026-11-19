@@ -14,6 +14,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <glib/gi18n-lib.h>
+#include <glib/gstdio.h>
 #include <zip.h>
 #include <appstream.h>
 #include <systemd/sd-json.h>
@@ -977,7 +978,7 @@ mf_bundle_new_from_fd(int fd, GError **error)
     zip_source_t *source;
     zip_error_t zerr;
     FILE *file;
-    int fd_copy;
+    g_autofd int fd_copy = -1;
 
     g_return_val_if_fail(fd >= 0, NULL);
 
@@ -995,9 +996,10 @@ mf_bundle_new_from_fd(int fd, GError **error)
     file = fdopen(fd_copy, "rb");
     if (file == NULL) {
         g_set_error(error, MF_ERROR, MF_ERROR_FAILED, _("Unable to read the bundle: %s"), g_strerror(errno));
-        close(fd_copy);
         return NULL;
     }
+    /* the stream owns the copy now, and closes it */
+    g_steal_fd(&fd_copy);
 
     bundle = g_object_new(MF_TYPE_BUNDLE, NULL);
     priv = GET_PRIVATE(bundle);
@@ -1097,13 +1099,12 @@ mf_bundle_new_from_path(const char *path, GError **error)
 
     g_return_val_if_fail(path != NULL, NULL);
 
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    g_autofd int fd = open(path, O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         g_set_error(error, MF_ERROR, MF_ERROR_FAILED, _("Unable to open %s: %s"), path, g_strerror(errno));
         return NULL;
     }
     bundle = mf_bundle_new_from_fd(fd, error);
-    close(fd);
     if (bundle == NULL)
         g_prefix_error(error, "%s: ", path);
     return bundle;

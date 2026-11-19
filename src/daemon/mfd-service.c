@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <glib/gstdio.h>
 #include <systemd/sd-json.h>
 #include <systemd/sd-varlink.h>
 
@@ -144,8 +145,7 @@ mfd_request_free(MfdRequest *request)
     sd_bus_slot_unref(request->polkit_slot);
     sd_varlink_unref(request->link);
     g_clear_pointer(&request->install_set, mfd_install_set_free);
-    if (request->bundle_fd >= 0)
-        close(request->bundle_fd);
+    g_clear_fd(&request->bundle_fd, NULL);
     g_clear_pointer(&request->repo_request, mfd_repo_request_free);
     g_free(request->component_id);
     g_free(request->version);

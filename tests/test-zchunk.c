@@ -133,8 +133,8 @@ test_write_image(void)
     zckChunk *chunk;
     zckCtx *zck;
     guint n_chunks = 0;
-    int image_fd;
-    int zck_fd;
+    g_autofd int image_fd = -1;
+    g_autofd int zck_fd = -1;
 
     g_assert_true(
         g_file_set_contents(image_path, g_bytes_get_data(image, NULL), g_bytes_get_size(image), NULL));
@@ -176,8 +176,6 @@ test_write_image(void)
     g_assert_false(mf_zchunk_read_header(image_fd, &header_size, &header_sha256, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
 
-    close(image_fd);
-    close(zck_fd);
     mft_rm_rf(dir);
 }
 
@@ -236,11 +234,11 @@ test_assembly(void)
     guint64 downloaded = 0;
     gsize size = g_bytes_get_size(old_image);
     struct stat st;
-    int old_fd;
-    int new_fd;
-    int zck_fd;
-    int partial_fd;
-    int dest_fd;
+    g_autofd int old_fd = -1;
+    g_autofd int new_fd = -1;
+    g_autofd int zck_fd = -1;
+    g_autofd int partial_fd = -1;
+    g_autofd int dest_fd = -1;
 
     /* a new version changes a metadata block and some data the filesystem stored without compression */
     new_data[3 * BS] = 'n';
@@ -290,7 +288,7 @@ test_assembly(void)
     g_assert_false(mf_zchunk_assembly_write_image(assembly, dest_fd, manifest, NULL, NULL, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
     g_clear_error(&error);
-    close(dest_fd);
+    g_clear_fd(&dest_fd, NULL);
 
     /* with them, the image is exactly the new version */
     g_clear_pointer(&assembly, mf_zchunk_assembly_free);
@@ -306,11 +304,6 @@ test_assembly(void)
     g_assert_cmpint(pread(dest_fd, written, size, 0), ==, size);
     g_assert_cmpmem(written, size, g_bytes_get_data(new_image, NULL), size);
 
-    close(old_fd);
-    close(new_fd);
-    close(zck_fd);
-    close(partial_fd);
-    close(dest_fd);
     mft_rm_rf(dir);
 }
 

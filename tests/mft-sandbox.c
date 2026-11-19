@@ -18,6 +18,7 @@
 #include <sys/mount.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <glib/gstdio.h>
 
 /*
  * The sandbox that tests of privileged components run in.
@@ -75,11 +76,10 @@ static void
 mft_write_proc_file(const char *name, const char *content)
 {
     g_autofree char *path = g_build_filename("/proc/self", name, NULL);
-    int fd = open(path, O_WRONLY | O_CLOEXEC);
+    g_autofd int fd = open(path, O_WRONLY | O_CLOEXEC);
 
     if (fd < 0 || write(fd, content, strlen(content)) != (ssize_t) strlen(content))
         mft_fail_unless_denied("set up the user namespace");
-    close(fd);
 }
 
 /**
@@ -151,11 +151,10 @@ mft_make_writable(const char *dir)
             if (mkdir(target, 0755) != 0)
                 g_error("Unable to create mount point %s: %s", target, g_strerror(errno));
         } else {
-            int fd = open(target, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+            g_autofd int fd = open(target, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
 
             if (fd < 0)
                 g_error("Unable to create mount point %s: %s", target, g_strerror(errno));
-            close(fd);
         }
         if (mount(source, target, NULL, MS_BIND | MS_REC, NULL) != 0 && errno != ENOENT)
             g_error("Unable to bind %s: %s", target, g_strerror(errno));
