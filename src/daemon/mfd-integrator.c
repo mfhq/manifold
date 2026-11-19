@@ -179,8 +179,8 @@ mfd_export_install(const MfdExport *export, GError **error)
 {
     g_autofree char *subdir = NULL;
     g_autofree char *name = NULL;
-    glnx_autofd int dfd = -1;
-    glnx_autofd int subdir_fd = -1;
+    g_autofd int dfd = -1;
+    g_autofd int subdir_fd = -1;
 
     if (export->dir == NULL || !mf_path_is_below(export->path, export->dir))
         return glnx_throw(error,

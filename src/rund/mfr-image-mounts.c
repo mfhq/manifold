@@ -96,7 +96,7 @@ mfr_cryptsetup_log(int level, const char *message, void *user_data)
 static int
 mfr_loop_attach(int image_fd, guint64 offset, char **ret_path, GError **error)
 {
-    glnx_autofd int control_fd = -1;
+    g_autofd int control_fd = -1;
 
     control_fd = open(LOOP_CONTROL, O_RDWR | O_CLOEXEC);
     if (control_fd < 0)
@@ -105,7 +105,7 @@ mfr_loop_attach(int image_fd, guint64 offset, char **ret_path, GError **error)
     /* someone else may take the free device before we configure it */
     for (int attempt = 0; attempt < 16; attempt++) {
         g_autofree char *path = NULL;
-        glnx_autofd int loop_fd = -1;
+        g_autofd int loop_fd = -1;
         struct loop_config config = {
             .fd = (__u32) image_fd,
             .info = {.lo_offset = offset, .lo_flags = LO_FLAGS_READ_ONLY | LO_FLAGS_AUTOCLEAR},
@@ -247,8 +247,8 @@ mfr_image_open(const char *path, GError **error)
 static gboolean
 mfr_image_setup(const MfrImage *image, const char *device_name, const char *device_path, GError **error)
 {
-    glnx_autofd int image_fd = -1;
-    glnx_autofd int loop_fd = -1;
+    g_autofd int image_fd = -1;
+    g_autofd int loop_fd = -1;
     g_autofree char *loop_path = NULL;
 
     if (g_file_test(device_path, G_FILE_TEST_EXISTS)) {

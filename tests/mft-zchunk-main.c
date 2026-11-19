@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <glib/gstdio.h>
 #include <manifold.h>
 
 /*
@@ -24,8 +25,8 @@ main(int argc, char **argv)
     g_autoptr(GError) error = NULL;
     g_autofree char *header_sha256 = NULL;
     guint64 header_size;
-    int image_fd;
-    int zck_fd;
+    g_autofd int image_fd = -1;
+    g_autofd int zck_fd = -1;
 
     if (argc != 3) {
         fprintf(stderr, "Usage: %s IMAGE ZCHUNK-FILE\n", argv[0]);
@@ -45,7 +46,5 @@ main(int argc, char **argv)
     }
 
     printf("%" G_GUINT64_FORMAT " %s\n", header_size, header_sha256);
-    close(image_fd);
-    close(zck_fd);
     return 0;
 }

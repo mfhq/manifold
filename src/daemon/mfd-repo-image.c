@@ -214,7 +214,7 @@ mfd_find_chunk_sources(MfStore *store, MfManifest *manifest)
 static void
 mfd_clear_fd(gpointer fd)
 {
-    close(*(int *) fd);
+    g_clear_fd((int *) fd, NULL);
 }
 
 /**

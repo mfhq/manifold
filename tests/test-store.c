@@ -843,8 +843,8 @@ test_writes_stay_below_their_directory(void)
     g_autofree char *self = g_build_filename(inside, "self", NULL);
     g_autofree char *tmp_dir = g_build_filename(inside, MF_TMP_PREFIX "..", NULL);
     g_autofree char *outside_sub = g_build_filename(outside, "sub", NULL);
-    glnx_autofd int inside_fd = -1;
-    glnx_autofd int sub_fd = -1;
+    g_autofd int inside_fd = -1;
+    g_autofd int sub_fd = -1;
 
     g_assert_no_error(error);
     g_assert_cmpint(g_mkdir(inside, 0755), ==, 0);

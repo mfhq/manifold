@@ -12,6 +12,7 @@
 #include <poll.h>
 #include <unistd.h>
 #include <glib/gi18n-lib.h>
+#include <glib/gstdio.h>
 #include <systemd/sd-json.h>
 #include <systemd/sd-varlink.h>
 
@@ -718,7 +719,7 @@ mf_manager_call_async(MfManager *manager,
 
     if (fd >= 0) {
         /* the connection takes ownership of the descriptor it sends */
-        int fd_copy = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+        g_autofd int fd_copy = fcntl(fd, F_DUPFD_CLOEXEC, 3);
 
         if (fd_copy < 0) {
             g_task_return_new_error(task,
@@ -732,7 +733,6 @@ mf_manager_call_async(MfManager *manager,
         if (r >= 0)
             r = sd_varlink_push_fd(call->link, fd_copy);
         if (r < 0) {
-            close(fd_copy);
             g_task_return_new_error(task,
                                     MF_ERROR,
                                     MF_ERROR_FAILED,
@@ -740,6 +740,7 @@ mf_manager_call_async(MfManager *manager,
                                     g_strerror(-r));
             return;
         }
+        g_steal_fd(&fd_copy);
     }
 
     r = sd_varlink_observe(call->link, method, call_parameters);

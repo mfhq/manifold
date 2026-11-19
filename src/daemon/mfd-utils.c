@@ -159,7 +159,7 @@ mfd_replace_link_at(int dfd, const char *name, const char *target, GError **erro
 gboolean
 mfd_replace_link(const char *target, const char *dir, const char *name, GError **error)
 {
-    glnx_autofd int dfd = -1;
+    g_autofd int dfd = -1;
 
     if (!glnx_opendirat(AT_FDCWD, dir, TRUE, &dfd, error))
         return FALSE;
@@ -223,7 +223,7 @@ mfd_write_file_at(int dfd, const char *name, const void *content, gsize length, 
 gboolean
 mfd_write_contents_safe(const char *dir, const char *name, const char *content, gssize length, GError **error)
 {
-    glnx_autofd int dfd = -1;
+    g_autofd int dfd = -1;
 
     if (!glnx_opendirat(AT_FDCWD, dir, TRUE, &dfd, error))
         return FALSE;

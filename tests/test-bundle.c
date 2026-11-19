@@ -293,12 +293,10 @@ mft_write_bundle(Fixture *f, const char *name, const TestImage *const *images, c
 static MfBundle *
 mft_open_bundle(const char *path, GError **error)
 {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    g_autofd int fd = open(path, O_RDONLY | O_CLOEXEC);
 
     g_assert_cmpint(fd, >=, 0);
-    auto bundle = mf_bundle_new_from_fd(fd, error);
-    close(fd);
-    return bundle;
+    return mf_bundle_new_from_fd(fd, error);
 }
 
 static MfBundleImage *
@@ -388,7 +386,7 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
     gsize media_size;
     GHashTable *icons;
     GBytes *icon;
-    int fd;
+    g_autofd int fd = -1;
 
     g_assert_no_error(error);
     g_assert_true(mf_bundle_is_signed(bundle));
@@ -451,7 +449,6 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
     g_assert_no_error(error);
     g_assert_false(mf_bundle_copy_media_file(bundle, "missing.jxl", fd, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
-    close(fd);
     g_assert_true(g_file_get_contents(media_copy, &media_data, &media_size, NULL));
     g_assert_cmpmem(media_data, media_size, JXL_DATA, sizeof(JXL_DATA));
 }
@@ -495,7 +492,7 @@ test_copy_image(Fixture *f, gconstpointer user_data)
     g_autofree char *copied = NULL;
     gsize copied_size;
     CopyProgress progress = {};
-    int fd;
+    g_autofd int fd = -1;
 
     g_bytes_unref(f->app.data);
     f->app.data = mft_fake_image_data("app", image_size);
@@ -515,7 +512,6 @@ test_copy_image(Fixture *f, gconstpointer user_data)
                                        &progress,
                                        &error));
     g_assert_no_error(error);
-    close(fd);
 
     /* the progress is reported after every piece */
     g_assert_cmpuint(progress.n_reports, ==, 3);
@@ -536,14 +532,13 @@ test_corrupt_image(Fixture *f, gconstpointer user_data)
                                              &(BundleFlaws){.corrupt = &f->app});
     g_autoptr(GError) error = NULL;
     g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-    int fd = open("/dev/null", O_WRONLY | O_CLOEXEC);
+    g_autofd int fd = open("/dev/null", O_WRONLY | O_CLOEXEC);
 
     /* opening the bundle does not verify its images, copying one out does */
     g_assert_no_error(error);
     g_assert_false(mf_bundle_copy_image(bundle, mft_find_image(bundle, TEST_APP_ID), fd, NULL, NULL, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
     g_clear_error(&error);
-    close(fd);
 
     /* verifying the image in place also detects the corruption */
     g_assert_false(mf_bundle_verify_image(bundle, mft_find_image(bundle, TEST_APP_ID), NULL, NULL, &error));
