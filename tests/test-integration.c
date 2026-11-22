@@ -550,6 +550,60 @@ test_check_messages(void)
     }
 }
 
+static void
+test_permissions(void)
+{
+    MftTestManifest app = mft_app_manifest(NULL);
+    MftTestManifest core = {.component_id = "net.example.core", .kind = "core", .version = "1"};
+    g_autofree char *json = NULL;
+    g_autofree char *unknown_json = NULL;
+    g_autofree char *core_json = NULL;
+    g_autofree char *malformed_json = NULL;
+    g_autoptr(MfManifest) plain = mft_manifest_new(NULL, NULL);
+    g_autoptr(MfManifest) manifest = NULL;
+    g_autoptr(MfManifest) unknown = NULL;
+    g_autoptr(MfManifest) on_core = NULL;
+    g_autoptr(GError) error = NULL;
+
+    g_assert_false(mf_manifest_has_permission(plain, MF_PERMISSION_HOST_COMMANDS));
+    g_assert_true(mf_manifest_check_permissions(plain, &error));
+    g_assert_no_error(error);
+
+    app.permissions = "[\"host-commands\"]";
+    json = mft_manifest_json(&app);
+    manifest = mf_manifest_new_from_data(json, -1, &error);
+    g_assert_no_error(error);
+    g_assert_true(mf_manifest_has_permission(manifest, MF_PERMISSION_HOST_COMMANDS));
+    g_assert_false(mf_manifest_has_permission(manifest, MF_PERMISSION_HOST_TMP));
+    g_assert_true(mf_manifest_check_permissions(manifest, &error));
+    g_assert_no_error(error);
+
+    /* a permission we do not know is only refused by the check, and can not control the terminal */
+    app.permissions = "[\"host-tmp\", \"\\u001b[2J\"]";
+    unknown_json = mft_manifest_json(&app);
+    unknown = mf_manifest_new_from_data(unknown_json, -1, &error);
+    g_assert_no_error(error);
+    g_assert_true(mf_manifest_has_permission(unknown, MF_PERMISSION_HOST_TMP));
+    g_assert_false(mf_manifest_check_permissions(unknown, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+    g_assert_null(strchr(error->message, '\033'));
+    g_clear_error(&error);
+
+    /* only applications are launched */
+    core.permissions = "[\"host-commands\"]";
+    core_json = mft_manifest_json(&core);
+    on_core = mf_manifest_new_from_data(core_json, -1, &error);
+    g_assert_no_error(error);
+    g_assert_false(mf_manifest_check_permissions(on_core, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+    g_clear_error(&error);
+
+    app.permissions = "\"host-commands\"";
+    malformed_json = mft_manifest_json(&app);
+    g_assert_null(mf_manifest_new_from_data(malformed_json, -1, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
+}
+
 /**
  * mft_render:
  * @kind: the key of the kind of the file
@@ -1231,6 +1285,7 @@ main(int argc, char **argv)
     g_test_add_func("/integration/export-paths", test_export_paths);
     g_test_add_func("/integration/section", test_section);
     g_test_add_func("/integration/no-section", test_no_section);
+    g_test_add_func("/integration/permissions", test_permissions);
     g_test_add_func("/integration/malformed-section", test_malformed_section);
     g_test_add_func("/integration/check-file-paths", test_check_file_paths);
     g_test_add_func("/integration/check-aliases", test_check_aliases);

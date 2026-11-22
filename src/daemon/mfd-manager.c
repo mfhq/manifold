@@ -723,6 +723,8 @@ mfd_manager_plan_item_install(MfdManager *manager,
     }
     if (!mf_manifest_check_integration(manifest, error))
         return FALSE;
+    if (!mf_manifest_check_permissions(manifest, error))
+        return FALSE;
 
     iplan->item = item;
     iplan->add_image = !mf_store_has_image(manager->store, verity_hash);

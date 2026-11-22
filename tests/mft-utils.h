@@ -75,6 +75,7 @@ typedef struct {
 
     const char *command;     /* default: "app", for an application */
     const char *integration; /* the integration section as JSON, default: none */
+    const char *permissions; /* the permissions list as JSON, default: none */
 
     const char *image_file;       /* default: "i.raw" */
     gsize       image_size;       /* default: 1 */

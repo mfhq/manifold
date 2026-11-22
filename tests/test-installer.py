@@ -716,6 +716,20 @@ class HostIntegrationTest(InstallerTestCase):
         # file names are only printed after they passed the checks
         self.assertNotIn('will install this', out)
 
+    def test_permissions_are_checked_before_the_image_is_stored(self):
+        self.install_core()
+        images = self.stored_images()
+        app = Image(APP_ID, 'app', '0.1.0', base=self.kit, permissions=['from-the-future'])
+        out = self.install(self.kit, app, expect=1)
+        self.assertIn('Not a valid manifest', out)
+        self.assertIn('from-the-future is not known', out)
+        self.assertEqual(self.stored_images(), images)
+
+        app = Image(APP_ID, 'app', '0.1.0', base=self.kit, permissions=['host-commands'])
+        out = self.install(self.kit, app)
+        self.assertIn(f'{APP_ID} requests these permissions', out)
+        self.assertIn('run programs of this system', out)
+
     def test_integration_file_has_to_match_its_manifest(self):
         self.install_core()
         app = self.app_with(

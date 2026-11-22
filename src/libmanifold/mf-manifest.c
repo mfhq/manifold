@@ -65,6 +65,41 @@ mf_checksum_kind_from_string(const char *kind_str)
     return MF_CHECKSUM_KIND_UNKNOWN;
 }
 
+/**
+ * mf_permission_to_string:
+ * @permission: a #MfPermission
+ *
+ * Returns: The name of the permission.
+ */
+const char *
+mf_permission_to_string(MfPermission permission)
+{
+    switch (permission) {
+    case MF_PERMISSION_HOST_COMMANDS:
+        return "host-commands";
+    case MF_PERMISSION_HOST_TMP:
+        return "host-tmp";
+    default:
+        return "unknown";
+    }
+}
+
+/**
+ * mf_permission_from_string:
+ * @permission_str: (nullable): the name of a permission
+ *
+ * Returns: The permission, or %MF_PERMISSION_UNKNOWN if the name is not known
+ */
+MfPermission
+mf_permission_from_string(const char *permission_str)
+{
+    if (g_strcmp0(permission_str, "host-commands") == 0)
+        return MF_PERMISSION_HOST_COMMANDS;
+    if (g_strcmp0(permission_str, "host-tmp") == 0)
+        return MF_PERMISSION_HOST_TMP;
+    return MF_PERMISSION_UNKNOWN;
+}
+
 typedef struct {
     GBytes *data;
 
@@ -96,6 +131,9 @@ typedef struct {
     char *command; /* applications only */
 
     MfIntegration *integration; /* (nullable) */
+
+    guint permissions;              /* one bit for each MfPermission the manifest requests */
+    GPtrArray *unknown_permissions; /* names of requested permissions we do not know */
 } MfManifestPrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE(MfManifest, mf_manifest, G_TYPE_OBJECT)
@@ -123,6 +161,7 @@ mf_manifest_finalize(GObject *object)
     g_free(priv->verity_hash);
     g_free(priv->command);
     g_clear_object(&priv->integration);
+    g_ptr_array_unref(priv->unknown_permissions);
 
     G_OBJECT_CLASS(mf_manifest_parent_class)->finalize(object);
 }
@@ -136,6 +175,9 @@ mf_manifest_class_init(MfManifestClass *klass)
 static void
 mf_manifest_init(MfManifest *manifest)
 {
+    MfManifestPrivate *priv = GET_PRIVATE(manifest);
+
+    priv->unknown_permissions = g_ptr_array_new_with_free_func(g_free);
 }
 
 /* manifest field accessors, which report every failure as MF_ERROR_INVALID_MANIFEST */
@@ -332,6 +374,46 @@ mf_manifest_json_parse_image(sd_json_variant *manifest, MfManifestPrivate *priv,
 }
 
 /**
+ * mf_manifest_json_parse_permissions:
+ *
+ * Parse the permissions list of a manifest. We only check its structure here.
+ * The names of permissions we do not know are kept, so they can be refused
+ * when the image is installed.
+ */
+static gboolean
+mf_manifest_json_parse_permissions(sd_json_variant *jo, MfManifestPrivate *priv, GError **error)
+{
+    sd_json_variant *permissions = sd_json_variant_by_key(jo, "permissions");
+
+    if (permissions == NULL || sd_json_variant_is_null(permissions))
+        return TRUE;
+    if (!sd_json_variant_is_array(permissions)) {
+        /* TRANSLATORS: "permissions" is a field of the manifest, and not translated */
+        mf_set_error_invalid_manifest(error, "%s", _("permissions is not a list"));
+        return FALSE;
+    }
+
+    for (size_t i = 0; i < sd_json_variant_elements(permissions); i++) {
+        sd_json_variant *entry = sd_json_variant_by_index(permissions, i);
+        MfPermission permission;
+
+        if (!sd_json_variant_is_string(entry)) {
+            /* TRANSLATORS: "permissions" is a field of the manifest, and not translated */
+            mf_set_error_invalid_manifest(error, "%s", _("permissions: entry is not a string"));
+            return FALSE;
+        }
+
+        permission = mf_permission_from_string(sd_json_variant_string(entry));
+        if (permission == MF_PERMISSION_UNKNOWN)
+            g_ptr_array_add(priv->unknown_permissions, g_strdup(sd_json_variant_string(entry)));
+        else
+            priv->permissions |= 1u << permission;
+    }
+
+    return TRUE;
+}
+
+/**
  * mf_manifest_parse_json:
  */
 static gboolean
@@ -455,7 +537,7 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
             return FALSE;
     }
 
-    return TRUE;
+    return mf_manifest_json_parse_permissions(jo, priv, error);
 }
 
 /**
@@ -948,4 +1030,57 @@ mf_manifest_check_integration(MfManifest *manifest, GError **error)
     }
 
     return mf_integration_check(priv->integration, priv->component_id, error);
+}
+
+/**
+ * mf_manifest_has_permission:
+ * @manifest: an #MfManifest
+ * @permission: a #MfPermission
+ *
+ * Returns: %TRUE if the manifest requests @permission
+ */
+gboolean
+mf_manifest_has_permission(MfManifest *manifest, MfPermission permission)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), FALSE);
+    g_return_val_if_fail(permission > MF_PERMISSION_UNKNOWN && permission < MF_PERMISSION_LAST, FALSE);
+    auto priv = GET_PRIVATE(manifest);
+    return (priv->permissions & (1u << permission)) != 0;
+}
+
+/**
+ * mf_manifest_check_permissions:
+ * @manifest: an #MfManifest
+ * @error: a #GError
+ *
+ * Check that the image is allowed to have the permissions that its manifest
+ * requests. A manifest that requests no permissions always passes.
+ *
+ * Like mf_manifest_check_integration(), this check is not run when a manifest
+ * is parsed.
+ *
+ * Returns: %TRUE if the permissions are fine, or %FALSE with %MF_ERROR_INVALID_MANIFEST
+ */
+gboolean
+mf_manifest_check_permissions(MfManifest *manifest, GError **error)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), FALSE);
+    auto priv = GET_PRIVATE(manifest);
+
+    if (priv->permissions == 0 && priv->unknown_permissions->len == 0)
+        return TRUE;
+    /* only applications are launched, so other components can not use a permission */
+    if (priv->kind != MF_COMPONENT_KIND_APP || priv->sdk) {
+        mf_set_error_invalid_manifest(error, "%s", _("permissions: only applications can use this"));
+        return FALSE;
+    }
+    if (priv->unknown_permissions->len > 0) {
+        g_autofree char *shown = g_strescape(g_ptr_array_index(priv->unknown_permissions, 0), NULL);
+
+        /* TRANSLATORS: "permissions" is a field of the manifest, and not translated, %s is an entry of it */
+        mf_set_error_invalid_manifest(error, _("permissions: %s is not known"), shown);
+        return FALSE;
+    }
+
+    return TRUE;
 }

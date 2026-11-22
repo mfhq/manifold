@@ -250,6 +250,7 @@ class Image:
         integration=None,
         image_files=None,
         aliases=None,
+        permissions=None,
         data=None,
     ):
         self.component = component
@@ -263,6 +264,7 @@ class Image:
         self.identity = fake_hash('identity:' + component)
         self.integration = integration
         self.aliases = aliases
+        self.permissions = permissions
         if data is not None:
             self.data = data
         elif integration is None:
@@ -324,6 +326,8 @@ class Image:
                 m['integration']['alias'] = [
                     {'name': name, 'command': command} for name, command in self.aliases.items()
                 ]
+        if self.permissions is not None:
+            m['permissions'] = self.permissions
         return m
 
 

@@ -137,17 +137,60 @@ mfc_print_image_integration(MfManifest *manifest, MfIntegration *integration)
 }
 
 /**
- * mfc_print_integration:
- * @fd: the file descriptor of a bundle
+ * mfc_permission_get_label:
  *
- * List what a bundle will install on this system. Root is not asked before it
- * installs a bundle, and everyone else only gets the password prompts of polkit.
+ * Returns: a description of a permission, for display to the user
+ */
+static const char *
+mfc_permission_get_label(MfPermission permission)
+{
+    switch (permission) {
+    case MF_PERMISSION_HOST_COMMANDS:
+        /* TRANSLATORS: a permission of an application, in a list */
+        return _("run programs of this system");
+    case MF_PERMISSION_HOST_TMP:
+        /* TRANSLATORS: a permission of an application, in a list */
+        return _("share /tmp with this system");
+    default:
+        return mf_permission_to_string(permission);
+    }
+}
+
+/**
+ * mfc_print_image_permissions:
+ * @manifest: a manifest that passed mf_manifest_check_permissions()
  *
- * This is a notice and no check, as the service decides what can be installed.
- * If a bundle is not fine, we print nothing, and the service reports the problem.
+ * List the permissions a component requests.
  */
 static void
-mfc_print_integration(int fd)
+mfc_print_image_permissions(MfManifest *manifest)
+{
+    gboolean have_header = FALSE;
+
+    for (MfPermission permission = MF_PERMISSION_UNKNOWN + 1; permission < MF_PERMISSION_LAST; permission++) {
+        if (!mf_manifest_has_permission(manifest, permission))
+            continue;
+        if (!have_header) {
+            /* TRANSLATORS: %s is a component, and a list of its permissions follows */
+            g_print(_("%s requests these permissions:\n"), mf_manifest_get_component_id(manifest));
+            have_header = TRUE;
+        }
+        g_print("  %s\n", mfc_permission_get_label(permission));
+    }
+}
+
+/**
+ * mfc_print_bundle_notice:
+ * @fd: the file descriptor of a bundle
+ *
+ * Print the integration files that the components of a bundle will install
+ * on the host, and the permissions that the components request.
+ *
+ * The notice is only information for the user, the service decides on its own
+ * whether a bundle can be installed.
+ */
+static void
+mfc_print_bundle_notice(int fd)
 {
     g_autoptr(MfBundle) bundle = mf_bundle_new_from_fd(fd, NULL);
     GPtrArray *images;
@@ -161,9 +204,12 @@ mfc_print_integration(int fd)
         MfManifest *manifest = mf_bundle_image_get_manifest(g_ptr_array_index(images, i));
         MfIntegration *integration = mf_manifest_get_integration(manifest);
 
-        /* a bundle could put terminal escapes into these names, which the check rules out */
+        /* we only print names from a manifest that passed its check, as the check rejects
+         * names with terminal escape sequences */
         if (integration != NULL && mf_manifest_check_integration(manifest, NULL))
             mfc_print_image_integration(manifest, integration);
+        if (mf_manifest_check_permissions(manifest, NULL))
+            mfc_print_image_permissions(manifest);
     }
 }
 
@@ -185,7 +231,7 @@ mfc_install_bundle(MfcContext *ctx, const char *fname)
         return MFC_EXIT_BAD_INPUT;
     }
 
-    mfc_print_integration(fd);
+    mfc_print_bundle_notice(fd);
 
     basename = g_path_get_basename(fname);
     result = mf_manager_install_file(mfc_context_get_manager(ctx), fd, mfc_on_progress, ctx, NULL, &error);

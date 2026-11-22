@@ -37,6 +37,25 @@ typedef enum {
 const char    *mf_checksum_kind_to_string(MfChecksumKind kind);
 MfChecksumKind mf_checksum_kind_from_string(const char *kind_str);
 
+/**
+ * MfPermission:
+ * @MF_PERMISSION_UNKNOWN: Unknown permission.
+ * @MF_PERMISSION_HOST_COMMANDS: Run programs of the host system.
+ * @MF_PERMISSION_HOST_TMP: Share `/tmp` with the host system, instead of using a private one.
+ *
+ * Permissions an application can request in its manifest.
+ */
+typedef enum {
+    MF_PERMISSION_UNKNOWN,
+    MF_PERMISSION_HOST_COMMANDS,
+    MF_PERMISSION_HOST_TMP,
+    /*< private >*/
+    MF_PERMISSION_LAST
+} MfPermission;
+
+const char  *mf_permission_to_string(MfPermission permission);
+MfPermission mf_permission_from_string(const char *permission_str);
+
 #define MF_TYPE_MANIFEST (mf_manifest_get_type())
 G_DECLARE_DERIVABLE_TYPE(MfManifest, mf_manifest, MF, MANIFEST, GObject)
 
@@ -86,6 +105,11 @@ const char     *mf_manifest_get_command(MfManifest *manifest);
 
 MfIntegration  *mf_manifest_get_integration(MfManifest *manifest);
 gboolean        mf_manifest_check_integration(MfManifest *manifest,
+                                              GError    **error);
+
+gboolean        mf_manifest_has_permission(MfManifest  *manifest,
+                                           MfPermission permission);
+gboolean        mf_manifest_check_permissions(MfManifest *manifest,
                                               GError    **error);
 
 G_END_DECLS
