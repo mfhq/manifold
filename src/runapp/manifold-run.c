@@ -42,9 +42,15 @@
 
 #define PROGRAM_NAME "mfrun"
 
+/* where the programs of an application are in its tree */
+#define APP_BIN_DIR "/app/bin"
+
+/* the search path we use if the caller has none */
+#define DEFAULT_SEARCH_PATH "/usr/local/bin:/usr/bin:/bin"
+
 /*
- * The exit statuses we use when we can not run the program, the same ones
- * that shells and env(1) use. Once the program runs, its exit status is ours.
+ * The exit statuses that we return if we can not run the program. Shells and
+ * env(1) use the same values. If the program runs, we exit with its exit status.
  */
 enum {
     MFX_EXIT_FAILED = 125,         /* we failed ourselves, e.g. the component is not installed */
@@ -468,6 +474,69 @@ mfx_apply_environment(char **environment)
 }
 
 /**
+ * mfx_search_path_contains:
+ * @search_path: directories, separated by colons
+ * @dir: a directory, which does not have to be null-terminated
+ * @dir_length: the length of @dir
+ *
+ * Returns: true if @dir is one of the directories of @search_path
+ */
+static bool
+mfx_search_path_contains(const char *search_path, const char *dir, size_t dir_length)
+{
+    for (const char *entry = search_path; *entry != '\0';) {
+        size_t length = strcspn(entry, ":");
+
+        if (length == dir_length && strncmp(entry, dir, length) == 0)
+            return true;
+        entry += length;
+        if (*entry == ':')
+            entry++;
+    }
+    return false;
+}
+
+/**
+ * mfx_build_search_path:
+ * @caller_path: (nullable): the PATH we were called with
+ *
+ * Build the PATH of the application from the one of the caller. The programs
+ * of the application come first. We drop entries that are empty or relative,
+ * as both search the current directory, and entries that are there already.
+ *
+ * Returns: the search path, or nullptr if we are out of memory
+ */
+static char *
+mfx_build_search_path(const char *caller_path)
+{
+    if (caller_path == nullptr)
+        caller_path = DEFAULT_SEARCH_PATH;
+
+    /* we only ever drop entries of the caller, so this is large enough */
+    char *search_path = malloc(strlen(APP_BIN_DIR) + 1 + strlen(caller_path) + 1);
+    if (search_path == nullptr)
+        return nullptr;
+    char *end = stpcpy(search_path, APP_BIN_DIR);
+
+    for (const char *entry = caller_path; *entry != '\0';) {
+        size_t length = strcspn(entry, ":");
+        const char *next = entry + length + (entry[length] == ':' ? 1 : 0);
+
+        /* "/usr/bin/" is the same directory as "/usr/bin" */
+        while (length > 1 && entry[length - 1] == '/')
+            length--;
+        if (length > 0 && entry[0] == '/' && !mfx_search_path_contains(search_path, entry, length)) {
+            *end++ = ':';
+            end = mempcpy(end, entry, length);
+            *end = '\0';
+        }
+        entry = next;
+    }
+
+    return search_path;
+}
+
+/**
  * mfx_execute_path:
  *
  * Execute the program at @path.
@@ -488,10 +557,11 @@ mfx_execute_path(const char *path, char **args)
 /**
  * mfx_execute_command:
  *
- * Execute a program the caller named, which is in the tree: by its path, or
- * by its name. We look in /app/bin first, and then in the caller's PATH.
+ * Execute a program in the tree. @command is either the path of the
+ * program, or its name, which we look up in the PATH of the application.
  *
- * Returns: our exit status, if the program can not be found or executed
+ * Returns: the exit status to exit with. This function only returns if the
+ *   program can not be found or executed.
  */
 static int
 mfx_execute_command(const char *command, char **args)
@@ -504,8 +574,8 @@ mfx_execute_command(const char *command, char **args)
     if (strchr(command, '/') != nullptr)
         return mfx_execute_path(command, args);
 
-    int r = asprintf(&search, "/app/bin:%s", path_env != nullptr ? path_env : "/usr/local/bin:/usr/bin:/bin");
-    if (r < 0) {
+    search = strdup(path_env != nullptr ? path_env : "");
+    if (search == nullptr) {
         fprintf(stderr, "%s: Out of memory\n", PROGRAM_NAME);
         return MFX_EXIT_FAILED;
     }
@@ -514,8 +584,6 @@ mfx_execute_command(const char *command, char **args)
         char path[PATH_MAX];
         struct stat st;
 
-        if (dir[0] != '/')
-            continue;
         if (snprintf(path, sizeof(path), "%s/%s", dir, command) >= (int) sizeof(path))
             continue;
         /* like the shell, we skip an entry with the name of the program that is a directory */
@@ -547,6 +615,7 @@ main(int argc, char **argv)
     const char *command = nullptr;
     char cwd[PATH_MAX];
     MfxLaunchData launch_data = {.mount_fd = -1};
+    char *search_path;
     int opt;
 
     /* the leading "+" stops parsing at the first non-option argument */
@@ -592,6 +661,14 @@ main(int argc, char **argv)
 
     mfx_change_directory(cwd[0] != '\0' ? cwd : nullptr);
     mfx_apply_environment(launch_data.environment);
+
+    search_path = mfx_build_search_path(getenv("PATH"));
+    if (search_path == nullptr || setenv("PATH", search_path, 1) != 0) {
+        fprintf(stderr, "%s: Out of memory\n", PROGRAM_NAME);
+        mfx_launch_data_clear(&launch_data);
+        return MFX_EXIT_FAILED;
+    }
+    free(search_path);
 
     /* argv[optind] is replaced with the program name, the arguments after it are passed to the program */
     int status = mfx_execute_command(command != nullptr ? command : launch_data.executable, &argv[optind]);

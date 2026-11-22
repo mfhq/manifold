@@ -164,11 +164,13 @@ class RunnerTest(unittest.TestCase):
     # drop all capabilities first, so root has to use a user namespace too
     without_capabilities = False
 
-    def run_runner(self, *args, cwd='/'):
+    def run_runner(self, *args, cwd='/', search_path=None):
         argv = [ARGS.runner, '--socket', self.socket_path, *args]
         if self.without_capabilities:
             argv = ['setpriv', '--bounding-set=-all', '--inh-caps=-all', *argv]
         environment = dict(os.environ, MF_TEST_UNSET='from the caller', HOME='/home')
+        if search_path is not None:
+            environment['PATH'] = search_path
         return subprocess.run(
             argv, capture_output=True, text=True, check=False, cwd=cwd, env=environment
         )
@@ -212,6 +214,19 @@ class RunnerTest(unittest.TestCase):
         result = self.run_runner('--command=no-such-program', APP_ID)
         self.assertEqual(result.returncode, 127, result)
         self.assertIn('no-such-program', result.stderr)
+
+    def test_search_path(self):
+        """The directories of the application come first in the PATH. Entries that are
+        empty, relative or duplicated are removed."""
+        result = self.run_runner(
+            '--command=sh',
+            APP_ID,
+            '-c',
+            'echo "$PATH"',
+            search_path='/usr/bin:/home/user/bin::./bin:bin:/usr/bin/:/home/user/bin',
+        )
+        self.assertEqual(result.returncode, 0, result)
+        self.assertEqual(result.stdout, '/app/bin:/usr/bin:/home/user/bin\n')
 
     def test_not_installed(self):
         result = self.run_runner('com.example.missing')
