@@ -1,0 +1,36 @@
+/*
+ * Copyright (C) 2026 Matthias Klumpp <matthias@tenstral.net>
+ *
+ * SPDX-License-Identifier: LGPL-2.1-or-later
+ */
+
+#pragma once
+
+#include <glib-object.h>
+#include <systemd/sd-event.h>
+
+G_BEGIN_DECLS
+
+/* where a tree has the links to run programs of the host */
+#define MFR_HOST_BIN_DIR "/run/host-bin"
+
+/* directory on the host that contains the links to the programs of the host */
+#define MFR_HOST_BIN_LINKS_DIR MF_RUN_CACHE_DIR "/host-bin"
+
+/* the program in a tree that asks the host to run a program */
+#define MFR_HOST_RUN_PATH "/usr/bin/mfhost-run"
+
+#define MFR_TYPE_HOST_BIN (mfr_host_bin_get_type())
+G_DECLARE_FINAL_TYPE(MfrHostBin, mfr_host_bin, MFR, HOST_BIN, GObject)
+
+MfrHostBin        *mfr_host_bin_new(sd_event          *event,
+                                    const char        *links_dir,
+                                    const char *const *program_dirs,
+                                    GError           **error);
+
+gboolean           mfr_host_bin_sync(MfrHostBin *host_bin,
+                                     GError    **error);
+
+const char *const *mfr_host_bin_get_program_dirs(MfrHostBin *host_bin);
+
+G_END_DECLS

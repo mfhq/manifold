@@ -7,6 +7,8 @@ mf_rund_src = [
     'mfr-capture.h',
     'mfr-composer.c',
     'mfr-composer.h',
+    'mfr-host-bin.c',
+    'mfr-host-bin.h',
     'mfr-app.c',
     'mfr-app.h',
     'mfr-image-mounts.c',

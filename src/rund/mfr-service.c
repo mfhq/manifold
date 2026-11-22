@@ -125,6 +125,7 @@ mfr_varlink_method_prepare_launch(sd_varlink *link,
     g_autoptr(GError) error = NULL;
     const char *component_id = NULL;
     g_autoptr(MfrTree) tree = NULL;
+    g_autoptr(sd_json_variant) host_commands = NULL;
     g_autofd int mount_fd = -1;
     uid_t peer_uid;
 
@@ -146,6 +147,18 @@ mfr_varlink_method_prepare_launch(sd_varlink *link,
     if (!mfr_tree_clone(tree, &mount_fd, &error))
         return mfr_varlink_reply_error(link, component_id, error);
 
+    /* tell the client the directories it needs to run programs on the host */
+    if (mfr_app_has_permission(mfr_tree_get_app(tree), MF_PERMISSION_HOST_COMMANDS)) {
+        MfrHostBin *host_bin = mfr_composer_get_host_bin(service->composer);
+
+        r = sd_json_buildo(
+            &host_commands,
+            SD_JSON_BUILD_PAIR_STRING("directory", MFR_HOST_BIN_DIR),
+            SD_JSON_BUILD_PAIR_STRV("systemPaths", (char **) mfr_host_bin_get_program_dirs(host_bin)));
+        if (r < 0)
+            return sd_varlink_error_errno(link, r);
+    }
+
     int mount_index = sd_varlink_push_fd(link, mount_fd);
     if (mount_index < 0) {
         g_warning("Unable to pass the tree to user %u: %s",
@@ -159,7 +172,10 @@ mfr_varlink_method_prepare_launch(sd_varlink *link,
         link,
         SD_JSON_BUILD_PAIR_INTEGER("mountFileDescriptor", mount_index),
         SD_JSON_BUILD_PAIR_STRING("executable", mfr_tree_get_executable(tree)),
-        SD_JSON_BUILD_PAIR_STRV("environment", (char **) mfr_tree_get_environment(tree)));
+        SD_JSON_BUILD_PAIR_STRV("environment", (char **) mfr_tree_get_environment(tree)),
+        SD_JSON_BUILD_PAIR_CONDITION(host_commands != NULL,
+                                     "hostCommands",
+                                     SD_JSON_BUILD_VARIANT(host_commands)));
 }
 
 /**
@@ -277,7 +293,7 @@ mfr_service_new(sd_event *event, GError **error)
     g_autoptr(MfrService) service = g_object_new(MFR_TYPE_SERVICE, NULL);
     int r;
 
-    service->composer = mfr_composer_new(error);
+    service->composer = mfr_composer_new(event, error);
     if (service->composer == NULL)
         return NULL;
 

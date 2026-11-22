@@ -20,11 +20,11 @@
 /**
  * MfrComposer:
  *
- * Composes the mount trees applications are launched in. The composer owns
- * the caches that live as long as the daemon: the trees that were assembled,
- * the captures of the host for every core, and the mounted images. It loads
- * what is installed, and dispenses a new or cached tree for an application
- * launch request.
+ * Composes the mount trees that applications are launched in. The composer
+ * owns the caches that are kept for as long as the daemon runs: the assembled
+ * trees, the captures of the host for every core, the mounted images, and the
+ * links to the programs of the host. For a launch request, it loads the
+ * installed application and returns a cached tree or assembles a new one.
  */
 struct _MfrComposer {
     GObject parent_instance;
@@ -32,6 +32,7 @@ struct _MfrComposer {
     GHashTable *trees;          /* component id -> MfrTree */
     GHashTable *captures;       /* root hash of a core -> MfrCapture */
     MfrImageMounts *img_mounts; /* the mounted images of every tree */
+    MfrHostBin *host_bin;       /* the links to the programs of the host */
 };
 
 G_DEFINE_FINAL_TYPE(MfrComposer, mfr_composer, G_TYPE_OBJECT)
@@ -104,6 +105,7 @@ mfr_composer_finalize(GObject *object)
     g_hash_table_unref(composer->trees);
     g_hash_table_unref(composer->captures);
     g_clear_object(&composer->img_mounts);
+    g_clear_object(&composer->host_bin);
 
     G_OBJECT_CLASS(mfr_composer_parent_class)->finalize(object);
 }
@@ -161,14 +163,16 @@ mfr_enter_mount_namespace(GError **error)
 
 /**
  * mfr_composer_new:
+ * @event: the event loop of the daemon
  * @error: A #GError
  *
  * Create the composer. Creating it moves the whole process into a new mount
  * namespace, so a process can only have one composer.
  */
 MfrComposer *
-mfr_composer_new(GError **error)
+mfr_composer_new(sd_event *event, GError **error)
 {
+    g_autoptr(MfrComposer) composer = NULL;
     g_autoptr(GHashTable) used_layers = NULL;
     g_autoptr(GHashTable) used_captures = NULL;
 
@@ -183,7 +187,12 @@ mfr_composer_new(GError **error)
     mfr_tree_remove_unused(used_layers);
     mfr_image_mounts_remove_stale_devices();
 
-    return g_object_new(MFR_TYPE_COMPOSER, NULL);
+    composer = g_object_new(MFR_TYPE_COMPOSER, NULL);
+    composer->host_bin = mfr_host_bin_new(event, MFR_HOST_BIN_LINKS_DIR, NULL, error);
+    if (composer->host_bin == NULL)
+        return NULL;
+
+    return g_steal_pointer(&composer);
 }
 
 /**
@@ -240,6 +249,18 @@ GList *
 mfr_composer_list_trees(MfrComposer *composer)
 {
     return g_hash_table_get_values(composer->trees);
+}
+
+/**
+ * mfr_composer_get_host_bin:
+ * @composer: The composer.
+ *
+ * Returns: (transfer none): the links to the programs of the host
+ */
+MfrHostBin *
+mfr_composer_get_host_bin(MfrComposer *composer)
+{
+    return composer->host_bin;
 }
 
 /**

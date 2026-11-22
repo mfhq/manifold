@@ -8,6 +8,9 @@
 
 #include <glib-object.h>
 
+#include <systemd/sd-event.h>
+
+#include "mfr-host-bin.h"
 #include "mfr-tree.h"
 
 G_BEGIN_DECLS
@@ -15,12 +18,14 @@ G_BEGIN_DECLS
 #define MFR_TYPE_COMPOSER (mfr_composer_get_type())
 G_DECLARE_FINAL_TYPE(MfrComposer, mfr_composer, MFR, COMPOSER, GObject)
 
-MfrComposer *mfr_composer_new(GError **error);
+MfrComposer *mfr_composer_new(sd_event *event,
+                              GError  **error);
 
 MfrTree     *mfr_composer_prepare(MfrComposer *composer,
                                   const char  *component_id,
                                   GError     **error);
 GList       *mfr_composer_list_trees(MfrComposer *composer);
+MfrHostBin  *mfr_composer_get_host_bin(MfrComposer *composer);
 gboolean     mfr_composer_refresh_capture(MfrComposer *composer,
                                           GError     **error);
 

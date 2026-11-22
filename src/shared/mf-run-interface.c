@@ -35,6 +35,14 @@ static SD_VARLINK_DEFINE_STRUCT_TYPE(
     SD_VARLINK_FIELD_COMMENT("The dm-verity root hash of the image of the component, as a hex encoded string."),
     SD_VARLINK_DEFINE_FIELD(rootHash, SD_VARLINK_STRING, 0));
 
+static SD_VARLINK_DEFINE_STRUCT_TYPE(
+    HostCommands,
+    SD_VARLINK_FIELD_COMMENT("Directory in the mount tree that contains one link for every program in systemPaths. "
+                             "The caller has to append this directory to the PATH of the application."),
+    SD_VARLINK_DEFINE_FIELD(directory, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The directories of the host that the service searched for programs."),
+    SD_VARLINK_DEFINE_FIELD(systemPaths, SD_VARLINK_STRING, SD_VARLINK_ARRAY));
+
 static SD_VARLINK_DEFINE_METHOD(
     PrepareLaunch,
     SD_VARLINK_FIELD_COMMENT("Identifier of the application to launch."),
@@ -45,7 +53,10 @@ static SD_VARLINK_DEFINE_METHOD(
     SD_VARLINK_DEFINE_OUTPUT(executable, SD_VARLINK_STRING, 0),
     SD_VARLINK_FIELD_COMMENT("Environment variables to set for the application, as NAME=VALUE. "
                              "A variable with an empty value must be unset."),
-    SD_VARLINK_DEFINE_OUTPUT(environment, SD_VARLINK_STRING, SD_VARLINK_ARRAY));
+    SD_VARLINK_DEFINE_OUTPUT(environment, SD_VARLINK_STRING, SD_VARLINK_ARRAY),
+    SD_VARLINK_FIELD_COMMENT("Location of the links to the programs of the host in the mount tree. Only set for "
+                             "an application with the host-commands permission."),
+    SD_VARLINK_DEFINE_OUTPUT_BY_TYPE(hostCommands, HostCommands, SD_VARLINK_NULLABLE));
 
 static SD_VARLINK_DEFINE_METHOD(
     RefreshCapture);
@@ -87,6 +98,8 @@ SD_VARLINK_DEFINE_INTERFACE(
     &vl_type_LayerKind,
     SD_VARLINK_SYMBOL_COMMENT("A layer of a mount tree."),
     &vl_type_Layer,
+    SD_VARLINK_SYMBOL_COMMENT("Describes the links to programs of the host in a mount tree."),
+    &vl_type_HostCommands,
 
     SD_VARLINK_SYMBOL_COMMENT("Compose the mount tree for an application, or reuse one that was composed before. "
                               "May be called by any user."),

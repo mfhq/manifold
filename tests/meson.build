@@ -146,6 +146,15 @@ test('compose',
     suite: 'unit',
 )
 
+test('host-bin',
+    executable('test-host-bin',
+        ['test-host-bin.c'],
+        include_directories: [root_inc_dir],
+        dependencies: [manifold_rund_static_dep, mft_test_utils_dep],
+    ),
+    suite: 'unit',
+)
+
 test('capture',
     executable('test-capture',
         ['test-capture.c'],

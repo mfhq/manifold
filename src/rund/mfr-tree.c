@@ -20,6 +20,7 @@
 #include <systemd/sd-json.h>
 
 #include "mf-json-private.h"
+#include "mfr-host-bin.h"
 #include "mf-sdautoptr-private.h"
 
 constexpr char LAYER_NAME[] = "layer";
@@ -550,6 +551,13 @@ mfr_tree_prepare_layer(MfrTree *tree, const char *layer_dir, GError **error)
         !glnx_shutil_mkdir_p_at(AT_FDCWD, tmp_dir, 0755, NULL, error))
         return FALSE;
 
+    if (mfr_app_has_permission(tree->app, MF_PERMISSION_HOST_COMMANDS)) {
+        g_autofree char *host_bin_dir = g_build_filename(layer_dir, MFR_HOST_BIN_DIR, NULL);
+
+        if (!glnx_shutil_mkdir_p_at(AT_FDCWD, host_bin_dir, 0755, NULL, error))
+            return FALSE;
+    }
+
     /* create the mount points for the host. overlayfs merges each of them with a directory of the
      * same name in the images. */
     for (size_t i = 0; i < G_N_ELEMENTS(HOST_BINDS); i++) {
@@ -688,6 +696,14 @@ mfr_tree_mount_tree(MfrTree *tree,
     /* bind-mount the host into /run/host */
     if (!mfr_bind_host(tree->mount_path, error))
         return FALSE;
+
+    /* bind-mount the directory with the links to the programs of the host */
+    if (mfr_app_has_permission(tree->app, MF_PERMISSION_HOST_COMMANDS)) {
+        g_autofree char *host_bin_dir = g_build_filename(tree->mount_path, MFR_HOST_BIN_DIR, NULL);
+
+        if (!mfr_bind_mount(MFR_HOST_BIN_LINKS_DIR, host_bin_dir, TRUE, error))
+            return FALSE;
+    }
 
     if (mount("proc", proc_dir, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, proc_options) != 0)
         return glnx_throw_errno_prefix(error, "Unable to mount /proc at %s", proc_dir);
