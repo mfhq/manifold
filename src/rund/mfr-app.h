@@ -7,6 +7,7 @@
 #pragma once
 
 #include <glib-object.h>
+#include <manifold.h>
 #include <systemd/sd-json.h>
 
 G_BEGIN_DECLS
@@ -65,15 +66,21 @@ struct _MfrApp {
 
     char    *component_id;
     char    *version;
-    char    *command;    /* the program to run, below /app/bin */
-    char    *arch_tuple; /* multiarch tuple of the application */
+    char    *command;     /* the program to run, below /app/bin */
+    char    *arch_tuple;  /* multiarch tuple of the application */
+    guint    permissions; /* one bit for each MfPermission the application has */
     MfrLayer layers[MFR_LAYER_LAST];
 };
 
-MfrApp *mfr_app_load(const char *component_id,
-                     GError    **error);
+MfrApp  *mfr_app_load(const char *component_id,
+                      GError    **error);
 
-int     mfr_app_append_layers_json(const MfrApp     *app,
-                                   sd_json_variant **array);
+gboolean mfr_app_has_permission(const MfrApp *app,
+                                MfPermission  permission);
+
+int      mfr_app_append_layers_json(const MfrApp     *app,
+                                    sd_json_variant **array);
+int      mfr_app_append_permissions_json(const MfrApp     *app,
+                                         sd_json_variant **array);
 
 G_END_DECLS

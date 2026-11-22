@@ -43,7 +43,7 @@ static const struct {
     {"/run/systemd", TRUE },
 };
 
-/* the tree has its own /tmp, and only needs the X11 sockets of the host there */
+/* host paths bind-mounted below /tmp, if the tree has a /tmp of its own. Only the X11 sockets are needed. */
 static const char *const HOST_TMP_BINDS[] = {"/tmp/.X11-unix"};
 
 /* host paths bind-mounted below /run/host, besides the root filesystem */
@@ -327,17 +327,22 @@ mfr_build_environment_vars(const MfrCapture *capture)
 /**
  * mfr_write_environment_record:
  *
- * Write down what the tree was assembled from, for the application that runs
- * in it, and for bug reports.
+ * Write the environment record of the tree. It lists the layers, permissions,
+ * capture and environment variables that the tree was assembled with, and can
+ * be read by the application and included in bug reports.
  */
 static gboolean
 mfr_write_environment_record(MfrTree *tree, const char *path, GError **error)
 {
     g_autoptr(sd_json_variant) record = NULL;
     g_autoptr(sd_json_variant) layers = NULL;
+    g_autoptr(sd_json_variant) permissions = NULL;
     g_autoptr(sd_json_variant) environment = NULL;
 
     int r = mfr_app_append_layers_json(tree->app, &layers);
+    if (r < 0)
+        return glnx_throw(error, "Unable to build environment record: %s", g_strerror(-r));
+    r = mfr_app_append_permissions_json(tree->app, &permissions);
     if (r < 0)
         return glnx_throw(error, "Unable to build environment record: %s", g_strerror(-r));
     for (size_t i = 0; tree->environment[i] != NULL; i++) {
@@ -352,13 +357,15 @@ mfr_write_environment_record(MfrTree *tree, const char *path, GError **error)
             return glnx_throw(error, "Unable to build environment record: %s", g_strerror(-r));
     }
 
-    r = sd_json_buildo(&record,
-                       SD_JSON_BUILD_PAIR_STRING("componentId", tree->app->component_id),
-                       SD_JSON_BUILD_PAIR_STRING("tree", tree->key),
-                       SD_JSON_BUILD_PAIR_VARIANT("layers", layers),
-                       SD_JSON_BUILD_PAIR_STRING("capture", mfr_capture_get_id(tree->capture)),
-                       SD_JSON_BUILD_PAIR_VARIANT("environment", environment),
-                       SD_JSON_BUILD_PAIR_STRING("manifold", MF_VERSION));
+    r = sd_json_buildo(
+        &record,
+        SD_JSON_BUILD_PAIR_STRING("componentId", tree->app->component_id),
+        SD_JSON_BUILD_PAIR_STRING("tree", tree->key),
+        SD_JSON_BUILD_PAIR_VARIANT("layers", layers),
+        SD_JSON_BUILD_PAIR_CONDITION(permissions != NULL, "permissions", SD_JSON_BUILD_VARIANT(permissions)),
+        SD_JSON_BUILD_PAIR_STRING("capture", mfr_capture_get_id(tree->capture)),
+        SD_JSON_BUILD_PAIR_VARIANT("environment", environment),
+        SD_JSON_BUILD_PAIR_STRING("manifold", MF_VERSION));
     if (r < 0)
         return glnx_throw(error, "Unable to build environment record: %s", g_strerror(-r));
 
@@ -617,6 +624,37 @@ out:
 }
 
 /**
+ * mfr_tree_mount_tmp:
+ *
+ * Mount /tmp of the tree. If the application has the permission to use /tmp
+ * of the host, we bind it. Otherwise the tree gets a tmpfs, which is shared
+ * by all launches of the application in this tree.
+ */
+static gboolean
+mfr_tree_mount_tmp(MfrTree *tree, GError **error)
+{
+    g_autofree char *tmp_dir = g_build_filename(tree->mount_path, "tmp", NULL);
+
+    if (mfr_app_has_permission(tree->app, MF_PERMISSION_HOST_TMP))
+        return mfr_bind_mount("/tmp", tmp_dir, FALSE, error);
+
+    if (mount("tmpfs", tmp_dir, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777") != 0)
+        return glnx_throw_errno_prefix(error, "Unable to mount tmpfs at %s", tmp_dir);
+    /* create the mount points for the host directories on the new tmpfs, and bind the directories */
+    for (size_t i = 0; i < G_N_ELEMENTS(HOST_TMP_BINDS); i++) {
+        g_autofree char *target = g_build_filename(tree->mount_path, HOST_TMP_BINDS[i], NULL);
+
+        if (!g_file_test(HOST_TMP_BINDS[i], G_FILE_TEST_IS_DIR))
+            continue;
+        if (!glnx_shutil_mkdir_p_at(AT_FDCWD, target, 01777, NULL, error) ||
+            !mfr_bind_mount(HOST_TMP_BINDS[i], target, FALSE, error))
+            return FALSE;
+    }
+
+    return TRUE;
+}
+
+/**
  * mfr_tree_mount_tree:
  *
  * Mount the tree in its final form, as the application will see it. The
@@ -634,7 +672,6 @@ mfr_tree_mount_tree(MfrTree *tree,
 {
     g_autofree char *options = g_strdup_printf("lowerdir=%s:%s", layer_dir, lower);
     g_autofree char *proc_dir = g_build_filename(tree->mount_path, "proc", NULL);
-    g_autofree char *tmp_dir = g_build_filename(tree->mount_path, "tmp", NULL);
     g_autofree char *app_target = g_build_filename(tree->mount_path, "app", NULL);
     g_autofree char *proc_options = mfr_read_host_proc_options(error);
 
@@ -654,19 +691,8 @@ mfr_tree_mount_tree(MfrTree *tree,
 
     if (mount("proc", proc_dir, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, proc_options) != 0)
         return glnx_throw_errno_prefix(error, "Unable to mount /proc at %s", proc_dir);
-    /* a /tmp of the tree's own, but we share it across launches */
-    if (mount("tmpfs", tmp_dir, "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777") != 0)
-        return glnx_throw_errno_prefix(error, "Unable to mount tmpfs at %s", tmp_dir);
-    /* the mount points below /tmp are made on the tmpfs */
-    for (size_t i = 0; i < G_N_ELEMENTS(HOST_TMP_BINDS); i++) {
-        g_autofree char *target = g_build_filename(tree->mount_path, HOST_TMP_BINDS[i], NULL);
-
-        if (!g_file_test(HOST_TMP_BINDS[i], G_FILE_TEST_IS_DIR))
-            continue;
-        if (!glnx_shutil_mkdir_p_at(AT_FDCWD, target, 01777, NULL, error) ||
-            !mfr_bind_mount(HOST_TMP_BINDS[i], target, FALSE, error))
-            return FALSE;
-    }
+    if (!mfr_tree_mount_tmp(tree, error))
+        return FALSE;
 
     /* bind-mount directories of the host at the same path in the tree */
     for (size_t i = 0; i < G_N_ELEMENTS(HOST_BINDS); i++) {

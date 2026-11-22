@@ -51,7 +51,8 @@ mft_write_usual_store(void)
                                          .kind = "app",
                                          .version = "0.1.0",
                                          .base_id = TEST_PLATFORM_KIT_ID,
-                                         .base_kind = "kit"},
+                                         .base_kind = "kit",
+                                         .permissions = "[\"host-tmp\"]"},
                       NULL,
                       NULL);
 }
@@ -97,6 +98,8 @@ test_load(Fixture *fixture, gconstpointer user_data)
     g_assert_cmpstr(app->version, ==, "0.1.0");
     g_assert_cmpstr(app->command, ==, "app");
     g_assert_cmpstr(app->arch_tuple, ==, "x86_64-linux-gnu");
+    g_assert_true(mfr_app_has_permission(app, MF_PERMISSION_HOST_TMP));
+    g_assert_false(mfr_app_has_permission(app, MF_PERMISSION_HOST_COMMANDS));
 
     layer = &app->layers[MFR_LAYER_APP];
     g_assert_cmpstr(layer->component_id, ==, TEST_APP_ID);

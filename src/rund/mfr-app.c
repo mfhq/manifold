@@ -51,6 +51,42 @@ mfr_app_append_layers_json(const MfrApp *app, sd_json_variant **array)
 }
 
 /**
+ * mfr_app_has_permission:
+ * @app: an application
+ * @permission: a #MfPermission
+ *
+ * Returns: %TRUE if the application has @permission
+ */
+gboolean
+mfr_app_has_permission(const MfrApp *app, MfPermission permission)
+{
+    return (app->permissions & (1u << permission)) != 0;
+}
+
+/**
+ * mfr_app_append_permissions_json:
+ * @app: an application
+ * @array: (inout): the JSON array to append to
+ *
+ * Append the names of the permissions of the application to a JSON array.
+ *
+ * Returns: 0, or a negative errno
+ */
+int
+mfr_app_append_permissions_json(const MfrApp *app, sd_json_variant **array)
+{
+    for (MfPermission permission = MF_PERMISSION_UNKNOWN + 1; permission < MF_PERMISSION_LAST; permission++) {
+        if (!mfr_app_has_permission(app, permission))
+            continue;
+        int r = sd_json_variant_append_arrayb(array,
+                                              SD_JSON_BUILD_STRING(mf_permission_to_string(permission)));
+        if (r < 0)
+            return r;
+    }
+    return 0;
+}
+
+/**
  * mfr_runtime_layer_kind_from_component_kind:
  */
 static gboolean
@@ -216,6 +252,10 @@ mfr_app_load(const char *component_id, GError **error)
         return glnx_null_throw(error, "The manifest of %s has no command to run", component_id);
 
     app->arch_tuple = mfr_build_multiarch_tuple(mf_manifest_get_architecture(manifest));
+    for (MfPermission permission = MF_PERMISSION_UNKNOWN + 1; permission < MF_PERMISSION_LAST; permission++) {
+        if (mf_manifest_has_permission(manifest, permission))
+            app->permissions |= 1u << permission;
+    }
 
     if (!mfr_fill_layer_info(MF_STORAGE_DIR, component, &app->layers[MFR_LAYER_APP], error))
         return NULL;
