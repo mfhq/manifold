@@ -16,8 +16,8 @@ constexpr int BAR_LENGTH_MIN = 10;
 constexpr int BAR_LENGTH_MAX = 20;
 constexpr int TERMINAL_WIDTH_DEFAULT = 80;
 
-/* redrawing more often than this is wasted on the eye */
-constexpr gint64 REDRAW_INTERVAL_USEC = 100 * 1000;
+/* the shortest time between two redraws of the bar, faster updates are not visible anyway */
+constexpr int64_t REDRAW_INTERVAL_USEC = 100 * 1000;
 
 static const char *const PARTIAL_BLOCKS[] = {" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉"};
 static const char FULL_BLOCK[] = "█";
@@ -27,8 +27,8 @@ struct MfcProgressBar {
     gboolean utf8;
     MfItemProgress *item; /* the item that the bar shows the progress of */
     char *label;
-    gint64 start_time;
-    gint64 last_draw_time;
+    int64_t start_time;
+    int64_t last_draw_time;
     gboolean drawn;
 };
 
@@ -127,13 +127,13 @@ mfc_progress_bar_start(MfcProgressBar *bar, const MfItemProgress *item, const ch
  * Draw the bar.
  */
 void
-mfc_progress_bar_update(MfcProgressBar *bar, double percent_done, guint64 bytes_done)
+mfc_progress_bar_update(MfcProgressBar *bar, double percent_done, uint64_t bytes_done)
 {
     g_autoptr(GString) line = NULL;
     g_autofree char *speed = NULL;
     g_autofree char *label = NULL;
-    gint64 now = g_get_monotonic_time();
-    gint64 elapsed_usec = now - bar->start_time;
+    int64_t now = g_get_monotonic_time();
+    int64_t elapsed_usec = now - bar->start_time;
     guint percent;
     int room;
     int bar_length;
@@ -150,7 +150,7 @@ mfc_progress_bar_update(MfcProgressBar *bar, double percent_done, guint64 bytes_
     percent = (guint) CLAMP(percent_done, 0, 100);
     if (bytes_done > 0 && elapsed_usec >= G_USEC_PER_SEC) {
         g_autofree char *rate = g_format_size(
-            (guint64) (bytes_done * G_USEC_PER_SEC / (guint64) elapsed_usec));
+            (uint64_t) (bytes_done * G_USEC_PER_SEC / (uint64_t) elapsed_usec));
 
         /* TRANSLATORS: a transfer rate, %s is an amount of data like "2.3 MB" */
         speed = g_strdup_printf(_("%s/s"), rate);
@@ -181,7 +181,7 @@ mfc_progress_bar_update(MfcProgressBar *bar, double percent_done, guint64 bytes_
     if (speed != NULL)
         g_string_append_printf(line, "  %s", speed);
 
-    /* overwrite the line, and clear what a longer line left behind */
+    /* overwrite the line, and clear the rest of it in case the previous line was longer */
     g_print("\r%s\x1b[K", line->str);
     fflush(stdout);
     bar->drawn = TRUE;

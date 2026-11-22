@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib.h>
 
 G_BEGIN_DECLS
@@ -17,25 +18,25 @@ G_BEGIN_DECLS
  * as status information.
  */
 typedef struct {
-    char   *url;
-    int     fd;       /* the file to write the data to, owned by the caller */
-    guint64 max_size; /* nothing is written at or after this offset */
-    GArray *ranges;   /* (element-type MfdFetchRange): the ranges to fetch, or NULL for the whole file */
+    char    *url;
+    int      fd;       /* the file to write the data to, owned by the caller */
+    uint64_t max_size; /* nothing is written at or after this offset */
+    GArray  *ranges;   /* (element-type MfdFetchRange): the ranges to fetch, or NULL for the whole file */
 
-    guint64 size;        /* the number of bytes written */
-    char   *failure;     /* the name of the failure in the fetch interface, or NULL */
-    gint64  http_status; /* the HTTP status of the failed reply, or 0 */
-    char   *message;     /* the error message of the helper, or NULL */
+    uint64_t size;        /* the number of bytes written */
+    char    *failure;     /* the name of the failure in the fetch interface, or NULL */
+    int64_t  http_status; /* the HTTP status of the failed reply, or 0 */
+    char    *message;     /* the error message of the helper, or NULL */
 } MfdFetchRequest;
 
 typedef struct {
-    guint64 offset;
-    guint64 length;
+    uint64_t offset;
+    uint64_t length;
 } MfdFetchRange;
 
 MfdFetchRequest *mfd_fetch_request_new(const char *url,
                                        int         fd,
-                                       guint64     max_size);
+                                       uint64_t    max_size);
 void             mfd_fetch_request_free(MfdFetchRequest *request);
 void             mfd_fetch_request_to_error(MfdFetchRequest *request,
                                             GError         **error);
@@ -48,9 +49,9 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdFetchRequest, mfd_fetch_request_free)
  * A small file to download into memory.
  */
 typedef struct {
-    char   *url;
-    guint64 max_size; /* the largest the file may be */
-    GBytes *data;     /* the content of the file, set once it was downloaded */
+    char    *url;
+    uint64_t max_size; /* the largest the file may be */
+    GBytes  *data;     /* the content of the file, set once it was downloaded */
 } MfdMemoryDownload;
 
 void mfd_memory_download_clear(MfdMemoryDownload *download);
@@ -60,7 +61,7 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC(MfdMemoryDownload,
 
 typedef struct _MfdFetcher MfdFetcher;
 
-typedef void (*MfdFetchProgressFunc)(guint64  received,
+typedef void (*MfdFetchProgressFunc)(uint64_t received,
                                      gpointer user_data);
 
 MfdFetcher *mfd_fetcher_new(const char *helper_path,
@@ -78,7 +79,7 @@ gboolean    mfd_fetcher_download_to_memory(MfdFetcher         *fetcher,
                                            GError            **error);
 GBytes     *mfd_fetcher_download_file(MfdFetcher *fetcher,
                                       const char *url,
-                                      guint64     max_size,
+                                      uint64_t    max_size,
                                       GError    **error);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdFetcher, mfd_fetcher_unref)

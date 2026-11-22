@@ -41,7 +41,7 @@ constexpr size_t ROOT_HASH_SIZE = 32;
 struct MfrImageMount {
     char *verity_hash;
     char *mountpoint;
-    unsigned int users;
+    guint users;
 };
 
 /**
@@ -94,7 +94,7 @@ mfr_cryptsetup_log(int level, const char *message, void *user_data)
  *   the device is stored in @ret_path.
  */
 static int
-mfr_loop_attach(int image_fd, guint64 offset, char **ret_path, GError **error)
+mfr_loop_attach(int image_fd, uint64_t offset, char **ret_path, GError **error)
 {
     g_autofd int control_fd = -1;
 
@@ -102,7 +102,7 @@ mfr_loop_attach(int image_fd, guint64 offset, char **ret_path, GError **error)
     if (control_fd < 0)
         return glnx_throw_errno_prefix(error, "Unable to open %s", LOOP_CONTROL), -1;
 
-    /* someone else may take the free device before we configure it */
+    /* a different process may take the free device before we configure it, so we try a few times */
     for (int attempt = 0; attempt < 16; attempt++) {
         g_autofree char *path = NULL;
         g_autofd int loop_fd = -1;
@@ -138,7 +138,7 @@ mfr_loop_attach(int image_fd, guint64 offset, char **ret_path, GError **error)
  * Decode a verity root hash from a string.
  */
 static gboolean
-mfr_decode_root_hash(const char *verity_hash, guint8 *ret_hash)
+mfr_decode_root_hash(const char *verity_hash, uint8_t *ret_hash)
 {
     for (size_t i = 0; i < ROOT_HASH_SIZE; i++) {
         int high = g_ascii_xdigit_value(verity_hash[2 * i]);
@@ -146,7 +146,7 @@ mfr_decode_root_hash(const char *verity_hash, guint8 *ret_hash)
 
         if (high < 0 || low < 0)
             return FALSE;
-        ret_hash[i] = (guint8) ((high << 4) | low);
+        ret_hash[i] = (uint8_t) ((high << 4) | low);
     }
 
     return TRUE;
@@ -165,7 +165,7 @@ mfr_verity_activate(const char *loop_path, const MfrImage *image, const char *de
         /* the hash partition follows the filesystem partition in the same device */
         .hash_area_offset = image->hash_offset - image->data_offset,
     };
-    guint8 root_hash[ROOT_HASH_SIZE];
+    uint8_t root_hash[ROOT_HASH_SIZE];
     gboolean ret = FALSE;
     int r;
 

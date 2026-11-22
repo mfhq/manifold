@@ -88,8 +88,8 @@ mft_write_proc_file(const char *name, const char *content)
 static void
 mft_enter_user_namespace(void)
 {
-    g_autofree char *uid_map = g_strdup_printf("0 %u 1", (unsigned int) getuid());
-    g_autofree char *gid_map = g_strdup_printf("0 %u 1", (unsigned int) getgid());
+    g_autofree char *uid_map = g_strdup_printf("0 %u 1", (guint) getuid());
+    g_autofree char *gid_map = g_strdup_printf("0 %u 1", (guint) getgid());
 
     if (unshare(CLONE_NEWUSER | CLONE_NEWNS) != 0) {
         /* a kernel without user namespaces does not know the flag */

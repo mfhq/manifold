@@ -6,6 +6,7 @@
 
 #include "config.h"
 
+#include <inttypes.h>
 #include <sys/stat.h>
 #include <glib/gstdio.h>
 
@@ -35,11 +36,11 @@ static char *
 mft_dir_entry(const char *path)
 {
     struct stat st;
-    guint64 mtime = 0;
+    uint64_t mtime = 0;
 
     if (stat(path, &st) == 0)
-        mtime = (guint64) st.st_mtim.tv_sec * G_USEC_PER_SEC * 1000 + (guint64) st.st_mtim.tv_nsec;
-    return g_strdup_printf("{\"path\": \"%s\", \"mtime\": %" G_GUINT64_FORMAT "}", path, mtime);
+        mtime = (uint64_t) st.st_mtim.tv_sec * G_USEC_PER_SEC * 1000 + (uint64_t) st.st_mtim.tv_nsec;
+    return g_strdup_printf("{\"path\": \"%s\", \"mtime\": %" PRIu64 "}", path, mtime);
 }
 
 static char *

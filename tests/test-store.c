@@ -28,12 +28,12 @@ static MfdStoreWriter *writer = NULL;
 static MfdManager *manager = NULL;
 
 static void
-mft_add_image(const char *hash, gsize size)
+mft_add_image(const char *hash, size_t size)
 {
     g_autofree char *path = g_strdup_printf(IMAGES "/%s.raw", hash);
     g_autofree char *data = g_strnfill(size, 'x');
 
-    g_assert_true(g_file_set_contents(path, data, (gssize) size, NULL));
+    g_assert_true(g_file_set_contents(path, data, (ssize_t) size, NULL));
 }
 
 static GBytes *

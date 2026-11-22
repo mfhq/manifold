@@ -40,8 +40,8 @@
  * Whether a service runs on a host is up to the admin of that host.
  */
 
-/* host tools usually take milliseconds, so this only guards against a tool that hangs */
-constexpr unsigned int HOST_TOOL_TIMEOUT_SEC = 60;
+/* timeout for a host tool, in case it hangs */
+constexpr guint HOST_TOOL_TIMEOUT_SEC = 60;
 
 /* file modes of the exported files and of the aliases */
 constexpr int EXPORT_FILE_MODE = 0644;

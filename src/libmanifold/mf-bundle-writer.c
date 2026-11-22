@@ -418,7 +418,7 @@ mf_bundle_writer_add_image(MfBundleWriter *writer,
                     g_strerror(errno));
         return FALSE;
     }
-    if ((guint64) st.st_size != mf_manifest_get_image_size(parsed)) {
+    if ((uint64_t) st.st_size != mf_manifest_get_image_size(parsed)) {
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,

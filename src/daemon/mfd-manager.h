@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib-object.h>
 
 #include <manifold.h>
@@ -72,7 +73,7 @@ typedef struct {
     GPtrArray  *items;
     GHashTable *cpts_set;
     GPtrArray  *images;
-    guint64     image_bytes;
+    uint64_t    image_bytes;
 } MfdRemovalPlan;
 
 void mfd_removal_plan_free(MfdRemovalPlan *rmplan);

@@ -159,7 +159,7 @@ mf_origin_split_name(const char *origin, char **ret_remote_id, const char **ret_
 
     if (dash == NULL || !mf_remote_channel_is_valid(dash + 1))
         return FALSE;
-    remote_id = g_strndup(origin, (gsize) (dash - origin));
+    remote_id = g_strndup(origin, (size_t) (dash - origin));
     if (!mf_remote_id_is_valid(remote_id))
         return FALSE;
 
@@ -188,7 +188,7 @@ mf_remote_check_channels(const char *remote_id, const char *const *channels, GEr
         return FALSE;
     }
 
-    for (gsize i = 0; channels[i] != NULL; i++) {
+    for (size_t i = 0; channels[i] != NULL; i++) {
         if (!mf_remote_channel_is_valid(channels[i])) {
             g_set_error(error, MF_ERROR, MF_ERROR_FAILED, _("%s is not a valid channel name"), channels[i]);
             return FALSE;
@@ -228,7 +228,7 @@ mf_remote_normalize_url(const char *url)
 {
     g_autoptr(GUri) uri = g_uri_parse(url, G_URI_FLAGS_NONE, NULL);
     g_autofree char *normalized = NULL;
-    gsize len;
+    size_t len;
 
     if (uri == NULL || g_strcmp0(g_uri_get_scheme(uri), "https") != 0 || g_uri_get_host(uri) == NULL ||
         g_uri_get_host(uri)[0] == '\0' || g_uri_get_userinfo(uri) != NULL || g_uri_get_query(uri) != NULL ||

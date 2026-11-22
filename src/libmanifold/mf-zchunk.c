@@ -31,25 +31,25 @@
  */
 
 /* the block size of the filesystem of an image, as set by the builder */
-constexpr gsize BLOCK_SIZE = 4096;
+constexpr size_t BLOCK_SIZE = 4096;
 
 /* the largest number of blocks in a chunk, which is the cluster size of the filesystem of an image */
-constexpr gsize CHUNK_BLOCKS_MAX = 16;
+constexpr size_t CHUNK_BLOCKS_MAX = 16;
 
 /* the number of bytes that we search for the end of a zstd frame */
-constexpr gsize FRAME_SIZE_MAX = 262144;
+constexpr size_t FRAME_SIZE_MAX = 262144;
 
 /* We treat a block as incompressible if its bytes are spread almost evenly over all 256 values.
  * To measure that, we sum up the squared count of every byte value:
  * Two random bytes are equal (a collision) with a probability of sum / BLOCK_SIZE^2.
  * The limit is BLOCK_SIZE^2 / 2^7.5, so we require at least 7.5 of 8 bits of
  * (collision) entropy per byte. */
-constexpr guint64 COLLISIONS_MAX = 92681;
+constexpr uint64_t COLLISIONS_MAX = 92681;
 
 /* the number of bytes that we decompress in one step */
-constexpr gsize READ_BUFFER_SIZE = 1024 * 1024;
+constexpr size_t READ_BUFFER_SIZE = 1024 * 1024;
 
-constexpr guint8 ZSTD_FRAME_MAGIC[] = {0x28, 0xb5, 0x2f, 0xfd};
+constexpr uint8_t ZSTD_FRAME_MAGIC[] = {0x28, 0xb5, 0x2f, 0xfd};
 
 static void
 mf_zck_free(zckCtx *zck)
@@ -76,10 +76,10 @@ mf_set_error_from_zck(GError **error, MfError code, zckCtx *zck, const char *mes
  *
  * Returns: the number of zero bytes a block starts with
  */
-static gsize
-mf_block_leading_zeros(const guint8 *block)
+static size_t
+mf_block_leading_zeros(const uint8_t *block)
 {
-    gsize n = 0;
+    size_t n = 0;
 
     while (n < BLOCK_SIZE && block[n] == 0)
         n++;
@@ -93,15 +93,15 @@ mf_block_leading_zeros(const guint8 *block)
  * compression would gain nothing.
  */
 static gboolean
-mf_block_is_incompressible(const guint8 *block)
+mf_block_is_incompressible(const uint8_t *block)
 {
-    guint32 counts[256] = {};
-    guint64 sum = 0;
+    uint32_t counts[256] = {};
+    uint64_t sum = 0;
 
-    for (gsize i = 0; i < BLOCK_SIZE; i++)
+    for (size_t i = 0; i < BLOCK_SIZE; i++)
         counts[block[i]]++;
-    for (gsize i = 0; i < G_N_ELEMENTS(counts); i++)
-        sum += (guint64) counts[i] * counts[i];
+    for (size_t i = 0; i < G_N_ELEMENTS(counts); i++)
+        sum += (uint64_t) counts[i] * counts[i];
 
     return sum <= COLLISIONS_MAX;
 }
@@ -115,12 +115,12 @@ mf_block_is_incompressible(const guint8 *block)
  *
  * Returns: the number of blocks the frame covers, starting at @block, or 0 if no frame starts there
  */
-static gsize
-mf_image_frame_blocks(const guint8 *data, gsize size, gsize block)
+static size_t
+mf_image_frame_blocks(const uint8_t *data, size_t size, size_t block)
 {
-    gsize offset = block * BLOCK_SIZE;
-    gsize zeros = mf_block_leading_zeros(data + offset);
-    gsize start = offset + zeros;
+    size_t offset = block * BLOCK_SIZE;
+    size_t zeros = mf_block_leading_zeros(data + offset);
+    size_t start = offset + zeros;
     size_t frame_size;
 
     if (zeros == BLOCK_SIZE || start + sizeof(ZSTD_FRAME_MAGIC) > size ||
@@ -141,9 +141,9 @@ mf_image_frame_blocks(const guint8 *data, gsize size, gsize block)
  * does not start a zstd frame.
  */
 static gboolean
-mf_image_block_is_plain(const guint8 *data, gsize size, gsize block)
+mf_image_block_is_plain(const uint8_t *data, size_t size, size_t block)
 {
-    const guint8 *start = data + block * BLOCK_SIZE;
+    const uint8_t *start = data + block * BLOCK_SIZE;
 
     return mf_block_leading_zeros(start) < BLOCK_SIZE && mf_image_frame_blocks(data, size, block) == 0 &&
            mf_block_is_incompressible(start);
@@ -155,11 +155,11 @@ mf_image_block_is_plain(const guint8 *data, gsize size, gsize block)
  * Add chunks of at most %CHUNK_BLOCKS_MAX blocks that cover @n_blocks blocks.
  */
 static void
-mf_chunks_add_blocks(GArray *chunks, gsize n_blocks)
+mf_chunks_add_blocks(GArray *chunks, size_t n_blocks)
 {
     while (n_blocks > 0) {
-        gsize n = MIN(n_blocks, CHUNK_BLOCKS_MAX);
-        guint64 chunk_size = n * BLOCK_SIZE;
+        size_t n = MIN(n_blocks, CHUNK_BLOCKS_MAX);
+        uint64_t chunk_size = n * BLOCK_SIZE;
 
         g_array_append_val(chunks, chunk_size);
         n_blocks -= n;
@@ -179,16 +179,16 @@ mf_chunks_add_blocks(GArray *chunks, gsize n_blocks)
  * Returns: (transfer full) (element-type guint64): the sizes of the chunks, in order
  */
 GArray *
-mf_zchunk_find_image_chunks(const guint8 *data, gsize size)
+mf_zchunk_find_image_chunks(const uint8_t *data, size_t size)
 {
-    GArray *chunks = g_array_new(FALSE, FALSE, sizeof(guint64));
-    gsize n_blocks = size / BLOCK_SIZE;
-    gsize b = 0;
+    GArray *chunks = g_array_new(FALSE, FALSE, sizeof(uint64_t));
+    size_t n_blocks = size / BLOCK_SIZE;
+    size_t b = 0;
 
     while (b < n_blocks) {
-        const guint8 *block = data + b * BLOCK_SIZE;
-        gsize frame_blocks;
-        gsize n = 1;
+        const uint8_t *block = data + b * BLOCK_SIZE;
+        size_t frame_blocks;
+        size_t n = 1;
 
         if (mf_block_leading_zeros(block) == BLOCK_SIZE) {
             /* a run of empty blocks */
@@ -196,14 +196,14 @@ mf_zchunk_find_image_chunks(const guint8 *data, gsize size)
                    mf_block_leading_zeros(data + (b + n) * BLOCK_SIZE) == BLOCK_SIZE)
                 n++;
         } else if ((frame_blocks = mf_image_frame_blocks(data, size, b)) > 0) {
-            /* a compressed cluster of the filesystem, which we never split at the end of the image */
+            /* a compressed cluster of the filesystem, which must not extend past the end of the image */
             n = MIN(frame_blocks, n_blocks - b);
         } else if (mf_block_is_incompressible(block)) {
-            /* data the filesystem stored without compression */
+            /* data that the filesystem stored without compression */
             while (b + n < n_blocks && n < CHUNK_BLOCKS_MAX && mf_image_block_is_plain(data, size, b + n))
                 n++;
         }
-        /* anything else, mostly filesystem metadata, stays a block of its own */
+        /* any other block, which is mostly filesystem metadata, becomes a chunk of its own */
 
         mf_chunks_add_blocks(chunks, n);
         b += n;
@@ -211,7 +211,7 @@ mf_zchunk_find_image_chunks(const guint8 *data, gsize size)
 
     /* images end in a GPT backup header, which is smaller than a block */
     if (size % BLOCK_SIZE != 0) {
-        guint64 rest = size % BLOCK_SIZE;
+        uint64_t rest = size % BLOCK_SIZE;
         g_array_append_val(chunks, rest);
     }
 
@@ -224,17 +224,17 @@ mf_zchunk_find_image_chunks(const guint8 *data, gsize size)
  * Write an image that is in memory as a zchunk file.
  */
 static gboolean
-mf_zchunk_write_data(const guint8 *data, gsize size, int dest_fd, GError **error)
+mf_zchunk_write_data(const uint8_t *data, size_t size, int dest_fd, GError **error)
 {
     g_autoptr(GArray) chunks = mf_zchunk_find_image_chunks(data, size);
     g_autoptr(zckCtx) zck = zck_create();
-    gsize offset = 0;
+    size_t offset = 0;
 
     if (zck == NULL) {
         mf_set_error_from_zck(error, MF_ERROR_FAILED, NULL, _("Unable to create a zchunk file"));
         return FALSE;
     }
-    /* the uncompressed digests let a client find the chunks it has in the images it installed */
+    /* a client uses the uncompressed digests to find chunks in the images that are installed already */
     if (!zck_init_write(zck, dest_fd) || !zck_set_ioption(zck, ZCK_HASH_FULL_TYPE, ZCK_HASH_SHA256) ||
         !zck_set_ioption(zck, ZCK_HASH_CHUNK_TYPE, ZCK_HASH_SHA256) ||
         !zck_set_ioption(zck, ZCK_COMP_TYPE, ZCK_COMP_ZSTD) || !zck_set_ioption(zck, ZCK_MANUAL_CHUNK, 1) ||
@@ -244,7 +244,7 @@ mf_zchunk_write_data(const guint8 *data, gsize size, int dest_fd, GError **error
     }
 
     for (guint i = 0; i < chunks->len; i++) {
-        gsize chunk_size = g_array_index(chunks, guint64, i);
+        size_t chunk_size = g_array_index(chunks, uint64_t, i);
 
         if (zck_write(zck, (const char *) data + offset, chunk_size) != (ssize_t) chunk_size ||
             zck_end_chunk(zck) < 0) {
@@ -281,7 +281,7 @@ gboolean
 mf_zchunk_write_image(int image_fd, int dest_fd, GError **error)
 {
     struct stat st;
-    guint8 *data = NULL;
+    uint8_t *data = NULL;
     gboolean ret;
 
     g_return_val_if_fail(image_fd >= 0, FALSE);
@@ -354,7 +354,7 @@ mf_zchunk_open(int fd, GError **error)
  * Returns: %TRUE if the header could be read
  */
 gboolean
-mf_zchunk_read_header(int fd, guint64 *header_size, char **header_sha256, GError **error)
+mf_zchunk_read_header(int fd, uint64_t *header_size, char **header_sha256, GError **error)
 {
     g_autoptr(zckCtx) zck = NULL;
     char *digest;
@@ -383,7 +383,7 @@ mf_zchunk_read_header(int fd, guint64 *header_size, char **header_sha256, GError
         return FALSE;
     }
 
-    *header_size = (guint64) length;
+    *header_size = (uint64_t) length;
     *header_sha256 = g_strdup(digest);
     free(digest);
     return TRUE;
@@ -407,8 +407,8 @@ mf_zchunk_check_image(int fd, MfManifest *manifest, GError **error)
     g_autoptr(zckCtx) zck = NULL;
     g_autoptr(MfHasher) hasher = NULL;
     MfFileEntry actual;
-    guint64 image_size;
-    guint64 total = 0;
+    uint64_t image_size;
+    uint64_t total = 0;
 
     g_return_val_if_fail(fd >= 0, FALSE);
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), FALSE);
@@ -431,8 +431,8 @@ mf_zchunk_check_image(int fd, MfManifest *manifest, GError **error)
             break;
 
         /* data that is larger than the image can not match the manifest, so we stop reading */
-        total += (guint64) n;
-        mf_hasher_update(hasher, buffer, (gsize) n);
+        total += (uint64_t) n;
+        mf_hasher_update(hasher, buffer, (size_t) n);
         if (total > image_size)
             break;
     }
@@ -464,18 +464,18 @@ struct _MfZchunkAssembly {
     GArray *chunks;     /* (element-type MfAssemblyChunk): the chunks of the image, in order */
     GHashTable *needed; /* digest of an uncompressed chunk -> index of the first chunk with that digest */
     GArray *source_fds; /* (element-type int): the images that chunks are copied from, owned by the caller */
-    guint64 image_size;
+    uint64_t image_size;
 };
 
 typedef struct {
     zckChunk *chunk;
-    guint64 start; /* the offset of the compressed chunk in the zchunk file */
-    guint64 comp_size;
-    guint64 size;
-    guint64 offset; /* the offset of the chunk in the image */
+    uint64_t start; /* the offset of the compressed chunk in the zchunk file */
+    uint64_t comp_size;
+    uint64_t size;
+    uint64_t offset; /* the offset of the chunk in the image */
     char digest[MF_HEX_HASH_LENGTH + 1];
     int source; /* the index of the image the chunk is copied from, or -1 if it is downloaded */
-    guint64 source_offset;
+    uint64_t source_offset;
 } MfAssemblyChunk;
 
 /**
@@ -507,10 +507,10 @@ mf_zchunk_assembly_free(MfZchunkAssembly *assembly)
  * Returns: (transfer full): the assembly, or %NULL
  */
 MfZchunkAssembly *
-mf_zchunk_assembly_new(int partial_fd, guint64 header_size, const char *header_sha256, GError **error)
+mf_zchunk_assembly_new(int partial_fd, uint64_t header_size, const char *header_sha256, GError **error)
 {
     g_autoptr(MfZchunkAssembly) assembly = g_new0(MfZchunkAssembly, 1);
-    guint64 offset = 0;
+    uint64_t offset = 0;
 
     g_return_val_if_fail(partial_fd >= 0, NULL);
     g_return_val_if_fail(header_sha256 != NULL, NULL);
@@ -567,9 +567,9 @@ mf_zchunk_assembly_new(int partial_fd, guint64 header_size, const char *header_s
         }
         g_strlcpy(item.digest, digest, sizeof(item.digest));
         free(digest);
-        item.start = (guint64) zck_get_chunk_start(chunk);
-        item.comp_size = (guint64) zck_get_chunk_comp_size(chunk);
-        item.size = (guint64) zck_get_chunk_size(chunk);
+        item.start = (uint64_t) zck_get_chunk_start(chunk);
+        item.comp_size = (uint64_t) zck_get_chunk_comp_size(chunk);
+        item.size = (uint64_t) zck_get_chunk_size(chunk);
         item.offset = offset;
         offset += item.size;
         g_array_append_val(assembly->chunks, item);
@@ -602,8 +602,8 @@ mf_zchunk_assembly_add_source(MfZchunkAssembly *assembly, int image_fd, GError *
 {
     g_autoptr(GArray) chunks = NULL;
     struct stat st;
-    guint8 *data;
-    guint64 offset = 0;
+    uint8_t *data;
+    uint64_t offset = 0;
     int source = (int) assembly->source_fds->len;
 
     if (fstat(image_fd, &st) < 0) {
@@ -621,7 +621,7 @@ mf_zchunk_assembly_add_source(MfZchunkAssembly *assembly, int image_fd, GError *
 
     chunks = mf_zchunk_find_image_chunks(data, st.st_size);
     for (guint i = 0; i < chunks->len; i++) {
-        guint64 size = g_array_index(chunks, guint64, i);
+        uint64_t size = g_array_index(chunks, uint64_t, i);
         g_autofree char *digest = g_compute_checksum_for_data(G_CHECKSUM_SHA256, data + offset, size);
         gpointer index;
 
@@ -657,7 +657,7 @@ mf_zchunk_assembly_add_source(MfZchunkAssembly *assembly, int image_fd, GError *
  * Returns: (transfer full) (element-type MfZchunkRange): the ranges, ordered by offset
  */
 GArray *
-mf_zchunk_assembly_get_missing(MfZchunkAssembly *assembly, guint64 gap_max)
+mf_zchunk_assembly_get_missing(MfZchunkAssembly *assembly, uint64_t gap_max)
 {
     GArray *ranges = g_array_new(FALSE, FALSE, sizeof(MfZchunkRange));
 
@@ -684,10 +684,10 @@ mf_zchunk_assembly_get_missing(MfZchunkAssembly *assembly, guint64 gap_max)
  *
  * Returns: the number of bytes of the image that are copied from installed images
  */
-guint64
+uint64_t
 mf_zchunk_assembly_get_reused_size(MfZchunkAssembly *assembly)
 {
-    guint64 reused = 0;
+    uint64_t reused = 0;
 
     for (guint i = 0; i < assembly->chunks->len; i++) {
         MfAssemblyChunk *item = &g_array_index(assembly->chunks, MfAssemblyChunk, i);
@@ -705,7 +705,12 @@ mf_zchunk_assembly_get_reused_size(MfZchunkAssembly *assembly)
  * the kernel shares the data blocks between the files instead of copying them.
  */
 static gboolean
-mf_copy_range(int src_fd, guint64 src_offset, int dest_fd, guint64 dest_offset, guint64 size, GError **error)
+mf_copy_range(int src_fd,
+              uint64_t src_offset,
+              int dest_fd,
+              uint64_t dest_offset,
+              uint64_t size,
+              GError **error)
 {
     loff_t in = (loff_t) src_offset;
     loff_t out = (loff_t) dest_offset;
@@ -715,7 +720,7 @@ mf_copy_range(int src_fd, guint64 src_offset, int dest_fd, guint64 dest_offset, 
         ssize_t n = copy_file_range(src_fd, &in, dest_fd, &out, size, 0);
 
         if (n > 0) {
-            size -= (guint64) n;
+            size -= (uint64_t) n;
             continue;
         }
         if (n < 0 && errno == EINTR)
@@ -772,7 +777,7 @@ mf_zchunk_assembly_write_image(MfZchunkAssembly *assembly,
     g_autoptr(MfHasher) hasher = mf_hasher_new();
     g_autofree char *buffer = NULL;
     MfFileEntry actual;
-    guint64 done = 0;
+    uint64_t done = 0;
 
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), FALSE);
 
@@ -828,7 +833,7 @@ mf_zchunk_assembly_write_image(MfZchunkAssembly *assembly,
 
     /* the copied chunks were only matched by their digest, so we verify the complete image */
     buffer = g_realloc(buffer, READ_BUFFER_SIZE);
-    for (guint64 offset = 0; offset < assembly->image_size;) {
+    for (uint64_t offset = 0; offset < assembly->image_size;) {
         ssize_t n = pread(dest_fd, buffer, READ_BUFFER_SIZE, (off_t) offset);
 
         if (n < 0 && errno == EINTR)
@@ -841,8 +846,8 @@ mf_zchunk_assembly_write_image(MfZchunkAssembly *assembly,
                         g_strerror(errno));
             return FALSE;
         }
-        mf_hasher_update(hasher, buffer, (gsize) n);
-        offset += (guint64) n;
+        mf_hasher_update(hasher, buffer, (size_t) n);
+        offset += (uint64_t) n;
     }
     mf_hasher_finish(hasher, &actual);
     if (!mf_manifest_image_matches(manifest, &actual)) {

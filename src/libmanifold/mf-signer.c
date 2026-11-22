@@ -97,10 +97,10 @@ mf_ssh_key_fingerprint(const char *public_key)
     g_autoptr(GChecksum) checksum = NULL;
     g_autofree guchar *blob = NULL;
     g_autofree char *encoded = NULL;
-    guint8 digest[32];
+    uint8_t digest[32];
     gsize digest_len = sizeof(digest);
     gsize blob_len = 0;
-    gsize len;
+    size_t len;
 
     if (g_strv_length(parts) < 2)
         return NULL;

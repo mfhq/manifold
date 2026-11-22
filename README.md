@@ -134,7 +134,8 @@ sudo systemctl enable --now manifold.socket manifold-run.socket
 
 Patches, pull-requests, and bug reports are very welcome! Please make sure your code
 is valid C23 and formats cleanly with `clang-format` (you can use the `./autoformat.py`
-script for formatting).
+script for formatting). [CONTRIBUTING.md](CONTRIBUTING.md) describes the coding style
+in more detail.
 
 ## License
 

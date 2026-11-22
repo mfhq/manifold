@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib.h>
 #include <systemd/sd-json.h>
 
@@ -32,9 +33,9 @@ typedef struct _MfHasher MfHasher;
  * or computed from the contents of a file.
  */
 typedef struct {
-    guint64 size;
-    char    sha256[MF_HEX_HASH_LENGTH + 1];
-    char    blake3[MF_HEX_HASH_LENGTH + 1];
+    uint64_t size;
+    char     sha256[MF_HEX_HASH_LENGTH + 1];
+    char     blake3[MF_HEX_HASH_LENGTH + 1];
 } MfFileEntry;
 
 MF_INTERNAL_VISIBLE
@@ -48,7 +49,7 @@ MfHasher *mf_hasher_new(void);
 void      mf_hasher_free(MfHasher *hasher);
 void      mf_hasher_update(MfHasher   *hasher,
                            const void *data,
-                           gsize       size);
+                           size_t      size);
 void      mf_hasher_finish(MfHasher    *hasher,
                            MfFileEntry *ret);
 
@@ -56,7 +57,7 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfHasher, mf_hasher_free)
 
 gboolean mf_write_all(int         fd,
                       const char *buffer,
-                      gsize       size,
+                      size_t      size,
                       GError    **error);
 
 gboolean mf_file_name_is_valid(const char *name);
@@ -82,11 +83,11 @@ gboolean mf_file_is_masked(const char *path);
 
 MF_INTERNAL_VISIBLE
 char *mf_build_full_version(const char *version,
-                            guint64     revision);
+                            uint64_t    revision);
 MF_INTERNAL_VISIBLE
 gboolean mf_split_full_version(const char *name,
                                char      **ret_version,
-                               guint64    *ret_revision);
+                               uint64_t   *ret_revision);
 
 gboolean mf_str_consists_of(const char *str,
                             const char *chars);

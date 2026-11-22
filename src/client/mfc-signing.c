@@ -178,8 +178,8 @@ mfc_run_key_list_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv
     const char *name_header = _("NAME");
     const char *fingerprint_header = _("FINGERPRINT");
     const char *comment_header = _("COMMENT");
-    gsize name_width;
-    gsize fingerprint_width;
+    size_t name_width;
+    size_t fingerprint_width;
     int ret;
 
     context = mfc_option_context_for_command(cmd, NULL);

@@ -10,6 +10,7 @@
 #error "Only <manifold.h> can be included directly."
 #endif
 
+#include <stdint.h>
 #include <glib.h>
 
 G_BEGIN_DECLS
@@ -19,9 +20,9 @@ gboolean    mf_version_is_valid(const char *version);
 int         mf_version_compare(const char *a,
                                const char *b);
 int         mf_version_compare_with_rev(const char *version_a,
-                                        guint64     revision_a,
+                                        uint64_t    revision_a,
                                         const char *version_b,
-                                        guint64     revision_b);
+                                        uint64_t    revision_b);
 
 gboolean    mf_hex_hash_is_valid(const char *hash);
 gboolean    mf_program_name_is_valid(const char *name);

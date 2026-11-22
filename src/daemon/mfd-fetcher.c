@@ -9,6 +9,7 @@
 #include "mfd-fetcher.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -52,7 +53,7 @@ struct _MfdFetcher {
  * Returns: (transfer full): a request to download a whole file
  */
 MfdFetchRequest *
-mfd_fetch_request_new(const char *url, int fd, guint64 max_size)
+mfd_fetch_request_new(const char *url, int fd, uint64_t max_size)
 {
     MfdFetchRequest *request = g_new0(MfdFetchRequest, 1);
 
@@ -88,7 +89,7 @@ mfd_fetch_request_to_error(MfdFetchRequest *request, GError **error)
                     MF_ERROR,
                     MF_ERROR_DOWNLOAD_FAILED,
                     /* TRANSLATORS: the URL of a file, and the HTTP status the server replied with */
-                    _("Unable to download %s: the server replied with %" G_GINT64_FORMAT),
+                    _("Unable to download %s: the server replied with %" PRId64),
                     request->url,
                     request->http_status);
     else
@@ -265,10 +266,10 @@ mfd_fetcher_connect(MfdFetcher *fetcher, GError **error)
 
 /* one call to the helper, with a batch of requests */
 typedef struct {
-    GPtrArray *requests;     /* (element-type MfdFetchRequest) */
-    guint first;             /* the index of the first request of the batch */
-    guint n_requests;        /* the number of requests in the batch */
-    guint64 received_before; /* the number of bytes received by previous calls */
+    GPtrArray *requests;      /* (element-type MfdFetchRequest) */
+    guint first;              /* the index of the first request of the batch */
+    guint n_requests;         /* the number of requests in the batch */
+    uint64_t received_before; /* the number of bytes received by previous calls */
     MfdFetchProgressFunc progress_func;
     gpointer user_data;
     gboolean done; /* whether the final reply has arrived */
@@ -445,7 +446,7 @@ mfd_fetcher_fetch(MfdFetcher *fetcher,
                   gpointer user_data,
                   GError **error)
 {
-    guint64 received = 0;
+    uint64_t received = 0;
 
     if (!mfd_fetcher_connect(fetcher, error))
         return FALSE;
@@ -479,30 +480,30 @@ mfd_fetcher_fetch(MfdFetcher *fetcher,
  * Returns: (transfer full): the contents of @fd, or %NULL
  */
 static GBytes *
-mfd_read_fd(int fd, guint64 max_size, GError **error)
+mfd_read_fd(int fd, uint64_t max_size, GError **error)
 {
-    g_autofree guint8 *data = NULL;
+    g_autofree uint8_t *data = NULL;
     struct stat st;
-    gsize done = 0;
+    size_t done = 0;
 
     if (fstat(fd, &st) < 0)
         return glnx_null_throw_errno_prefix(error, "Unable to read a download");
-    if ((guint64) st.st_size > max_size) {
+    if ((uint64_t) st.st_size > max_size) {
         g_set_error_literal(error,
                             MF_ERROR,
                             MF_ERROR_DOWNLOAD_FAILED,
                             _("The download helper wrote more data than it was allowed to"));
         return NULL;
     }
-    data = g_malloc(st.st_size > 0 ? (gsize) st.st_size : 1);
-    while (done < (gsize) st.st_size) {
-        ssize_t n = pread(fd, data + done, (gsize) st.st_size - done, (off_t) done);
+    data = g_malloc(st.st_size > 0 ? (size_t) st.st_size : 1);
+    while (done < (size_t) st.st_size) {
+        ssize_t n = pread(fd, data + done, (size_t) st.st_size - done, (off_t) done);
 
         if (n < 0 && errno == EINTR)
             continue;
         if (n <= 0)
             return glnx_null_throw_errno_prefix(error, "Unable to read a download");
-        done += (gsize) n;
+        done += (size_t) n;
     }
 
     return g_bytes_new_take(g_steal_pointer(&data), done);
@@ -578,7 +579,7 @@ out:
  * Returns: (transfer full): the content of the file, or %NULL on error
  */
 GBytes *
-mfd_fetcher_download_file(MfdFetcher *fetcher, const char *url, guint64 max_size, GError **error)
+mfd_fetcher_download_file(MfdFetcher *fetcher, const char *url, uint64_t max_size, GError **error)
 {
     g_auto(MfdMemoryDownload) download = {.url = g_strdup(url), .max_size = max_size};
     MfdMemoryDownload *downloads[] = {&download};

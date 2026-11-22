@@ -10,6 +10,7 @@
 #error "Only <manifold.h> can be included directly."
 #endif
 
+#include <stdint.h>
 #include <glib-object.h>
 
 #include "mf-component.h"
@@ -66,7 +67,7 @@ struct _MfManifestClass {
 };
 
 MfManifest     *mf_manifest_new_from_data(const char *data,
-                                          gssize      length,
+                                          ssize_t     length,
                                           GError    **error);
 MfManifest     *mf_manifest_new_from_bytes(GBytes  *bytes,
                                            GError **error);
@@ -78,7 +79,7 @@ GBytes         *mf_manifest_get_data(MfManifest *manifest);
 const char     *mf_manifest_get_component_id(MfManifest *manifest);
 MfComponentKind mf_manifest_get_kind(MfManifest *manifest);
 const char     *mf_manifest_get_version(MfManifest *manifest);
-guint64         mf_manifest_get_revision(MfManifest *manifest);
+uint64_t        mf_manifest_get_revision(MfManifest *manifest);
 const char     *mf_manifest_get_architecture(MfManifest *manifest);
 gboolean        mf_manifest_is_sdk(MfManifest *manifest);
 const char     *mf_manifest_get_identity(MfManifest *manifest);
@@ -87,19 +88,19 @@ const char     *mf_manifest_get_content_hash(MfManifest *manifest);
 const char     *mf_manifest_get_base_id(MfManifest *manifest);
 MfComponentKind mf_manifest_get_base_kind(MfManifest *manifest);
 const char     *mf_manifest_get_base_version(MfManifest *manifest);
-guint64         mf_manifest_get_base_revision(MfManifest *manifest);
+uint64_t        mf_manifest_get_base_revision(MfManifest *manifest);
 const char     *mf_manifest_get_base_identity(MfManifest *manifest);
 const char     *mf_manifest_get_base_content_hash(MfManifest *manifest);
 
 const char     *mf_manifest_get_image_file(MfManifest *manifest);
-guint64         mf_manifest_get_image_size(MfManifest *manifest);
+uint64_t        mf_manifest_get_image_size(MfManifest *manifest);
 const char     *mf_manifest_get_image_checksum(MfManifest    *manifest,
                                                MfChecksumKind kind);
 const char     *mf_manifest_get_verity_hash(MfManifest *manifest);
-guint64         mf_manifest_get_data_offset(MfManifest *manifest);
-guint64         mf_manifest_get_data_size(MfManifest *manifest);
-guint64         mf_manifest_get_hash_offset(MfManifest *manifest);
-guint64         mf_manifest_get_hash_size(MfManifest *manifest);
+uint64_t        mf_manifest_get_data_offset(MfManifest *manifest);
+uint64_t        mf_manifest_get_data_size(MfManifest *manifest);
+uint64_t        mf_manifest_get_hash_offset(MfManifest *manifest);
+uint64_t        mf_manifest_get_hash_size(MfManifest *manifest);
 
 const char     *mf_manifest_get_command(MfManifest *manifest);
 

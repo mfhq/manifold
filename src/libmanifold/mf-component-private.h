@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <systemd/sd-json.h>
 
 #include "mf-component.h"
@@ -26,7 +27,7 @@ MF_INTERNAL_VISIBLE
 MfComponent *mf_component_new(const char     *component_id,
                               MfComponentKind kind,
                               const char     *version,
-                              guint64         revision,
+                              uint64_t        revision,
                               gboolean        sdk,
                               const char     *identity,
                               const char     *verity_hash,

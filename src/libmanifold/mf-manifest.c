@@ -106,7 +106,7 @@ typedef struct {
     char *component_id;
     MfComponentKind kind;
     char *version;
-    guint64 revision;
+    uint64_t revision;
     char *architecture;
     gboolean sdk;
     char *identity;
@@ -115,18 +115,18 @@ typedef struct {
     char *base_id; /* NULL for a core */
     MfComponentKind base_kind;
     char *base_version;
-    guint64 base_revision;
+    uint64_t base_revision;
     char *base_identity;
     char *base_content_hash; /* (nullable) */
 
     char *image_file;
-    guint64 image_size;
+    uint64_t image_size;
     char *image_checksums[MF_CHECKSUM_KIND_LAST];
     char *verity_hash;
-    guint64 data_offset;
-    guint64 data_size;
-    guint64 hash_offset;
-    guint64 hash_size;
+    uint64_t data_offset;
+    uint64_t data_size;
+    uint64_t hash_offset;
+    uint64_t hash_size;
 
     char *command; /* applications only */
 
@@ -425,7 +425,7 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
     sd_json_variant *app;
     sd_json_variant *integration;
     const char *data;
-    guint64 format;
+    uint64_t format;
     gsize size;
 
     /* sd_json_parse needs a terminated string */
@@ -437,7 +437,7 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
 
     if (!FIELD_UNSIGNED(jo, NULL, "format", &format, error))
         return FALSE;
-    if (format != (guint64) MANIFEST_FORMAT) {
+    if (format != (uint64_t) MANIFEST_FORMAT) {
         mf_set_error_invalid_manifest(error,
                                       /* TRANSLATORS: "format" is a manifest field, and not translated */
                                       _("format %" PRIu64 " is not supported, only %d is"),
@@ -577,13 +577,13 @@ mf_manifest_new_from_bytes(GBytes *bytes, GError **error)
  * Returns: (transfer full): the manifest, or %NULL with %MF_ERROR_INVALID_MANIFEST
  */
 MfManifest *
-mf_manifest_new_from_data(const char *data, gssize length, GError **error)
+mf_manifest_new_from_data(const char *data, ssize_t length, GError **error)
 {
     g_autoptr(GBytes) bytes = NULL;
 
     g_return_val_if_fail(data != NULL, NULL);
 
-    bytes = g_bytes_new(data, length < 0 ? strlen(data) : (gsize) length);
+    bytes = g_bytes_new(data, length < 0 ? strlen(data) : (size_t) length);
     return mf_manifest_new_from_bytes(bytes, error);
 }
 
@@ -608,7 +608,7 @@ mf_manifest_new_from_file(const char *path, GError **error)
 
     if (!g_file_get_contents(path, &data, &length, error))
         return NULL;
-    manifest = mf_manifest_new_from_data(data, (gssize) length, error);
+    manifest = mf_manifest_new_from_data(data, (ssize_t) length, error);
     if (manifest == NULL)
         g_prefix_error(error, "%s: ", path);
     return manifest;
@@ -676,7 +676,7 @@ mf_manifest_get_version(MfManifest *manifest)
  *
  * Returns: the revision of the version, which tells rebuilds of it apart
  */
-guint64
+uint64_t
 mf_manifest_get_revision(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), 0);
@@ -790,7 +790,7 @@ mf_manifest_get_base_version(MfManifest *manifest)
  *
  * Returns: the revision of the base the image was built on, or 0
  */
-guint64
+uint64_t
 mf_manifest_get_base_revision(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), 0);
@@ -846,7 +846,7 @@ mf_manifest_get_image_file(MfManifest *manifest)
  *
  * Returns: the size of the image file in bytes, or 0
  */
-guint64
+uint64_t
 mf_manifest_get_image_size(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), 0);
@@ -922,7 +922,7 @@ mf_manifest_get_verity_hash(MfManifest *manifest)
  *
  * Returns: the offset of the filesystem partition in the image file, in bytes
  */
-guint64
+uint64_t
 mf_manifest_get_data_offset(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), 0);
@@ -936,7 +936,7 @@ mf_manifest_get_data_offset(MfManifest *manifest)
  *
  * Returns: the size of the filesystem partition, in bytes, or 0 if unknown
  */
-guint64
+uint64_t
 mf_manifest_get_data_size(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), 0);
@@ -950,7 +950,7 @@ mf_manifest_get_data_size(MfManifest *manifest)
  *
  * Returns: the offset of the dm-verity hash partition in the image file, in bytes
  */
-guint64
+uint64_t
 mf_manifest_get_hash_offset(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), 0);
@@ -964,7 +964,7 @@ mf_manifest_get_hash_offset(MfManifest *manifest)
  *
  * Returns: the size of the hash partition, in bytes, or 0 if unknown
  */
-guint64
+uint64_t
 mf_manifest_get_hash_size(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), 0);

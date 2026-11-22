@@ -188,7 +188,7 @@ mfd_resolver_find_base(MfdResolver *resolver,
 {
     const char *base_id = mf_manifest_get_base_id(manifest);
     const char *base_version = mf_manifest_get_base_version(manifest);
-    guint64 base_revision = mf_manifest_get_base_revision(manifest);
+    uint64_t base_revision = mf_manifest_get_base_revision(manifest);
     gboolean exact = mf_manifest_needs_exact_base(manifest);
     GPtrArray *channels = resolver->channel_set->channels;
     g_autoptr(GPtrArray) order = g_ptr_array_new();

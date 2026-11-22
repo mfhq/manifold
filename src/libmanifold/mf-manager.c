@@ -239,8 +239,8 @@ mf_manager_add_transaction_flags(MfManager *manager, sd_json_variant **parameter
     return sd_json_variant_set_field_strv(parameters, "flags", (char **) names);
 }
 
-static const gchar *
-mf_parameter_string(sd_json_variant *parameters, const gchar *key, const gchar *fallback)
+static const char *
+mf_parameter_string(sd_json_variant *parameters, const char *key, const char *fallback)
 {
     sd_json_variant *value = sd_json_variant_by_key(parameters, key);
 
@@ -260,7 +260,7 @@ mf_parameter_string(sd_json_variant *parameters, const gchar *key, const gchar *
 static gboolean
 mf_set_error_from_service_details(GError **error,
                                   MfError code,
-                                  const gchar *component_id,
+                                  const char *component_id,
                                   sd_json_variant *parameters)
 {
     switch (code) {
@@ -343,8 +343,8 @@ mf_set_error_from_service_details(GError **error,
  * Returns: (nullable): a translated message that explains why the value of the
  *   parameter was rejected, or %NULL if the parameter is unknown
  */
-static const gchar *
-mf_describe_invalid_parameter(const gchar *parameter)
+static const char *
+mf_describe_invalid_parameter(const char *parameter)
 {
     if (g_str_equal(parameter, "url"))
         return _("The URL of a repository has to be an https URL without a query or fragment");
@@ -371,10 +371,10 @@ mf_describe_invalid_parameter(const gchar *parameter)
  * service otherwise.
  */
 static void
-mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant *parameters)
+mf_set_error_from_service(GError **error, const char *error_id, sd_json_variant *parameters)
 {
-    const gchar *message = mf_parameter_string(parameters, "message", _("unknown error"));
-    const gchar *component_id = mf_parameter_string(parameters, "componentId", NULL);
+    const char *message = mf_parameter_string(parameters, "message", _("unknown error"));
+    const char *component_id = mf_parameter_string(parameters, "componentId", NULL);
     MfError code;
 
     if (mf_error_from_varlink_id(error_id, &code)) {
@@ -423,8 +423,8 @@ mf_set_error_from_service(GError **error, const gchar *error_id, sd_json_variant
                             MF_ERROR_NOT_IMPLEMENTED,
                             _("The Manifold service does not implement this operation"));
     } else if (g_strcmp0(error_id, SD_VARLINK_ERROR_INVALID_PARAMETER) == 0) {
-        const gchar *parameter = mf_parameter_string(parameters, "parameter", "?");
-        const gchar *reason = mf_describe_invalid_parameter(parameter);
+        const char *parameter = mf_parameter_string(parameters, "parameter", "?");
+        const char *reason = mf_describe_invalid_parameter(parameter);
 
         if (reason != NULL)
             g_set_error_literal(error, MF_ERROR, MF_ERROR_FAILED, reason);
@@ -559,7 +559,7 @@ mf_call_source_prepare(GSource *source, int *timeout_ms)
 
         *timeout_ms = call_source->timeout_usec <= now
                           ? 0
-                          : (int) MIN((call_source->timeout_usec - now) / 1000 + 1, G_MAXINT);
+                          : (int) MIN((call_source->timeout_usec - now) / 1000 + 1, INT_MAX);
     }
 
     return *timeout_ms == 0;

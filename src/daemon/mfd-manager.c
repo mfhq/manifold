@@ -140,7 +140,7 @@ typedef struct {
     MfItemProgress *item; /* the item being worked on, owned by @progress */
     guint total;          /* number of items of the operation */
     guint done;           /* number of finished items */
-    guint64 bytes_last_reported;
+    uint64_t bytes_last_reported;
     gboolean item_done;
 } MfdProgressTracker;
 
@@ -157,7 +157,7 @@ mfd_progress_tracker_clear(MfdProgressTracker *tracker)
 G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC(MfdProgressTracker, mfd_progress_tracker_clear)
 
 /* the number of bytes of an image that we copy between two progress reports */
-constexpr guint64 PROGRESS_STEP_BYTES = 4 * 1024 * 1024;
+constexpr uint64_t PROGRESS_STEP_BYTES = 4 * 1024 * 1024;
 
 /**
  * mfd_progress_report:
@@ -173,8 +173,8 @@ mfd_progress_report(MfdProgressTracker *tracker)
         return;
 
     if (tracker->item != NULL) {
-        guint64 bytes_done = mf_item_progress_get_bytes_done(tracker->item);
-        guint64 bytes_total = mf_item_progress_get_bytes_total(tracker->item);
+        uint64_t bytes_done = mf_item_progress_get_bytes_done(tracker->item);
+        uint64_t bytes_total = mf_item_progress_get_bytes_total(tracker->item);
 
         if (bytes_total > 0)
             item_percent = (double) bytes_done * 100 / (double) bytes_total;
@@ -203,7 +203,7 @@ mfd_progress_begin_item(MfdProgressTracker *tracker,
                         MfAction action,
                         const char *subject,
                         const char *version,
-                        guint64 bytes_total)
+                        uint64_t bytes_total)
 {
     tracker->item = mf_item_progress_new(action, subject, version);
     mf_item_progress_set_bytes_total(tracker->item, bytes_total);
@@ -255,7 +255,7 @@ mfd_progress_split_last_item(MfdProgressTracker *tracker, guint n_items)
  * Report the progress of writing an image into the store.
  */
 static void
-mfd_on_copy_progress(guint64 bytes_copied, gpointer user_data)
+mfd_on_copy_progress(uint64_t bytes_copied, gpointer user_data)
 {
     MfdProgressTracker *tracker = user_data;
 
@@ -314,7 +314,7 @@ mfd_install_plan_clear(MfdInstallPlan *iplan)
  * Order plans by the layer of their component, from the bottom to the top,
  * so every component comes after the components that it builds on.
  */
-static gint
+static int
 mfd_install_plan_compare_layer(gconstpointer a, gconstpointer b)
 {
     MfManifest *manifest_a = ((const MfdInstallPlan *) a)->item->manifest;
@@ -583,7 +583,7 @@ static MfComponent *
 mfd_manager_get_installed(MfdManager *manager,
                           const char *component_id,
                           const char *version,
-                          guint64 revision)
+                          uint64_t revision)
 {
     g_autoptr(GPtrArray) versions = NULL;
 
@@ -650,7 +650,7 @@ mfd_manager_resolve_exact_base(MfdManager *manager,
 {
     const char *base_id = mf_manifest_get_base_id(manifest);
     const char *base_version = mf_manifest_get_base_version(manifest);
-    guint64 base_revision = mf_manifest_get_base_revision(manifest);
+    uint64_t base_revision = mf_manifest_get_base_revision(manifest);
     MfdInstallItem *in_set = mfd_install_set_find_exact_base(set, manifest);
     g_autoptr(MfComponent) installed = NULL;
     g_autofree char *version_name = NULL;
@@ -1044,7 +1044,7 @@ mfd_manager_complete_removal_plan(MfdManager *manager,
             continue;
         path = mf_store_image_path_at(mf_store_get_path(manager->store), hash);
         if (stat(path, &st) == 0)
-            rmplan->image_bytes += (guint64) st.st_size;
+            rmplan->image_bytes += (uint64_t) st.st_size;
         g_ptr_array_add(rmplan->images, g_strdup(hash));
     }
 
@@ -1340,7 +1340,7 @@ mfd_make_local_appstream_catalog(GBytes *catalog, GError **error)
 {
     g_autoptr(AsMetadata) metadata = as_metadata_new();
     AsComponentBox *components;
-    gchar *xml;
+    char *xml;
 
     as_metadata_set_locale(metadata, "ALL");
     as_metadata_set_format_style(metadata, AS_FORMAT_STYLE_CATALOG);
@@ -1417,7 +1417,7 @@ mfd_manager_execute_install_plan(MfdManager *manager,
                                  MfdInstallPlan *iplan,
                                  MfdProgressTracker *tracker,
                                  MfResult *result,
-                                 guint64 *ret_bytes_added,
+                                 uint64_t *ret_bytes_added,
                                  MfdErrorDetail *ret_detail,
                                  GError **error)
 {
@@ -1427,7 +1427,7 @@ mfd_manager_execute_install_plan(MfdManager *manager,
     const char *component_id = mf_manifest_get_component_id(manifest);
     const char *version = mf_manifest_get_version(manifest);
     g_autofree char *full_version = mf_build_full_version(version, mf_manifest_get_revision(manifest));
-    guint64 image_size = mf_manifest_get_image_size(manifest);
+    uint64_t image_size = mf_manifest_get_image_size(manifest);
     g_autoptr(GBytes) catalog = NULL;
     g_autoptr(GHashTable) exports = NULL;
     g_autoptr(GError) local_error = NULL;
@@ -1628,7 +1628,7 @@ mfd_manager_install_set(MfdManager *manager,
     g_autoptr(GArray) plans = NULL;
     g_autoptr(MfdRemovalPlan) rmplan = NULL;
     g_autoptr(GError) supersede_error = NULL;
-    guint64 bytes_added = 0;
+    uint64_t bytes_added = 0;
 
     g_return_val_if_fail(MFD_IS_MANAGER(manager), NULL);
 
@@ -1657,7 +1657,7 @@ mfd_manager_install_set(MfdManager *manager,
         mfd_emit_warning(result, "%s", (const char *) g_ptr_array_index(set->warnings, i));
     for (guint i = 0; i < plans->len; i++) {
         MfdInstallPlan *plan = &g_array_index(plans, MfdInstallPlan, i);
-        guint64 image_bytes;
+        uint64_t image_bytes;
 
         if (plan->skip)
             continue;

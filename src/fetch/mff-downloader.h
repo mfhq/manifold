@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib.h>
 
 G_BEGIN_DECLS
@@ -27,8 +28,8 @@ typedef enum {
 const char *mff_failure_kind_to_string(MffFailureKind failure);
 
 typedef struct {
-    guint64 offset;
-    guint64 length;
+    uint64_t offset;
+    uint64_t length;
 } MffRange;
 
 /**
@@ -39,10 +40,10 @@ typedef struct {
 typedef struct {
     char          *url;
     int            fd;       /* the file to write the data to, owned by the request */
-    guint64        max_size; /* nothing is written at or after this offset */
+    uint64_t       max_size; /* nothing is written at or after this offset */
     GArray        *ranges;   /* (element-type MffRange): the ranges to fetch, or NULL for the whole file */
 
-    guint64        size; /* the number of bytes written */
+    uint64_t       size; /* the number of bytes written */
     MffFailureKind failure;
     long           http_status; /* the HTTP status of the failed reply, or 0 */
     char          *message;
@@ -50,7 +51,7 @@ typedef struct {
 
 MffRequest *mff_request_new(const char *url,
                             int         fd,
-                            guint64     max_size,
+                            uint64_t    max_size,
                             GArray     *ranges);
 void        mff_request_free(MffRequest *request);
 
@@ -64,7 +65,7 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(MffRequest, mff_request_free)
  *
  * Returns: %FALSE to stop the download
  */
-typedef gboolean (*MffProgressFunc)(guint64  received_bytes,
+typedef gboolean (*MffProgressFunc)(uint64_t received_bytes,
                                     gpointer user_data);
 
 gboolean mff_download(GPtrArray      *requests,

@@ -44,9 +44,9 @@
  */
 
 /* the maximum size of a metadata file, like the index or a manifest */
-constexpr guint64 METADATA_SIZE_MAX = 16 * 1024 * 1024;
+constexpr uint64_t METADATA_SIZE_MAX = 16 * 1024 * 1024;
 /* the maximum size of all metadata files of a bundle together, as we read them into memory */
-constexpr guint64 METADATA_TOTAL_SIZE_MAX = 64 * 1024 * 1024;
+constexpr uint64_t METADATA_TOTAL_SIZE_MAX = 64 * 1024 * 1024;
 
 constexpr size_t COPY_BUFFER_SIZE = 1024 * 1024;
 
@@ -61,8 +61,8 @@ struct _MfBundleImage {
     char *manifest_name;
     MfManifest *manifest;
     GBytes *catalog;
-    GHashTable *icons;   /* size directory and file name -> data */
-    guint64 image_index; /* the index of the image file in the archive */
+    GHashTable *icons;    /* size directory and file name -> data */
+    uint64_t image_index; /* the index of the image file in the archive */
 };
 
 G_DEFINE_FINAL_TYPE(MfBundleImage, mf_bundle_image, G_TYPE_OBJECT)
@@ -159,7 +159,7 @@ typedef struct {
 
 /* a screenshot or video of the catalog, which we only read when it is copied out */
 typedef struct {
-    guint64 index; /* the index of the file in the archive */
+    uint64_t index; /* the index of the file in the archive */
     MfFileEntry entry;
 } MfBundleMediaFile;
 
@@ -205,7 +205,7 @@ mf_set_error_from_zip(GError **error, MfError code, zip_error_t *zerr, const cha
 
 /* a file in the archive of a bundle */
 typedef struct {
-    guint64 index;       /* the index of the file in the archive */
+    uint64_t index;      /* the index of the file in the archive */
     gboolean referenced; /* the index lists the file, or a manifest refers to it as its image file */
 } MfBundleEntry;
 
@@ -213,7 +213,7 @@ typedef struct {
 typedef struct {
     MfBundle *bundle;
     GHashTable *entries; /* name -> MfBundleEntry, for every file in the archive */
-    guint64 budget;      /* how much metadata may still be read into memory */
+    uint64_t budget;     /* the number of metadata bytes that may still be read into memory */
 } MfBundleReader;
 
 static void
@@ -274,13 +274,13 @@ mf_bundle_reader_take_reference(MfBundleReader *reader, const char *name, const 
  * directly from the data.
  */
 static GBytes *
-mf_zip_read_entry(zip_t *zip, guint64 index, const char *name, guint64 *budget, GError **error)
+mf_zip_read_entry(zip_t *zip, uint64_t index, const char *name, uint64_t *budget, GError **error)
 {
     g_autofree char *data = NULL;
     zip_stat_t st;
     zip_file_t *file;
     zip_int64_t n;
-    gsize total = 0;
+    size_t total = 0;
 
     if (zip_stat_index(zip, index, 0, &st) < 0 || !(st.valid & ZIP_STAT_SIZE)) {
         g_set_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE, _("Unable to determine size of %s"), name);
@@ -295,7 +295,7 @@ mf_zip_read_entry(zip_t *zip, guint64 index, const char *name, guint64 *budget, 
                                 "%s is too large (%" PRIu64 " bytes)",
                                 st.size),
                     name,
-                    (guint64) st.size);
+                    (uint64_t) st.size);
         return NULL;
     }
     if (st.size > *budget) {
@@ -324,7 +324,7 @@ mf_zip_read_entry(zip_t *zip, guint64 index, const char *name, guint64 *budget, 
         }
         if (n == 0)
             break;
-        total += (gsize) n;
+        total += (size_t) n;
     }
     zip_fclose(file);
 
@@ -347,9 +347,9 @@ mf_zip_read_entry(zip_t *zip, guint64 index, const char *name, guint64 *budget, 
  */
 static gboolean
 mf_zip_hash_entry(zip_t *zip,
-                  guint64 index,
+                  uint64_t index,
                   const char *name,
-                  guint64 size_max,
+                  uint64_t size_max,
                   int dest_fd,
                   MfFileEntry *ret_entry,
                   GError **error)
@@ -357,7 +357,7 @@ mf_zip_hash_entry(zip_t *zip,
     g_autofree char *buffer = g_malloc(COPY_BUFFER_SIZE);
     g_autoptr(MfHasher) hasher = mf_hasher_new();
     zip_file_t *file;
-    guint64 total = 0;
+    uint64_t total = 0;
 
     file = zip_fopen_index(zip, index, 0);
     if (file == NULL) {
@@ -375,9 +375,9 @@ mf_zip_hash_entry(zip_t *zip,
         }
         if (n == 0)
             break;
-        total += (guint64) n;
-        mf_hasher_update(hasher, buffer, (gsize) n);
-        if (dest_fd >= 0 && !mf_write_all(dest_fd, buffer, (gsize) n, error)) {
+        total += (uint64_t) n;
+        mf_hasher_update(hasher, buffer, (size_t) n);
+        if (dest_fd >= 0 && !mf_write_all(dest_fd, buffer, (size_t) n, error)) {
             zip_fclose(file);
             return FALSE;
         }
@@ -832,7 +832,7 @@ mf_bundle_reader_read_index(MfBundleReader *reader, GError **error)
     g_autoptr(sd_json_variant) index = NULL;
     MfBundleEntry *index_entry;
     sd_json_variant *files;
-    guint64 format;
+    uint64_t format;
 
     contents = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify) g_bytes_unref);
     index_entry = g_hash_table_lookup(reader->entries, MF_BUNDLE_INDEX_NAME);
@@ -869,7 +869,7 @@ mf_bundle_reader_read_index(MfBundleReader *reader, GError **error)
                                     &format,
                                     error))
         return FALSE;
-    if (format != (guint64) MF_BUNDLE_FORMAT) {
+    if (format != (uint64_t) MF_BUNDLE_FORMAT) {
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_INVALID_BUNDLE,
@@ -1040,7 +1040,7 @@ mf_bundle_new_from_fd(int fd, GError **error)
             return NULL;
         }
         entry = g_new0(MfBundleEntry, 1);
-        entry->index = (guint64) i;
+        entry->index = (uint64_t) i;
         g_hash_table_insert(reader.entries, g_strdup(name), entry);
     }
 
@@ -1328,9 +1328,9 @@ mf_bundle_copy_image(MfBundle *bundle,
     MfFileEntry actual;
     MfBundlePrivate *priv;
     const char *image_name;
-    guint64 image_size;
+    uint64_t image_size;
     zip_file_t *file;
-    guint64 total = 0;
+    uint64_t total = 0;
     gboolean ret = FALSE;
 
     g_return_val_if_fail(MF_IS_BUNDLE(bundle), FALSE);
@@ -1357,12 +1357,12 @@ mf_bundle_copy_image(MfBundle *bundle,
             break;
 
         /* an image that is larger than its manifest records can not match, so we stop writing it */
-        total += (guint64) n;
-        mf_hasher_update(hasher, buffer, (gsize) n);
+        total += (uint64_t) n;
+        mf_hasher_update(hasher, buffer, (size_t) n);
         if (total > image_size)
             break;
 
-        if (dest_fd >= 0 && !mf_write_all(dest_fd, buffer, (gsize) n, error))
+        if (dest_fd >= 0 && !mf_write_all(dest_fd, buffer, (size_t) n, error))
             goto out;
         if (progress_func != NULL)
             progress_func(total, user_data);

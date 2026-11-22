@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib.h>
 #include <systemd/sd-json.h>
 
@@ -29,7 +30,7 @@ gboolean         mf_json_get_unsigned_field(sd_json_variant *object,
                                             const char      *context,
                                             const char      *key,
                                             MfError          code,
-                                            guint64         *ret,
+                                            uint64_t        *ret,
                                             GError         **error);
 gboolean         mf_json_get_boolean_field(sd_json_variant *object,
                                            const char      *context,

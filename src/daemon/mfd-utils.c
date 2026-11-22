@@ -199,7 +199,7 @@ mfd_make_dir_below(int dfd, const char *subdir, GError **error)
  * followed.
  */
 gboolean
-mfd_write_file_at(int dfd, const char *name, const void *content, gsize length, mode_t mode, GError **error)
+mfd_write_file_at(int dfd, const char *name, const void *content, size_t length, mode_t mode, GError **error)
 {
     if (!mfd_check_plain_name(name, error))
         return FALSE;
@@ -221,13 +221,17 @@ mfd_write_file_at(int dfd, const char *name, const void *content, gsize length, 
  * Write a small file into a directory, like mfd_write_file_at() does.
  */
 gboolean
-mfd_write_contents_safe(const char *dir, const char *name, const char *content, gssize length, GError **error)
+mfd_write_contents_safe(const char *dir,
+                        const char *name,
+                        const char *content,
+                        ssize_t length,
+                        GError **error)
 {
     g_autofd int dfd = -1;
 
     if (!glnx_opendirat(AT_FDCWD, dir, TRUE, &dfd, error))
         return FALSE;
-    return mfd_write_file_at(dfd, name, content, length < 0 ? strlen(content) : (gsize) length, 0644, error);
+    return mfd_write_file_at(dfd, name, content, length < 0 ? strlen(content) : (size_t) length, 0644, error);
 }
 
 /**

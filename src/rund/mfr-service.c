@@ -81,7 +81,7 @@ mfr_varlink_dispatch_no_parameters(sd_varlink *link, sd_json_variant *parameters
 static int
 mfr_varlink_reply_permission_denied(sd_varlink *link, const char *method, uid_t peer_uid)
 {
-    g_info("Denied call of %s by user %u", method, (unsigned int) peer_uid);
+    g_info("Denied call of %s by user %u", method, (guint) peer_uid);
     return sd_varlink_error(link, SD_VARLINK_ERROR_PERMISSION_DENIED, NULL);
 }
 
@@ -140,7 +140,7 @@ mfr_varlink_method_prepare_launch(sd_varlink *link,
     if (!mf_component_id_is_valid(component_id))
         return sd_varlink_error_invalid_parameter_name(link, "componentId");
 
-    g_info("User %u requested to launch %s", (unsigned int) peer_uid, component_id);
+    g_info("User %u requested to launch %s", (guint) peer_uid, component_id);
 
     tree = mfr_composer_prepare(service->composer, component_id, &error);
     if (tree == NULL)
@@ -162,9 +162,7 @@ mfr_varlink_method_prepare_launch(sd_varlink *link,
 
     int mount_index = sd_varlink_push_fd(link, mount_fd);
     if (mount_index < 0) {
-        g_warning("Unable to pass the tree to user %u: %s",
-                  (unsigned int) peer_uid,
-                  g_strerror(-mount_index));
+        g_warning("Unable to pass the tree to user %u: %s", (guint) peer_uid, g_strerror(-mount_index));
         return sd_varlink_error_errno(link, mount_index);
     }
     g_steal_fd(&mount_fd);
@@ -202,7 +200,7 @@ mfr_varlink_method_refresh_capture(sd_varlink *link,
     if (r != 0)
         return r;
 
-    g_info("User %u requested to refresh the host capture", (unsigned int) peer_uid);
+    g_info("User %u requested to refresh the host capture", (guint) peer_uid);
 
     if (!mfr_composer_refresh_capture(service->composer, &error)) {
         g_warning("%s", error->message);
@@ -235,7 +233,7 @@ mfr_varlink_method_list_trees(sd_varlink *link,
     if (r != 0)
         return r;
 
-    g_info("User %u requested the list of mount trees", (unsigned int) peer_uid);
+    g_info("User %u requested the list of mount trees", (guint) peer_uid);
 
     trees = mfr_composer_list_trees(service->composer);
     if (trees == NULL)

@@ -104,8 +104,8 @@ mf_public_key_normalize(const char *public_key)
     g_auto(GStrv) parts = NULL;
     g_autofree guchar *blob = NULL;
     gsize blob_len = 0;
-    gsize type_len;
-    guint32 encoded_len;
+    size_t type_len;
+    uint32_t encoded_len;
 
     /* a file or string must only contain one key */
     if (strchr(line, '\n') != NULL)

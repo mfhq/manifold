@@ -70,7 +70,7 @@ static gboolean
 mf_is_version_dir_name(const char *name)
 {
     g_autofree char *version = NULL;
-    guint64 revision;
+    uint64_t revision;
 
     return mf_split_full_version(name, &version, &revision);
 }
@@ -402,7 +402,7 @@ mf_read_version_dir_at(const char *root,
     g_autofree char *origin = NULL;
     g_autoptr(MfManifest) manifest = NULL;
     MfComponent *component;
-    guint64 revision;
+    uint64_t revision;
 
     if (!mf_split_full_version(version_name, &version, &revision)) {
         g_set_error(error, MF_ERROR, MF_ERROR_FAILED, _("%s is not a version directory"), version_dir);
@@ -485,7 +485,7 @@ mf_version_dir_name_at(const char *root,
     g_autofree char *component_dir = g_build_filename(root, subdir, component_id, NULL);
     g_autofree char *newest = NULL;
     g_autoptr(GDir) dir = NULL;
-    guint64 newest_revision = 0;
+    uint64_t newest_revision = 0;
     const char *name;
 
     if (version == NULL) {
@@ -510,7 +510,7 @@ mf_version_dir_name_at(const char *root,
     while ((name = g_dir_read_name(dir)) != NULL) {
         g_autofree char *path = g_build_filename(component_dir, name, NULL);
         g_autofree char *dir_version = NULL;
-        guint64 revision;
+        uint64_t revision;
 
         if (g_file_test(path, G_FILE_TEST_IS_SYMLINK) || !g_file_test(path, G_FILE_TEST_IS_DIR))
             continue;

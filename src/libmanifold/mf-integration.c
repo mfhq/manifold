@@ -703,9 +703,9 @@ mf_integration_set_error(GError **error, const char *format, ...)
  * Returns: %TRUE if @stem is the component ID, or the ID followed by `.` or `-` and more
  */
 static gboolean
-mf_integration_name_is_owned(const char *stem, gsize stem_len, const char *component_id)
+mf_integration_name_is_owned(const char *stem, size_t stem_len, const char *component_id)
 {
-    gsize id_len = strlen(component_id);
+    size_t id_len = strlen(component_id);
 
     if (stem_len < id_len || strncmp(stem, component_id, id_len) != 0)
         return FALSE;
@@ -733,7 +733,7 @@ mf_integration_name_is_valid(MfIntegrationKind kind, const char *name, const cha
     gboolean unit = suffixes == UNIT_SUFFIXES;
     const char *stem = name;
     const char *suffix = NULL;
-    gsize stem_len;
+    size_t stem_len;
 
     if (unit ? !mf_unit_file_name_is_valid(name) : !mf_file_name_is_valid(name))
         return FALSE;
@@ -790,7 +790,7 @@ mf_integration_check_file(MfIntegrationFile *file, const char *component_id, GEr
     /* icons are in the size and category directories of the theme, all other files have to be
      * directly in the directory of their kind */
     if (file->kind == MF_INTEGRATION_KIND_ICON) {
-        g_autofree char *icon_dir = g_strndup(rest, (gsize) (name - rest));
+        g_autofree char *icon_dir = g_strndup(rest, (size_t) (name - rest));
 
         if (!g_regex_match_simple("^([0-9]+x[0-9]+(@[0-9]+x?)?|scalable|symbolic)/(apps|mimetypes)/\\z",
                                   icon_dir,
@@ -991,7 +991,7 @@ mf_integration_wrap_command(const char *command_line,
                             gboolean *ret_runs_app)
 {
     const char *space = strchr(command_line, ' ');
-    g_autofree char *program = space != NULL ? g_strndup(command_line, (gsize) (space - command_line))
+    g_autofree char *program = space != NULL ? g_strndup(command_line, (size_t) (space - command_line))
                                              : g_strdup(command_line);
     g_autofree char *app_path = g_strconcat(APP_BIN_DIR, app_command, NULL);
     GString *wrapped;
@@ -1019,7 +1019,7 @@ mf_integration_wrap_command(const char *command_line,
 static gboolean
 mf_integration_group_is_valid(const char *line)
 {
-    gsize len = strlen(line);
+    size_t len = strlen(line);
 
     return len >= 3 && line[len - 1] == ']' && strcspn(line + 1, "[]") == len - 2;
 }
@@ -1039,15 +1039,15 @@ mf_integration_group_is_valid(const char *line)
  * Returns: %TRUE if the line has one of the two forms
  */
 static gboolean
-mf_integration_split_key(const char *line, gsize *ret_key_len, const char **ret_value)
+mf_integration_split_key(const char *line, size_t *ret_key_len, const char **ret_value)
 {
-    gsize key_len = strspn(line, KEY_CHARS);
+    size_t key_len = strspn(line, KEY_CHARS);
     const char *after_key = line + key_len;
 
     if (key_len == 0)
         return FALSE;
     if (*after_key == '[') {
-        gsize locale_len = strspn(after_key + 1, LOCALE_CHARS);
+        size_t locale_len = strspn(after_key + 1, LOCALE_CHARS);
 
         if (locale_len == 0 || after_key[locale_len + 1] != ']')
             return FALSE;
@@ -1122,7 +1122,7 @@ mf_integration_render_desktop_entry(MfIntegrationFile *file,
         g_autofree char *wrapped = NULL;
         g_autofree char *key = NULL;
         const char *value;
-        gsize key_len;
+        size_t key_len;
 
         /* splitting a file that ends in a newline leaves an empty last line */
         if (line[0] == '\0' && lines[i + 1] == NULL)
@@ -1148,7 +1148,7 @@ mf_integration_render_desktop_entry(MfIntegrationFile *file,
         } else {
             key = g_strndup(line, key_len);
 
-            if (!g_hash_table_add(keys, g_strndup(line, (gsize) (value - line))))
+            if (!g_hash_table_add(keys, g_strndup(line, (size_t) (value - line))))
                 problem = _("this key is there already");
             else if (line[key_len] == '[' && g_strv_contains(UNLOCALIZED_DESKTOP_KEYS, key))
                 problem = _("this key can not depend on the language");
@@ -1277,7 +1277,7 @@ mf_integration_render_unit(MfIntegrationFile *file, MfManifest *manifest, GBytes
         g_autofree char *wrapped = NULL;
         g_autofree char *key = NULL;
         const char *value;
-        gsize key_len;
+        size_t key_len;
 
         /* splitting a file that ends in a newline leaves an empty last line */
         if (line[0] == '\0' && lines[i + 1] == NULL)
@@ -1461,12 +1461,12 @@ mf_integration_mime_on_end_element(GMarkupParseContext *context,
 static void
 mf_integration_mime_on_text(GMarkupParseContext *context,
                             const char *text,
-                            gsize text_len,
+                            size_t text_len,
                             gpointer user_data,
                             GError **error)
 {
     MfIntegrationMimeRender *render = user_data;
-    g_autofree char *escaped = g_markup_escape_text(text, (gssize) text_len);
+    g_autofree char *escaped = g_markup_escape_text(text, (ssize_t) text_len);
 
     g_string_append(render->output, escaped);
 }
@@ -1510,7 +1510,7 @@ mf_integration_render_mime_package(MfIntegrationFile *file, GBytes *content, GEr
                                          G_MARKUP_TREAT_CDATA_AS_TEXT | G_MARKUP_PREFIX_ERROR_POSITION,
                                          &render,
                                          NULL);
-    if (!g_markup_parse_context_parse(context, data != NULL ? data : "", (gssize) size, &local_error) ||
+    if (!g_markup_parse_context_parse(context, data != NULL ? data : "", (ssize_t) size, &local_error) ||
         !g_markup_parse_context_end_parse(context, &local_error)) {
         /* the message of the parser can quote the file, so we have to escape it */
         g_autofree char *message = g_strescape(local_error->message, NULL);
@@ -1627,7 +1627,7 @@ mf_integration_udev_line_problem(const char *line, const char *component_id)
         gboolean is_match;
         const char *problem;
         const char *end;
-        gsize key_len;
+        size_t key_len;
 
         p += strspn(p, " \t,");
         if (*p == '\0')
@@ -1643,7 +1643,7 @@ mf_integration_udev_line_problem(const char *line, const char *component_id)
             end = strchr(p, '}');
             if (end == NULL)
                 return _("this is not a plain rule");
-            attribute = g_strndup(p + 1, (gsize) (end - p - 1));
+            attribute = g_strndup(p + 1, (size_t) (end - p - 1));
             if (attribute[strcspn(attribute, " \t\",")] != '\0')
                 return _("this is not a plain rule");
             p = end + 1;
@@ -1662,7 +1662,7 @@ mf_integration_udev_line_problem(const char *line, const char *component_id)
         end = strchr(p + 1, '"');
         if (end == NULL)
             return _("a value has to be in quotes, without a prefix");
-        value = g_strndup(p + 1, (gsize) (end - p - 1));
+        value = g_strndup(p + 1, (size_t) (end - p - 1));
         if (strchr(value, '\\') != NULL)
             return _("a value can not have backslashes");
         p = end + 1;

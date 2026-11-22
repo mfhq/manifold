@@ -62,7 +62,7 @@ mff_failure_kind_to_string(MffFailureKind failure)
  * Returns: (transfer full): a new request
  */
 MffRequest *
-mff_request_new(const char *url, int fd, guint64 max_size, GArray *ranges)
+mff_request_new(const char *url, int fd, uint64_t max_size, GArray *ranges)
 {
     MffRequest *request = g_new0(MffRequest, 1);
 
@@ -136,7 +136,7 @@ typedef struct {
     MffJob *job;
     CURL *easy;
     const MffRange *range; /* the range to fetch, owned by the request, or NULL for the whole file */
-    guint64 written;
+    uint64_t written;
     gboolean redirected; /* whether the transfer uses the location of the job, not the URL of the request */
     gboolean retried;    /* whether this is the second attempt, which uses the URL of the request */
     gboolean checked;    /* whether we checked the reply headers already */
@@ -151,7 +151,7 @@ struct _MffDownload {
     GPtrArray *jobs;    /* (element-type MffJob) */
     GQueue retries;     /* of MffTransfer: second attempts that wait to be started */
     GPtrArray *running; /* (element-type MffTransfer) */
-    guint64 received;   /* the number of bytes that all transfers have written */
+    uint64_t received;  /* the number of bytes that all transfers have written */
 };
 
 /**
@@ -193,7 +193,7 @@ mff_transfer_check_reply(MffTransfer *transfer)
         return FALSE;
     }
 
-    expected = g_strdup_printf("bytes %" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT "/",
+    expected = g_strdup_printf("bytes %" PRIu64 "-%" PRIu64 "/",
                                transfer->range->offset,
                                transfer->range->offset + transfer->range->length - 1);
     if (status == 206 && transfer->content_range != NULL &&
@@ -243,8 +243,8 @@ mff_on_data(char *data, size_t size, size_t n_items, void *user_data)
     MffTransfer *transfer = user_data;
     MffRequest *request = transfer->job->request;
     size_t len = size * n_items;
-    guint64 offset = transfer->range != NULL ? transfer->range->offset : 0;
-    guint64 limit = transfer->range != NULL ? transfer->range->length : request->max_size;
+    uint64_t offset = transfer->range != NULL ? transfer->range->offset : 0;
+    uint64_t limit = transfer->range != NULL ? transfer->range->length : request->max_size;
 
     /* we check a reply when its first data arrives */
     if (!transfer->checked && !mff_transfer_check_reply(transfer))
@@ -330,7 +330,7 @@ mff_transfer_new(MffDownload *download, MffJob *job, const MffRange *range, gboo
         curl_easy_setopt(transfer->easy, CURLOPT_CAINFO, download->ca_file);
 
     if (range != NULL) {
-        range_value = g_strdup_printf("%" G_GUINT64_FORMAT "-%" G_GUINT64_FORMAT,
+        range_value = g_strdup_printf("%" PRIu64 "-%" PRIu64,
                                       range->offset,
                                       range->offset + range->length - 1);
         curl_easy_setopt(transfer->easy, CURLOPT_RANGE, range_value);

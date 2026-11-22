@@ -389,7 +389,7 @@ test_public_key_normalize(Fixture *fixture, gconstpointer user_data)
     };
 
     /* only the key type and the key data are kept */
-    for (gsize i = 0; i < 2; i++) {
+    for (size_t i = 0; i < 2; i++) {
         g_autofree char *line = i == 0 ? g_strconcat(valid, " repo@example.org\n", NULL)
                                        : g_strconcat("  ", valid, "  ", NULL);
         g_autofree char *key = mf_public_key_normalize(line);
@@ -397,7 +397,7 @@ test_public_key_normalize(Fixture *fixture, gconstpointer user_data)
         g_assert_cmpstr(key, ==, valid);
     }
 
-    for (gsize i = 0; i < G_N_ELEMENTS(invalid); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(invalid); i++) {
         g_autofree char *key = mf_public_key_normalize(invalid[i]);
 
         g_assert_null(key);

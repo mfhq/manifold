@@ -35,8 +35,8 @@
 /* the highest number of ranges in one call, so a misbehaving caller can not exhaust our memory */
 constexpr guint RANGES_MAX = 65536;
 
-/* how much data we receive before we report progress again */
-constexpr guint64 PROGRESS_STEP_BYTES = 1024 * 1024;
+/* the number of bytes that we receive between two progress reports */
+constexpr uint64_t PROGRESS_STEP_BYTES = 1024 * 1024;
 
 typedef struct {
     sd_event *event;
@@ -47,7 +47,7 @@ typedef struct {
 typedef struct {
     sd_varlink *link;
     gboolean notify; /* whether the caller asked for progress replies */
-    guint64 reported_bytes;
+    uint64_t reported_bytes;
 } MffProgress;
 
 /**
@@ -57,7 +57,7 @@ typedef struct {
  * Returns: %TRUE if every range is within @max_size
  */
 static gboolean
-mff_parse_ranges(sd_json_variant *variant, guint64 max_size, guint *n_ranges, GArray **ret_ranges)
+mff_parse_ranges(sd_json_variant *variant, uint64_t max_size, guint *n_ranges, GArray **ret_ranges)
 {
     g_autoptr(GArray) ranges = g_array_new(FALSE, FALSE, sizeof(MffRange));
 
@@ -115,8 +115,8 @@ mff_parse_requests(sd_varlink *link, sd_json_variant *parameters, int *ret_reply
     for (size_t i = 0; i < sd_json_variant_elements(list); i++) {
         struct {
             const char *url;
-            unsigned int fd_index;
-            guint64 max_size;
+            guint fd_index;
+            uint64_t max_size;
             sd_json_variant *ranges;
         } p = {};
         static const sd_json_dispatch_field dispatch_table[] = {
@@ -175,7 +175,7 @@ mff_parse_requests(sd_varlink *link, sd_json_variant *parameters, int *ret_reply
  * download, so we have to flush the reply ourselves.
  */
 static gboolean
-mff_on_progress(guint64 received, gpointer user_data)
+mff_on_progress(uint64_t received, gpointer user_data)
 {
     MffProgress *progress = user_data;
     struct pollfd pfd = {.fd = sd_varlink_get_fd(progress->link), .events = POLLIN};
@@ -209,7 +209,7 @@ mff_method_fetch(sd_varlink *link,
     g_autoptr(GPtrArray) requests = NULL;
     g_autoptr(sd_json_variant) results = NULL;
     g_autoptr(GError) error = NULL;
-    guint64 received = 0;
+    uint64_t received = 0;
     int r = 0;
 
     requests = mff_parse_requests(link, parameters, &r);

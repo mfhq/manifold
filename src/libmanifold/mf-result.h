@@ -10,6 +10,7 @@
 #error "Only <manifold.h> can be included directly."
 #endif
 
+#include <stdint.h>
 #include <glib-object.h>
 
 #include "mf-component.h"
@@ -30,8 +31,8 @@ MfResult  *mf_result_new(void);
 GPtrArray *mf_result_get_installed(MfResult *result);
 GPtrArray *mf_result_get_removed(MfResult *result);
 GPtrArray *mf_result_get_removed_images(MfResult *result);
-guint64    mf_result_get_bytes_added(MfResult *result);
-guint64    mf_result_get_bytes_freed(MfResult *result);
+uint64_t   mf_result_get_bytes_added(MfResult *result);
+uint64_t   mf_result_get_bytes_freed(MfResult *result);
 GPtrArray *mf_result_get_warnings(MfResult *result);
 
 void       mf_result_add_installed(MfResult    *result,
@@ -41,8 +42,8 @@ void       mf_result_add_removed(MfResult    *result,
 void       mf_result_add_warning(MfResult   *result,
                                  const char *message);
 void       mf_result_set_bytes_added(MfResult *result,
-                                     guint64   bytes);
+                                     uint64_t  bytes);
 void       mf_result_set_bytes_freed(MfResult *result,
-                                     guint64   bytes);
+                                     uint64_t  bytes);
 
 G_END_DECLS

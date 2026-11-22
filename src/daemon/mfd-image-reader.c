@@ -11,6 +11,7 @@
 
 #include <errno.h>
 #include <grp.h>
+#include <inttypes.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <string.h>
@@ -43,12 +44,12 @@
 constexpr int READER_SETUP_FAILED = 125;
 
 /* limits for the integration files of an image */
-constexpr gsize FILE_SIZE_MAX = 8 * 1024 * 1024;
-constexpr gsize TOTAL_SIZE_MAX = 64 * 1024 * 1024;
+constexpr size_t FILE_SIZE_MAX = 8 * 1024 * 1024;
+constexpr size_t TOTAL_SIZE_MAX = 64 * 1024 * 1024;
 constexpr guint FILES_MAX = 1024;
 
 /* limits for dump.erofs, which usually takes milliseconds to print a file */
-constexpr unsigned int READER_TIMEOUT_SEC = 30;
+constexpr guint READER_TIMEOUT_SEC = 30;
 constexpr rlim_t READER_CPU_SEC = 10;
 constexpr rlim_t READER_MEMORY_MAX = 1024 * 1024 * 1024;
 
@@ -76,9 +77,9 @@ static gboolean
 mfd_is_host_root(void)
 {
     g_autofree char *map = NULL;
-    unsigned int inside = 0;
-    unsigned int outside = 0;
-    unsigned int count = 0;
+    guint inside = 0;
+    guint outside = 0;
+    guint count = 0;
 
     if (geteuid() != 0)
         return FALSE;
@@ -87,7 +88,7 @@ mfd_is_host_root(void)
         sscanf(map, "%u %u %u", &inside, &outside, &count) != 3)
         return TRUE;
 
-    return inside == 0 && outside == 0 && count == G_MAXUINT32;
+    return inside == 0 && outside == 0 && count == UINT32_MAX;
 }
 
 /**
@@ -194,12 +195,12 @@ mfd_reader_find_tool(GError **error)
 static GBytes *
 mfd_reader_read_file(const char *tool,
                      const char *image_path,
-                     guint64 data_offset,
+                     uint64_t data_offset,
                      const char *path,
                      const MfdErofsReaderUser *user,
                      GError **error)
 {
-    g_autofree char *offset_arg = g_strdup_printf("--offset=%" G_GUINT64_FORMAT, data_offset);
+    g_autofree char *offset_arg = g_strdup_printf("--offset=%" PRIu64, data_offset);
     g_autofree char *path_arg = g_strconcat("--path=", path, NULL);
     const char *const argv[] = {tool, offset_arg, "--cat", path_arg, image_path, NULL};
     const char *const env[] = {"LC_ALL=C", NULL};
@@ -207,7 +208,7 @@ mfd_reader_read_file(const char *tool,
     g_autoptr(GSubprocess) proc = NULL;
     g_autoptr(GByteArray) content = g_byte_array_new();
     GInputStream *output;
-    guint8 buffer[64 * 1024];
+    uint8_t buffer[64 * 1024];
 
     launcher = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE);
     g_subprocess_launcher_set_environ(launcher, (char **) env);
@@ -219,7 +220,7 @@ mfd_reader_read_file(const char *tool,
 
     output = g_subprocess_get_stdout_pipe(proc);
     for (;;) {
-        gssize n = g_input_stream_read(output, buffer, sizeof(buffer), NULL, error);
+        ssize_t n = g_input_stream_read(output, buffer, sizeof(buffer), NULL, error);
 
         if (n < 0) {
             g_subprocess_force_exit(proc);
@@ -259,13 +260,13 @@ mfd_image_read_integration(MfStore *store, MfManifest *manifest, GError **error)
 {
     MfIntegration *integration = mf_manifest_get_integration(manifest);
     const char *verity_hash = mf_manifest_get_verity_hash(manifest);
-    guint64 data_offset = mf_manifest_get_data_offset(manifest);
+    uint64_t data_offset = mf_manifest_get_data_offset(manifest);
     GPtrArray *files;
     g_autoptr(GHashTable) contents = NULL;
     g_autofree char *image_path = NULL;
     g_autofree char *tool = NULL;
     MfdErofsReaderUser user = {};
-    gsize total_size = 0;
+    size_t total_size = 0;
 
     contents = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, (GDestroyNotify) g_bytes_unref);
     if (integration == NULL)

@@ -7,6 +7,7 @@
 #include "config.h"
 #include "mf-repo-private.h"
 
+#include <inttypes.h>
 #include <string.h>
 #include <glib/gi18n-lib.h>
 #include <appstream.h>
@@ -19,12 +20,12 @@
 #include "mf-utils.h"
 
 /* the largest decompressed size of a root index, and of the other indexes and the catalog */
-constexpr gsize ROOT_INDEX_SIZE_MAX = 16 * 1024 * 1024;
-constexpr gsize INDEX_SIZE_MAX = 256 * 1024 * 1024;
+constexpr size_t ROOT_INDEX_SIZE_MAX = 16 * 1024 * 1024;
+constexpr size_t INDEX_SIZE_MAX = 256 * 1024 * 1024;
 
 /* the largest size of a manifest and of an icon */
-constexpr guint64 MANIFEST_SIZE_MAX = 16 * 1024 * 1024;
-constexpr guint64 ICON_SIZE_MAX = 2 * 1024 * 1024;
+constexpr uint64_t MANIFEST_SIZE_MAX = 16 * 1024 * 1024;
+constexpr uint64_t ICON_SIZE_MAX = 2 * 1024 * 1024;
 
 #define MANIFEST_SUFFIX ".json.zst"
 
@@ -45,14 +46,14 @@ constexpr guint64 ICON_SIZE_MAX = 2 * 1024 * 1024;
  *   valid or decompresses to more than @size_max bytes
  */
 GBytes *
-mf_zstd_decompress_bytes(GBytes *data, gsize size_max, const char *name, MfError code, GError **error)
+mf_zstd_decompress_bytes(GBytes *data, size_t size_max, const char *name, MfError code, GError **error)
 {
     g_autoptr(GByteArray) out = g_byte_array_new();
     ZSTD_DStream *stream = ZSTD_createDStream();
     ZSTD_inBuffer in = {0};
     size_t buffer_size = ZSTD_DStreamOutSize();
     size_t last = 0;
-    guint8 *bytes;
+    uint8_t *bytes;
     gsize size;
 
     if (stream == NULL) {
@@ -60,7 +61,8 @@ mf_zstd_decompress_bytes(GBytes *data, gsize size_max, const char *name, MfError
         return NULL;
     }
 
-    in.src = g_bytes_get_data(data, &in.size);
+    in.src = g_bytes_get_data(data, NULL);
+    in.size = g_bytes_get_size(data);
     for (;;) {
         ZSTD_outBuffer piece;
 
@@ -86,7 +88,7 @@ mf_zstd_decompress_bytes(GBytes *data, gsize size_max, const char *name, MfError
         return NULL;
     }
 
-    g_byte_array_append(out, (const guint8 *) "", 1);
+    g_byte_array_append(out, (const uint8_t *) "", 1);
     bytes = g_byte_array_steal(out, &size);
     return g_bytes_new_take(bytes, size - 1);
 }
@@ -100,7 +102,7 @@ mf_zstd_decompress_bytes(GBytes *data, gsize size_max, const char *name, MfError
  * Returns: (transfer full): the decompressed file, followed by a NUL byte, or %NULL
  */
 static GBytes *
-mf_repo_open_file(GBytes *data, const MfFileEntry *entry, const char *name, gsize size_max, GError **error)
+mf_repo_open_file(GBytes *data, const MfFileEntry *entry, const char *name, size_t size_max, GError **error)
 {
     MfFileEntry actual;
 
@@ -253,7 +255,7 @@ mf_repo_read_architecture(const char *arch_name, sd_json_variant *object, GError
         mf_repo_set_invalid(error, MF_REPO_ROOT_INDEX_NAME, _("%s is not a valid architecture"), arch_name);
         return NULL;
     }
-    for (gsize i = 0; i < G_N_ELEMENTS(files); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(files); i++) {
         sd_json_variant *file = mf_repo_get_object_field(object,
                                                          MF_REPO_ROOT_INDEX_NAME,
                                                          files[i].name,
@@ -890,7 +892,7 @@ mf_repo_version_read_manifest(MfRepoVersion *version,
                     MF_ERROR_INVALID_REPOSITORY,
                     /* TRANSLATORS: a bundle ID, then the component ID, version, revision and architecture
                      * that the manifest of the bundle describes instead */
-                    _("The manifest of %s describes %s %s (revision %" G_GUINT64_FORMAT ") for %s"),
+                    _("The manifest of %s describes %s %s (revision %" PRIu64 ") for %s"),
                     version->bundle,
                     mf_manifest_get_component_id(manifest),
                     mf_manifest_get_version(manifest),
@@ -950,7 +952,7 @@ mf_repo_icon_path_is_valid(const char *path)
 /**
  * mf_repo_icon_compare:
  */
-static gint
+static int
 mf_repo_icon_compare(gconstpointer a, gconstpointer b)
 {
     return g_strcmp0((*(MfRepoIcon *const *) a)->path, (*(MfRepoIcon *const *) b)->path);

@@ -47,8 +47,8 @@ sd_json_variant *
 mf_json_parse_object(const char *data, const char *context, MfError code, GError **error)
 {
     sd_json_variant *variant = NULL;
-    unsigned int line = 0;
-    unsigned int column = 0;
+    guint line = 0;
+    guint column = 0;
 
     int r = sd_json_parse(data, 0, &variant, &line, &column);
     if (r < 0) {
@@ -123,7 +123,7 @@ mf_json_get_unsigned_field(sd_json_variant *object,
                            const char *context,
                            const char *key,
                            MfError code,
-                           guint64 *ret,
+                           uint64_t *ret,
                            GError **error)
 {
     sd_json_variant *value = sd_json_variant_by_key(object, key);
@@ -206,7 +206,7 @@ mf_json_get_file_entry(sd_json_variant *object,
 {
     const char *sha256;
     const char *blake3;
-    guint64 size;
+    uint64_t size;
 
     if (!mf_json_get_unsigned_field(object, context, "size", code, &size, error))
         return FALSE;

@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib.h>
 
 #include "mf-error.h"
@@ -59,7 +60,7 @@ typedef struct {
     char      *summary;
     char      *publisher_name;  /* the name of the publisher, or NULL */
     char      *publisher_email; /* the email address of the publisher, or NULL */
-    guint64    serial;
+    uint64_t   serial;
     GDateTime *date;
     GDateTime *valid_until;
     GPtrArray *channels;        /* (element-type MfRepoChannel) */
@@ -103,10 +104,10 @@ G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfRepoRootIndex, mf_repo_root_index_free)
 typedef struct {
     char       *bundle; /* the bundle ID, <architecture>/<component>/<version> */
     char       *version;
-    guint64     revision;
+    uint64_t    revision;
     char       *manifest_location; /* the path of the manifest, relative to the repository root */
     MfFileEntry manifest;
-    guint64     zck_header_size;
+    uint64_t    zck_header_size;
     char        zck_header_sha256[MF_HEX_HASH_LENGTH + 1];
 } MfRepoVersion;
 
@@ -166,7 +167,7 @@ gboolean mf_repo_check_catalog(GBytes               *data,
 
 MF_INTERNAL_VISIBLE
 GBytes *mf_zstd_decompress_bytes(GBytes     *data,
-                                 gsize       size_max,
+                                 size_t      size_max,
                                  const char *name,
                                  MfError     code,
                                  GError    **error);

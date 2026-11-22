@@ -6,6 +6,7 @@
 
 #include "config.h"
 
+#include <inttypes.h>
 #include <zstd.h>
 #include <manifold.h>
 
@@ -59,8 +60,8 @@ mft_teardown(Fixture *f, gconstpointer user_data)
 static GBytes *
 mft_zstd(const char *text)
 {
-    gsize bound = ZSTD_compressBound(strlen(text));
-    g_autofree guint8 *out = g_malloc(bound);
+    size_t bound = ZSTD_compressBound(strlen(text));
+    g_autofree uint8_t *out = g_malloc(bound);
     size_t size = ZSTD_compress(out, bound, text, strlen(text), 3);
 
     g_assert_false(ZSTD_isError(size));
@@ -78,7 +79,7 @@ mft_entry_json(GBytes *data)
     MfFileEntry entry;
 
     mf_file_entry_set_for_bytes(&entry, data);
-    return g_strdup_printf("\"size\": %" G_GUINT64_FORMAT ", \"sha256\": \"%s\", \"blake3\": \"%s\"",
+    return g_strdup_printf("\"size\": %" PRIu64 ", \"sha256\": \"%s\", \"blake3\": \"%s\"",
                            entry.size,
                            entry.sha256,
                            entry.blake3);
@@ -258,7 +259,7 @@ test_root_index_refused(Fixture *f, gconstpointer user_data)
         g_assert_null(index);
     }
 
-    for (gsize i = 0; i < G_N_ELEMENTS(invalid); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(invalid); i++) {
         g_autoptr(GError) error = NULL;
         g_autofree char *json = mft_root_index_json("example", invalid[i].valid_until, invalid[i].channels);
         g_autoptr(MfRepoRootIndex) index = mft_read_root_index(f, f->key, json, &error);
@@ -272,7 +273,7 @@ test_root_index_refused(Fixture *f, gconstpointer user_data)
         g_autoptr(GError) error = NULL;
         g_autoptr(MfRepoRootIndex) index = NULL;
 
-        for (gsize i = 0; i < 17 * 1024 * 1024; i++)
+        for (size_t i = 0; i < 17 * 1024 * 1024; i++)
             g_string_append_c(huge, 'x');
         g_string_append(huge, "\"}");
         index = mft_read_root_index(f, f->key, huge->str, &error);
@@ -315,7 +316,7 @@ test_root_index_id(Fixture *f, gconstpointer user_data)
     }
 
     /* the ID is used as a file name in the repository and as a directory name in the store */
-    for (gsize i = 0; i < G_N_ELEMENTS(invalid); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(invalid); i++) {
         g_autoptr(GError) error = NULL;
         g_autoptr(GBytes) data = mft_zstd(invalid[i]);
         g_autofree char *remote_id = mf_repo_root_index_read_id(data, &error);
@@ -333,13 +334,13 @@ test_root_index_id(Fixture *f, gconstpointer user_data)
 static char *
 mft_version_json(const char *bundle,
                  const char *version,
-                 guint64 revision,
+                 uint64_t revision,
                  const char *location,
-                 guint64 size)
+                 uint64_t size)
 {
-    return g_strdup_printf("{\"bundle\": \"%s\", \"version\": \"%s\", \"revision\": %" G_GUINT64_FORMAT
+    return g_strdup_printf("{\"bundle\": \"%s\", \"version\": \"%s\", \"revision\": %" PRIu64
                            ", "
-                           "\"manifest\": {\"location\": \"%s\", \"size\": %" G_GUINT64_FORMAT
+                           "\"manifest\": {\"location\": \"%s\", \"size\": %" PRIu64
                            ", "
                            "\"sha256\": \"%064d\", \"blake3\": \"%064d\"}, "
                            "\"zck-header\": {\"size\": 2184, \"sha256\": \"%064d\"}}",
@@ -416,7 +417,7 @@ test_component_index(Fixture *f, gconstpointer user_data)
     g_assert_cmpuint(((MfRepoVersion *) g_ptr_array_index(versions, 1))->revision, ==, 7);
     g_assert_null(mf_repo_component_index_get_versions(index, "org.example.Other"));
 
-    for (gsize i = 0; i < G_N_ELEMENTS(invalid); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(invalid); i++) {
         g_autoptr(GError) local_error = NULL;
         g_autoptr(MfRepoComponentIndex) refused = mft_read_component_index(invalid[i], &local_error);
 
@@ -510,7 +511,7 @@ test_manifest(Fixture *f, gconstpointer user_data)
     other_version.version = "1.3";
     other_revision.revision = 2;
     other_arch.architecture = "aarch64";
-    for (gsize i = 0; i < G_N_ELEMENTS(others); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(others); i++) {
         g_autofree char *other_json = mft_manifest_json(others[i]);
         g_autoptr(GBytes) other = mft_zstd(other_json);
         g_autoptr(MfManifest) refused = mft_read_manifest(other, other, &error);
@@ -534,10 +535,10 @@ test_manifest(Fixture *f, gconstpointer user_data)
  * mft_read_icon_index:
  */
 static GPtrArray *
-mft_read_icon_index(const char *path, const char *location, guint64 size, GError **error)
+mft_read_icon_index(const char *path, const char *location, uint64_t size, GError **error)
 {
     g_autofree char *json = g_strdup_printf(
-        "{\"%s\": {\"location\": \"%s\", \"size\": %" G_GUINT64_FORMAT
+        "{\"%s\": {\"location\": \"%s\", \"size\": %" PRIu64
         ", \"sha256\": \"%064d\", \"blake3\": \"%064d\"},"
         " \"48x48/org.example.App.jxl\": {\"location\": \"media/48.jxl\", \"size\": 10, \"sha256\": \"%064d\","
         " \"blake3\": \"%064d\"}}",
@@ -566,7 +567,7 @@ test_icon_index(Fixture *f, gconstpointer user_data)
     const struct {
         const char *path;
         const char *location;
-        guint64 size;
+        uint64_t size;
     } invalid[] = {
         {"64x64/../org.example.App.jxl", "media/a.jxl",    10                 },
         {"64/org.example.App.jxl",       "media/a.jxl",    10                 },
@@ -585,7 +586,7 @@ test_icon_index(Fixture *f, gconstpointer user_data)
     g_assert_cmpstr(((MfRepoIcon *) g_ptr_array_index(icons, 0))->path, ==, "48x48/org.example.App.jxl");
     g_assert_cmpstr(((MfRepoIcon *) g_ptr_array_index(icons, 1))->location, ==, "media/64.jxl");
 
-    for (gsize i = 0; i < G_N_ELEMENTS(invalid); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(invalid); i++) {
         g_autoptr(GError) local_error = NULL;
         g_autoptr(GPtrArray) refused = mft_read_icon_index(invalid[i].path,
                                                            invalid[i].location,

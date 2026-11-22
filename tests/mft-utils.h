@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib.h>
 
 G_BEGIN_DECLS
@@ -63,7 +64,7 @@ typedef struct {
     const char *component_id;
     const char *kind;
     const char *version;
-    guint64     revision; /* default: 1 */
+    uint64_t    revision; /* default: 1 */
     gboolean    sdk;
     const char *architecture; /* default: x86_64 */
     const char *content_hash; /* default: the identity */
@@ -71,19 +72,19 @@ typedef struct {
     const char *base_id;       /* default: none */
     const char *base_kind;     /* required if there is a base */
     const char *base_version;  /* default: "1" */
-    guint64     base_revision; /* default: 1 */
+    uint64_t    base_revision; /* default: 1 */
 
     const char *command;     /* default: "app", for an application */
     const char *integration; /* the integration section as JSON, default: none */
     const char *permissions; /* the permissions list as JSON, default: none */
 
     const char *image_file;       /* default: "i.raw" */
-    gsize       image_size;       /* default: 1 */
+    size_t      image_size;       /* default: 1 */
     const char *sha256;           /* default: the identity */
     const char *blake3;           /* default: the identity */
     const char *verity_root_hash; /* default: the identity */
-    guint64     data_offset;      /* default: 20480 */
-    guint64     hash_offset;      /* default: 22528 */
+    uint64_t    data_offset;      /* default: 20480 */
+    uint64_t    hash_offset;      /* default: 22528 */
 } MftTestManifest;
 
 char *mft_manifest_json(const MftTestManifest *manifest);

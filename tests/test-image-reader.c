@@ -26,10 +26,10 @@
 #define VERITY_HASH "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 /* the offset of the filesystem in the image, like in an image with partitions */
-constexpr guint64 DATA_OFFSET = 8192;
+constexpr uint64_t DATA_OFFSET = 8192;
 
-constexpr gsize LARGE_FILE_SIZE = 7 * 1024 * 1024;
-constexpr gsize TOO_LARGE_FILE_SIZE = 9 * 1024 * 1024;
+constexpr size_t LARGE_FILE_SIZE = 7 * 1024 * 1024;
+constexpr size_t TOO_LARGE_FILE_SIZE = 9 * 1024 * 1024;
 
 static char *store_dir = NULL;
 static MfStore *store = NULL;
@@ -44,12 +44,12 @@ static MfStore *store = NULL;
  * Returns: (transfer full): @size bytes
  */
 static char *
-mft_make_data(gsize size)
+mft_make_data(size_t size)
 {
     g_autoptr(GRand) rand = g_rand_new_with_seed(1);
-    guint32 *words = g_malloc(size + sizeof(guint32));
+    uint32_t *words = g_malloc(size + sizeof(uint32_t));
 
-    for (gsize i = 0; i <= size / sizeof(guint32); i++)
+    for (size_t i = 0; i <= size / sizeof(uint32_t); i++)
         words[i] = g_rand_int(rand);
 
     return (char *) words;
@@ -59,12 +59,12 @@ mft_make_data(gsize size)
  * mft_write_sized_file:
  */
 static void
-mft_write_sized_file(const char *path, gsize size)
+mft_write_sized_file(const char *path, size_t size)
 {
     g_autofree char *content = mft_make_data(size);
     g_autoptr(GError) error = NULL;
 
-    g_assert_true(g_file_set_contents(path, content, (gssize) size, &error));
+    g_assert_true(g_file_set_contents(path, content, (ssize_t) size, &error));
     g_assert_no_error(error);
 }
 
@@ -126,7 +126,7 @@ mft_make_image_store(void)
     image_path = mf_store_image_path_at(store_dir, VERITY_HASH);
     image_dir = g_path_get_dirname(image_path);
     mft_make_dirs(image_dir);
-    g_assert_true(g_file_set_contents(image_path, image, (gssize) (DATA_OFFSET + size), &error));
+    g_assert_true(g_file_set_contents(image_path, image, (ssize_t) (DATA_OFFSET + size), &error));
     g_assert_no_error(error);
 
     store = mf_store_new_for_path(store_dir);
@@ -138,16 +138,16 @@ mft_make_image_store(void)
  * Returns: (transfer full): the hex encoded hash of @size bytes of @data
  */
 static char *
-mft_blake3(const void *data, gsize size)
+mft_blake3(const void *data, size_t size)
 {
-    guint8 hash[BLAKE3_OUT_LEN];
+    uint8_t hash[BLAKE3_OUT_LEN];
     blake3_hasher hasher;
     GString *hex = g_string_new(NULL);
 
     blake3_hasher_init(&hasher);
     blake3_hasher_update(&hasher, data, size);
     blake3_hasher_finalize(&hasher, hash, sizeof(hash));
-    for (gsize i = 0; i < sizeof(hash); i++)
+    for (size_t i = 0; i < sizeof(hash); i++)
         g_string_append_printf(hex, "%02x", hash[i]);
 
     return g_string_free(hex, FALSE);
@@ -190,7 +190,7 @@ mft_manifest_new(const char *entries, const char *verity_hash)
  * Returns: (transfer full): an entry of the manifest
  */
 static char *
-mft_entry_new(const char *path, const void *data, gsize size)
+mft_entry_new(const char *path, const void *data, size_t size)
 {
     g_autofree char *sha256 = g_compute_checksum_for_data(G_CHECKSUM_SHA256, data, size);
     g_autofree char *blake3 = mft_blake3(data, size);
@@ -334,7 +334,7 @@ test_read_refused(void)
         {"/app/../../etc/hostname",                 ""              },
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(files); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(files); i++) {
         g_autofree char *entry = mft_entry_new(files[i].path, files[i].claimed, strlen(files[i].claimed));
         g_autoptr(GHashTable) contents = NULL;
         g_autoptr(GError) error = NULL;

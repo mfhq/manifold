@@ -286,7 +286,7 @@ mfd_store_writer_update_current(MfdStoreWriter *writer,
     g_autofree char *newest_name = NULL;
     g_autofree char *newest_version = NULL;
     g_autoptr(GDir) dir = NULL;
-    guint64 newest_revision = 0;
+    uint64_t newest_revision = 0;
     const char *name;
 
     dir = g_dir_open(component_dir, 0, error);
@@ -295,7 +295,7 @@ mfd_store_writer_update_current(MfdStoreWriter *writer,
     while ((name = g_dir_read_name(dir)) != NULL) {
         g_autofree char *path = g_build_filename(component_dir, name, NULL);
         g_autofree char *version = NULL;
-        guint64 revision;
+        uint64_t revision;
 
         if (mfd_is_hidden(name) || g_strcmp0(name, except) == 0 || mfd_is_symlink(path) ||
             !mfd_is_directory(path))
@@ -410,7 +410,7 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
     gboolean dependency = mode == MF_INSTALL_MODE_AUTO && !mf_component_kind_is_always_auto(kind, sdk);
     const char *component_id = mf_manifest_get_component_id(manifest);
     const char *version = mf_manifest_get_version(manifest);
-    guint64 revision = mf_manifest_get_revision(manifest);
+    uint64_t revision = mf_manifest_get_revision(manifest);
     g_autofree char *component_dir = mfd_store_writer_get_path(writer, subdir, component_id);
     g_autofree char *catalog_name = g_strconcat(component_id, MF_STORE_CATALOG_SUFFIX, NULL);
     g_autofree char *version_name = mf_build_full_version(version, revision);
@@ -460,13 +460,13 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
     if (!mfd_write_contents_safe(tmp_dir,
                                  MF_STORE_MANIFEST_NAME,
                                  manifest_data,
-                                 (gssize) manifest_size,
+                                 (ssize_t) manifest_size,
                                  error))
         goto out;
     if (catalog != NULL && !mfd_write_contents_safe(tmp_dir,
                                                     catalog_name,
                                                     g_bytes_get_data(catalog, NULL),
-                                                    (gssize) g_bytes_get_size(catalog),
+                                                    (ssize_t) g_bytes_get_size(catalog),
                                                     error))
         goto out;
     if (icons != NULL && !mfd_store_writer_write_files(tmp_dir, MF_STORE_ICONS_NAME, icons, error))

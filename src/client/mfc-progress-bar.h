@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib.h>
 #include <manifold.h>
 
@@ -23,7 +24,7 @@ void                          mfc_progress_bar_start(MfcProgressBar       *bar,
                                                      const char           *label);
 void                          mfc_progress_bar_update(MfcProgressBar *bar,
                                                       double          percent,
-                                                      guint64         bytes_done);
+                                                      uint64_t        bytes_done);
 void                          mfc_progress_bar_finish(MfcProgressBar *bar);
 
 G_END_DECLS

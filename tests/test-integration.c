@@ -229,7 +229,7 @@ test_malformed_section(void)
         "{\"alias\": [{\"command\": \"/app/bin/app\"}]}",
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(sections); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(sections); i++) {
         g_autoptr(GError) error = NULL;
         g_autoptr(MfManifest) manifest = mft_manifest_new(sections[i], &error);
 
@@ -321,7 +321,7 @@ test_check_file_paths(void)
         {"desktop-entry",       "/app/share/applications/com.example.app.a\\u001bb.desktop",           FALSE},
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(files); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(files); i++) {
         g_autofree char *section = g_strdup_printf("{\"%s\": [{\"path\": \"%s\", " HASHES "}]}",
                                                    files[i].kind,
                                                    files[i].path);
@@ -380,7 +380,7 @@ test_check_aliases(void)
         {"app",       "/app/bin/$(id)",        FALSE},
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(aliases); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(aliases); i++) {
         g_autofree char *section = g_strdup_printf("{\"alias\": [{\"name\": \"%s\", \"command\": \"%s\"}]}",
                                                    aliases[i].name,
                                                    aliases[i].command);
@@ -408,7 +408,7 @@ test_render_aliases(void)
         {"/app/bin/$(id)",    NULL                                                               },
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(aliases); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(aliases); i++) {
         g_autofree char *section = g_strdup_printf("{\"alias\": [{\"name\": \"tool\", \"command\": \"%s\"}]}",
                                                    aliases[i].command);
         g_autoptr(GError) error = NULL;
@@ -475,14 +475,14 @@ test_check_component(void)
     };
     MftTestManifest m = mft_app_manifest("{}");
 
-    for (gsize i = 0; i < G_N_ELEMENTS(refused_ids); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(refused_ids); i++) {
         m.component_id = refused_ids[i];
         g_test_message("%s", refused_ids[i]);
         g_assert_false(mft_passes_check(&m));
     }
 
     m = mft_app_manifest("{}");
-    for (gsize i = 0; i < G_N_ELEMENTS(refused_kinds); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(refused_kinds); i++) {
         m.kind = refused_kinds[i].kind;
         m.base_kind = refused_kinds[i].base_kind;
         g_test_message("%s", refused_kinds[i].kind);
@@ -514,7 +514,7 @@ test_manifest_messages(void)
     manifests[3].base_kind = "\\u001b[2J";
 
     /* a manifest must not be able to control the terminal of the admin */
-    for (gsize i = 0; i < G_N_ELEMENTS(manifests); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(manifests); i++) {
         g_autofree char *json = mft_manifest_json(&manifests[i]);
         g_autoptr(GError) error = NULL;
         g_autoptr(MfManifest) manifest = mf_manifest_new_from_data(json, -1, &error);
@@ -538,7 +538,7 @@ test_check_messages(void)
     };
 
     /* a manifest must not be able to control the terminal of the admin */
-    for (gsize i = 0; i < G_N_ELEMENTS(sections); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(sections); i++) {
         g_autoptr(GError) error = NULL;
         g_autoptr(MfManifest) manifest = mft_manifest_new(sections[i], &error);
 
@@ -694,7 +694,7 @@ test_desktop_entries(void)
          HEADER "DBusActivatable=false\nExec=" MF_MFRUN_PATH " com.example.app\n"                                                                                                   },
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(entries); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(entries); i++) {
         g_autoptr(GBytes) content = g_bytes_new_static(entries[i].content, strlen(entries[i].content));
         g_autoptr(GError) error = NULL;
         g_autoptr(GBytes) rendered = NULL;
@@ -719,7 +719,7 @@ test_desktop_entries_refused(void)
     static const struct {
         const char *name;
         const char *content;
-        gsize size;
+        size_t size;
     } entries[] = {
         /* lines that other parsers see differently */
         ENTRY(MAIN_ENTRY, HEADER "Comment=x\rExec=/bin/evil\nExec=app\n"),
@@ -786,7 +786,7 @@ test_desktop_entries_refused(void)
 
 #undef ENTRY
 
-    for (gsize i = 0; i < G_N_ELEMENTS(entries); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(entries); i++) {
         g_autoptr(GBytes) content = g_bytes_new_static(entries[i].content, entries[i].size);
         g_autoptr(GError) error = NULL;
         g_autoptr(GBytes) rendered = NULL;
@@ -801,9 +801,9 @@ test_desktop_entries_refused(void)
 static void
 test_text_size_limit(void)
 {
-    gsize limit = 1024 * 1024;
+    size_t limit = 1024 * 1024;
     const char *text = HEADER "Exec=app\n#";
-    gsize used = strlen(text);
+    size_t used = strlen(text);
     g_autofree char *largest = g_malloc(limit + 1);
     g_autoptr(GError) error = NULL;
 
@@ -883,7 +883,7 @@ test_units(void)
         {"[Install]\nAlias=\n",                                                                                                  "[Install]\nAlias=\n"                                      },
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(units); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(units); i++) {
         g_autoptr(GBytes) content = g_bytes_new_static(units[i].content, strlen(units[i].content));
         g_autoptr(GError) error = NULL;
         g_autoptr(GBytes) rendered = NULL;
@@ -907,7 +907,7 @@ test_units_refused(void)
 
     static const struct {
         const char *content;
-        gsize size;
+        size_t size;
     } units[] = {
         /* several commands in one key, of which only the first one would run in the image */
         UNIT("[Service]\nExecStart=/app/bin/app ; /bin/evil\n"),
@@ -970,7 +970,7 @@ test_units_refused(void)
 
 #undef UNIT
 
-    for (gsize i = 0; i < G_N_ELEMENTS(units); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(units); i++) {
         g_autoptr(GBytes) content = g_bytes_new_static(units[i].content, units[i].size);
         g_autoptr(GError) error = NULL;
         g_autoptr(GBytes) rendered = NULL;
@@ -1051,7 +1051,7 @@ test_mime_packages(void)
          MIME_XML MIME_OPEN MIME_TYPE "<comment>&lt;glob-deleteall/&gt;</comment>" MIME_END MIME_CLOSE "\n"},
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(packages); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(packages); i++) {
         g_autoptr(GBytes) content = g_bytes_new_static(packages[i].content, strlen(packages[i].content));
         g_autofree char *expected = g_strdelimit(g_strdup(packages[i].expected), "'", '"');
         g_autoptr(GError) error = NULL;
@@ -1141,7 +1141,7 @@ test_mime_packages_refused(void)
         MIME_OPEN MIME_TYPE "<comment>\xff</comment>" MIME_END MIME_CLOSE,
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(packages); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(packages); i++) {
         g_autoptr(GBytes) content = g_bytes_new_static(packages[i], strlen(packages[i]));
         g_autoptr(GError) error = NULL;
         g_autoptr(GBytes) rendered = NULL;
@@ -1180,7 +1180,7 @@ test_udev_rules(void)
         "ENV{SYSTEMD_WANTS}==\"other.service\"\n",
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(rules); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(rules); i++) {
         g_autoptr(GBytes) content = g_bytes_new_static(rules[i], strlen(rules[i]));
         g_autoptr(GError) error = NULL;
         g_autoptr(GBytes) rendered = NULL;
@@ -1199,7 +1199,7 @@ test_udev_rules_refused(void)
 
     static const struct {
         const char *content;
-        gsize size;
+        size_t size;
     } rules[] = {
         /* rules that run programs */
         RULE("RUN+=\"/bin/evil\"\n"),
@@ -1263,7 +1263,7 @@ test_udev_rules_refused(void)
 
 #undef RULE
 
-    for (gsize i = 0; i < G_N_ELEMENTS(rules); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(rules); i++) {
         g_autoptr(GBytes) content = g_bytes_new_static(rules[i].content, rules[i].size);
         g_autoptr(GError) error = NULL;
         g_autoptr(GBytes) rendered = NULL;

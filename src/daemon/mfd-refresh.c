@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <unistd.h>
 #include <glib/gi18n-lib.h>
 #include <libglnx.h>
@@ -38,8 +39,8 @@
  */
 
 /* the largest size of a root index and of its signature */
-constexpr guint64 ROOT_INDEX_DOWNLOAD_MAX = 1024 * 1024;
-constexpr guint64 SIGNATURE_DOWNLOAD_MAX = 64 * 1024;
+constexpr uint64_t ROOT_INDEX_DOWNLOAD_MAX = 1024 * 1024;
+constexpr uint64_t SIGNATURE_DOWNLOAD_MAX = 64 * 1024;
 
 /* a staging directory has the name of the directory that it replaces, with this prefix and suffix */
 #define STAGING_PREFIX "."
@@ -54,7 +55,7 @@ static gboolean
 mfd_write_bytes(const char *path, GBytes *data, GError **error)
 {
     gsize size;
-    const guint8 *buffer = g_bytes_get_data(data, &size);
+    const uint8_t *buffer = g_bytes_get_data(data, &size);
 
     return glnx_file_replace_contents_with_perms_at(AT_FDCWD,
                                                     path,
@@ -137,7 +138,7 @@ mfd_list_origins(const char *root, GError **error)
     g_autoptr(GHashTable) origins = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
     const char *subdirs[] = {MF_STORE_CATALOG_XML_SUBDIR, MF_STORE_CATALOG_ICONS_SUBDIR};
 
-    for (gsize i = 0; i < G_N_ELEMENTS(subdirs); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(subdirs); i++) {
         g_autofree char *dir = g_build_filename(root, subdirs[i], NULL);
         g_autoptr(GError) local_error = NULL;
         g_autoptr(GDir) gdir = g_dir_open(dir, 0, &local_error);
@@ -438,21 +439,20 @@ mfd_check_freshness(const char *root,
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,
-                    _("The repository %s serves an older root index (serial %" G_GUINT64_FORMAT
-                      ") than the one we have (serial %" G_GUINT64_FORMAT ")"),
+                    _("The repository %s serves an older root index (serial %" PRIu64
+                      ") than the one we have (serial %" PRIu64 ")"),
                     remote_id,
                     index->serial,
                     cached->serial);
         return FALSE;
     }
     if (cached != NULL && index->serial == cached->serial && !g_bytes_equal(data, cached_data)) {
-        g_set_error(
-            error,
-            MF_ERROR,
-            MF_ERROR_VERIFICATION_FAILED,
-            _("The repository %s serves another root index with the serial we have (%" G_GUINT64_FORMAT ")"),
-            remote_id,
-            index->serial);
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_VERIFICATION_FAILED,
+                    _("The repository %s serves another root index with the serial we have (%" PRIu64 ")"),
+                    remote_id,
+                    index->serial);
         return FALSE;
     }
     *ret_changed = cached == NULL || !g_bytes_equal(data, cached_data);
@@ -637,7 +637,7 @@ mfd_refresh_remote(const char *root,
     /* every other file is checked against the root index, so no file has changed if the root index
      * is the same as the cached one */
     if (!changed && mfd_cached_metadata_is_complete(root, remote, index)) {
-        g_info("The metadata of %s is up to date, serial %" G_GUINT64_FORMAT, remote_id, index->serial);
+        g_info("The metadata of %s is up to date, serial %" PRIu64, remote_id, index->serial);
         if (ret_changed != NULL)
             *ret_changed = FALSE;
         return TRUE;
@@ -694,7 +694,7 @@ mfd_refresh_remote(const char *root,
         goto out;
     g_clear_pointer(&staging_dir, g_free);
 
-    g_info("Refreshed %s, serial %" G_GUINT64_FORMAT, remote_id, index->serial);
+    g_info("Refreshed %s, serial %" PRIu64, remote_id, index->serial);
     if (ret_changed != NULL)
         *ret_changed = changed;
     ret = TRUE;

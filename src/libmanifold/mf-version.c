@@ -12,7 +12,7 @@
  *
  * Returns: the version of the library, as a string
  */
-const gchar *
+const char *
 mf_version_string(void)
 {
     return MF_VERSION;

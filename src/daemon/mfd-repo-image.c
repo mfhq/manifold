@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <unistd.h>
 #include <glib/gi18n-lib.h>
 #include <libglnx.h>
@@ -30,7 +31,7 @@
 #define DOWNLOADS_DIR MF_CACHE_DIR "/downloads"
 
 /* chunks with a gap smaller than this are downloaded as one range */
-constexpr guint64 RANGE_GAP_MAX = 32 * 1024;
+constexpr uint64_t RANGE_GAP_MAX = 32 * 1024;
 /* the highest number of ranges we request for one image. If an image needs more, we allow larger gaps. */
 constexpr guint RANGES_MAX = 4096;
 /* the highest number of installed images that we search for reusable chunks */
@@ -57,9 +58,9 @@ mfd_repo_source_free(MfdRepoSource *source)
 typedef struct {
     MfCopyProgressFunc func;
     gpointer user_data;
-    guint64 reused;     /* bytes of the image that are copied from installed images */
-    guint64 downloaded; /* bytes of the image that are downloaded */
-    guint64 compressed; /* the compressed size of the downloaded bytes */
+    uint64_t reused;     /* bytes of the image that are copied from installed images */
+    uint64_t downloaded; /* bytes of the image that are downloaded */
+    uint64_t compressed; /* the compressed size of the downloaded bytes */
 } MfdDownloadProgress;
 
 /**
@@ -70,12 +71,13 @@ typedef struct {
  * counted when they arrive.
  */
 static void
-mfd_on_download_progress(guint64 received, gpointer user_data)
+mfd_on_download_progress(uint64_t received, gpointer user_data)
 {
     MfdDownloadProgress *progress = user_data;
     double share = (double) MIN(received, progress->compressed) / (double) progress->compressed;
 
-    progress->func(progress->reused + (guint64) (share * (double) progress->downloaded), progress->user_data);
+    progress->func(progress->reused + (uint64_t) (share * (double) progress->downloaded),
+                   progress->user_data);
 }
 
 /**
@@ -121,7 +123,7 @@ mfd_fetch_ranges(MfdFetcher *fetcher,
  *
  * Compare two components, so the one with the newer version is sorted first.
  */
-static gint
+static int
 mfd_compare_newest_first(gconstpointer a, gconstpointer b)
 {
     MfComponent *component_a = (MfComponent *) a;
@@ -244,7 +246,7 @@ mfd_write_image_from(MfdRepoSource *source,
     g_autoptr(GPtrArray) sources = NULL;
     g_autoptr(GArray) source_fds = g_array_new(FALSE, FALSE, sizeof(int));
     g_autoptr(GArray) missing = NULL;
-    guint64 gap_max = RANGE_GAP_MAX;
+    uint64_t gap_max = RANGE_GAP_MAX;
 
     g_array_set_clear_func(source_fds, mfd_clear_fd);
     if (!glnx_shutil_mkdir_p_at(AT_FDCWD, DOWNLOADS_DIR, 0700, NULL, error) ||
@@ -292,8 +294,7 @@ mfd_write_image_from(MfdRepoSource *source,
         progress.downloaded = mf_manifest_get_image_size(manifest) - progress.reused;
         for (guint i = 0; i < missing->len; i++)
             progress.compressed += g_array_index(missing, MfZchunkRange, i).length;
-        g_info("Downloading %" G_GUINT64_FORMAT " bytes of %s, %" G_GUINT64_FORMAT
-               " bytes of the image are in images we have",
+        g_info("Downloading %" PRIu64 " bytes of %s, reusing %" PRIu64 " bytes of installed images",
                progress.compressed,
                url,
                progress.reused);

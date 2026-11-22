@@ -27,7 +27,7 @@ struct _MfComponent {
     char *component_id;
     MfComponentKind kind;
     char *version;
-    guint64 revision;
+    uint64_t revision;
     char *full_version; /* the version and the revision, `<version>-<revision>` */
     gboolean sdk;
     char *identity;
@@ -230,7 +230,7 @@ MfComponent *
 mf_component_new(const char *component_id,
                  MfComponentKind kind,
                  const char *version,
-                 guint64 revision,
+                 uint64_t revision,
                  gboolean sdk,
                  const char *identity,
                  const char *verity_hash,
@@ -305,7 +305,7 @@ mf_component_get_version(MfComponent *component)
  *
  * Returns: the revision number.
  */
-guint64
+uint64_t
 mf_component_get_revision(MfComponent *component)
 {
     g_return_val_if_fail(MF_IS_COMPONENT(component), 0);

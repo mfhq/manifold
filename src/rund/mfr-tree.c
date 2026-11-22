@@ -1009,10 +1009,10 @@ mfr_tree_collect_used_layers(void)
     g_autoptr(GDir) procs = g_dir_open("/proc", 0, NULL);
     const char *name;
     struct stat st;
-    gint64 ns;
+    int64_t ns;
 
     if (stat("/proc/self/ns/mnt", &st) == 0) {
-        ns = (gint64) st.st_ino;
+        ns = (int64_t) st.st_ino;
         g_hash_table_add(seen_ns, g_memdup2(&ns, sizeof(ns)));
     }
     while (procs != NULL && (name = g_dir_read_name(procs)) != NULL) {
@@ -1023,7 +1023,7 @@ mfr_tree_collect_used_layers(void)
         if (!g_ascii_isdigit(name[0]) || stat(ns_path, &st) != 0)
             continue;
         /* read the mountinfo only once per mount namespace, not once per process */
-        ns = (gint64) st.st_ino;
+        ns = (int64_t) st.st_ino;
         if (g_hash_table_contains(seen_ns, &ns))
             continue;
         g_hash_table_add(seen_ns, g_memdup2(&ns, sizeof(ns)));

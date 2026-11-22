@@ -30,18 +30,18 @@
 static GBytes *
 mft_image_data(void)
 {
-    gsize size = (3 + 1 + 3 + 18 + 20 + 1) * BS + 512;
-    g_autofree guint8 *data = g_malloc0(size);
-    g_autofree guint8 *payload = g_malloc(10000);
-    g_autofree guint8 *frame = NULL;
+    size_t size = (3 + 1 + 3 + 18 + 20 + 1) * BS + 512;
+    g_autofree uint8_t *data = g_malloc0(size);
+    g_autofree uint8_t *payload = g_malloc(10000);
+    g_autofree uint8_t *frame = NULL;
     g_autoptr(GRand) rand = g_rand_new_with_seed(42);
-    gsize frame_bound = ZSTD_compressBound(10000);
-    gsize frame_size;
-    guint8 *pos;
+    size_t frame_bound = ZSTD_compressBound(10000);
+    size_t frame_size;
+    uint8_t *pos;
 
     /* random data barely compresses, so its frame fills most of the 3 blocks */
-    for (gsize i = 0; i < 10000; i++)
-        payload[i] = (guint8) g_rand_int_range(rand, 0, 256);
+    for (size_t i = 0; i < 10000; i++)
+        payload[i] = (uint8_t) g_rand_int_range(rand, 0, 256);
     frame = g_malloc(frame_bound);
     frame_size = ZSTD_compress(frame, frame_bound, payload, 10000, 3);
     g_assert_false(ZSTD_isError(frame_size));
@@ -54,8 +54,8 @@ mft_image_data(void)
     /* the frame ends with the third block, behind zero padding */
     memcpy(pos + 3 * BS - frame_size, frame, frame_size);
     pos += 3 * BS;
-    for (gsize i = 0; i < 18 * BS; i++)
-        pos[i] = (guint8) g_rand_int_range(rand, 0, 256);
+    for (size_t i = 0; i < 18 * BS; i++)
+        pos[i] = (uint8_t) g_rand_int_range(rand, 0, 256);
     pos += (18 + 20) * BS;
     memset(pos, 'm', BS / 2);
     pos += BS;
@@ -67,12 +67,12 @@ mft_image_data(void)
 static void
 test_chunks(void)
 {
-    const guint64 expected[] = {3 * BS, BS, 3 * BS, 16 * BS, 2 * BS, 16 * BS, 4 * BS, BS, 512};
+    const uint64_t expected[] = {3 * BS, BS, 3 * BS, 16 * BS, 2 * BS, 16 * BS, 4 * BS, BS, 512};
     g_autoptr(GBytes) image = mft_image_data();
     g_autoptr(GArray)
         chunks = mf_zchunk_find_image_chunks(g_bytes_get_data(image, NULL), g_bytes_get_size(image));
 
-    g_assert_cmpmem(chunks->data, chunks->len * sizeof(guint64), expected, sizeof(expected));
+    g_assert_cmpmem(chunks->data, chunks->len * sizeof(uint64_t), expected, sizeof(expected));
 }
 
 /**
@@ -88,16 +88,16 @@ mft_manifest_for(GBytes *image, const char *sha256)
     g_autofree char *json = NULL;
     g_autoptr(GBytes) json_bytes = NULL;
     g_autoptr(GError) error = NULL;
-    guint8 hash[BLAKE3_OUT_LEN];
+    uint8_t hash[BLAKE3_OUT_LEN];
     blake3_hasher hasher;
     MfManifest *manifest;
-    gsize json_size;
+    size_t json_size;
 
     blake3_hasher_init(&hasher);
     blake3_hasher_update(&hasher, g_bytes_get_data(image, NULL), g_bytes_get_size(image));
     blake3_hasher_finalize(&hasher, hash, sizeof(hash));
     blake3 = g_malloc(2 * BLAKE3_OUT_LEN + 1);
-    for (gsize i = 0; i < BLAKE3_OUT_LEN; i++)
+    for (size_t i = 0; i < BLAKE3_OUT_LEN; i++)
         g_snprintf(blake3 + 2 * i, 3, "%02x", hash[i]);
 
     json = mft_manifest_json(&(MftTestManifest){
@@ -129,7 +129,7 @@ test_write_image(void)
     g_autoptr(MfManifest) other_manifest = mft_manifest_for(image, other_sha256);
     g_autofree char *header_sha256 = NULL;
     g_autoptr(GError) error = NULL;
-    guint64 header_size = 0;
+    uint64_t header_size = 0;
     zckChunk *chunk;
     zckCtx *zck;
     guint n_chunks = 0;
@@ -154,7 +154,7 @@ test_write_image(void)
         if (zck_get_chunk_number(chunk) == 0)
             continue;
         g_assert_cmpuint(n_chunks, <, chunks->len);
-        g_assert_cmpint(zck_get_chunk_size(chunk), ==, g_array_index(chunks, guint64, n_chunks));
+        g_assert_cmpint(zck_get_chunk_size(chunk), ==, g_array_index(chunks, uint64_t, n_chunks));
         n_chunks++;
     }
     g_assert_cmpuint(n_chunks, ==, chunks->len);
@@ -218,7 +218,7 @@ test_assembly(void)
 {
     g_autofree char *dir = mft_make_tmp_dir("zchunk-assembly");
     g_autoptr(GBytes) old_image = mft_image_data();
-    g_autofree guint8 *new_data = g_memdup2(g_bytes_get_data(old_image, NULL), g_bytes_get_size(old_image));
+    g_autofree uint8_t *new_data = g_memdup2(g_bytes_get_data(old_image, NULL), g_bytes_get_size(old_image));
     g_autoptr(GBytes) new_image = NULL;
     g_autoptr(GBytes) empty = g_bytes_new_static("", 0);
     g_autoptr(MfManifest) manifest = NULL;
@@ -229,10 +229,10 @@ test_assembly(void)
     g_autoptr(GError) error = NULL;
     g_autofree char *header_sha256 = NULL;
     g_autofree char *wrong_sha256 = mft_fake_hash("header");
-    g_autofree guint8 *written = NULL;
-    guint64 header_size;
-    guint64 downloaded = 0;
-    gsize size = g_bytes_get_size(old_image);
+    g_autofree uint8_t *written = NULL;
+    uint64_t header_size;
+    uint64_t downloaded = 0;
+    size_t size = g_bytes_get_size(old_image);
     struct stat st;
     g_autofd int old_fd = -1;
     g_autofd int new_fd = -1;
@@ -277,9 +277,9 @@ test_assembly(void)
     for (guint i = 0; i < ranges->len; i++)
         downloaded += g_array_index(ranges, MfZchunkRange, i).length;
     g_assert_cmpint(fstat(zck_fd, &st), ==, 0);
-    g_assert_cmpuint(downloaded, <, (guint64) st.st_size - header_size);
+    g_assert_cmpuint(downloaded, <, (uint64_t) st.st_size - header_size);
     /* ranges that are close enough become one */
-    joined = mf_zchunk_assembly_get_missing(assembly, G_MAXUINT32);
+    joined = mf_zchunk_assembly_get_missing(assembly, UINT32_MAX);
     g_assert_cmpuint(joined->len, ==, 1);
 
     /* the image is not written as long as a missing chunk has not been downloaded */

@@ -10,6 +10,7 @@
 #error "Only <manifold.h> can be included directly."
 #endif
 
+#include <stdint.h>
 #include <glib.h>
 
 #include "mf-manifest.h"
@@ -19,10 +20,10 @@ G_BEGIN_DECLS
 gboolean mf_zchunk_write_image(int      image_fd,
                                int      dest_fd,
                                GError **error);
-gboolean mf_zchunk_read_header(int      fd,
-                               guint64 *header_size,
-                               char   **header_sha256,
-                               GError **error);
+gboolean mf_zchunk_read_header(int       fd,
+                               uint64_t *header_size,
+                               char    **header_sha256,
+                               GError  **error);
 gboolean mf_zchunk_check_image(int         fd,
                                MfManifest *manifest,
                                GError    **error);

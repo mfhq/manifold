@@ -10,6 +10,7 @@
 #error "Only <manifold.h> can be included directly."
 #endif
 
+#include <stdint.h>
 #include <glib-object.h>
 
 G_BEGIN_DECLS
@@ -51,15 +52,15 @@ MfAction                   mf_item_progress_get_action(const MfItemProgress *ite
 const char                *mf_item_progress_get_subject(const MfItemProgress *item);
 const char                *mf_item_progress_get_version(const MfItemProgress *item);
 double                     mf_item_progress_get_percent(const MfItemProgress *item);
-guint64                    mf_item_progress_get_bytes_done(const MfItemProgress *item);
-guint64                    mf_item_progress_get_bytes_total(const MfItemProgress *item);
+uint64_t                   mf_item_progress_get_bytes_done(const MfItemProgress *item);
+uint64_t                   mf_item_progress_get_bytes_total(const MfItemProgress *item);
 
 void                       mf_item_progress_set_percent(MfItemProgress *item,
                                                         double          percent);
 void                       mf_item_progress_set_bytes_done(MfItemProgress *item,
-                                                           guint64         bytes_done);
+                                                           uint64_t        bytes_done);
 void                       mf_item_progress_set_bytes_total(MfItemProgress *item,
-                                                            guint64         bytes_total);
+                                                            uint64_t        bytes_total);
 
 typedef struct _MfProgress MfProgress;
 

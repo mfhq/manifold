@@ -87,10 +87,10 @@ mfc_parse_command_options(GOptionContext *context, MfcCommand *cmd, int *argc, c
  * characters, and followed by a space as column separator.
  */
 void
-mfc_string_append_column(GString *row, const char *text, gsize width)
+mfc_string_append_column(GString *row, const char *text, size_t width)
 {
     g_string_append(row, text);
-    for (gsize len = g_utf8_strlen(text, -1); len < width; len++)
+    for (size_t len = g_utf8_strlen(text, -1); len < width; len++)
         g_string_append_c(row, ' ');
     g_string_append_c(row, ' ');
 }
@@ -112,13 +112,13 @@ mfc_format_components(GPtrArray *components, gboolean with_header)
     const char *version_header = _("VERSION");
     const char *flags_header = _("FLAGS");
     /* the kind column fits the longest kind, "platform" */
-    gsize kind_width = 8;
-    gsize id_width = 0;
-    gsize version_width = 0;
+    size_t kind_width = 8;
+    size_t id_width = 0;
+    size_t version_width = 0;
 
     /* make every column as wide as its longest entry */
     if (with_header) {
-        kind_width = MAX(kind_width, (gsize) g_utf8_strlen(kind_header, -1));
+        kind_width = MAX(kind_width, (size_t) g_utf8_strlen(kind_header, -1));
         id_width = g_utf8_strlen(id_header, -1);
         version_width = g_utf8_strlen(version_header, -1);
     }
@@ -187,7 +187,7 @@ guint
 mfc_prompt_number(const char *question, guint maxnum)
 {
     char buffer[64];
-    unsigned int answer;
+    guint answer;
 
     g_print("%s ", question);
     for (;;) {

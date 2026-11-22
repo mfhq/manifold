@@ -8,6 +8,7 @@
 #include "mf-utils.h"
 #include "mf-utils-private.h"
 
+#include <inttypes.h>
 #include <string.h>
 #include <sys/utsname.h>
 #include <glib/gi18n-lib.h>
@@ -32,16 +33,16 @@ constexpr size_t PATH_LENGTH_MAX = 1024;
 
 constexpr size_t ARCHITECTURE_LENGTH_MAX = 64;
 
-constexpr gsize TEXT_FILE_SIZE_MAX = 1024 * 1024;
+constexpr size_t TEXT_FILE_SIZE_MAX = 1024 * 1024;
 
-/* the longest a text may be that we show to the user on one line */
-constexpr gsize DISPLAY_TEXT_LENGTH_MAX = 512;
+/* the maximum length of a text that we show to the user on one line */
+constexpr size_t DISPLAY_TEXT_LENGTH_MAX = 512;
 
 /* the highest glob weight and magic priority that we accept in a MIME package. 50 is the default of both. */
-constexpr guint64 MIME_WEIGHT_MAX = 50;
+constexpr uint64_t MIME_WEIGHT_MAX = 50;
 
-/* the fewest characters a glob needs besides wildcards, so that `*.*` can not match all files */
-constexpr gsize MIME_GLOB_LITERAL_MIN = 2;
+/* the minimum number of non-wildcard characters in a glob, so that `*.*` can not match all files */
+constexpr size_t MIME_GLOB_LITERAL_MIN = 2;
 
 /* the characters allowed in a glob of a MIME package, the field separators of the
  * globs2 file of the MIME database are not among them */
@@ -120,7 +121,7 @@ mf_component_id_is_valid(const char *component_id)
 gboolean
 mf_path_is_below(const char *path, const char *dir)
 {
-    gsize dir_len = strlen(dir);
+    size_t dir_len = strlen(dir);
     g_auto(GStrv) parts = NULL;
 
     if (strncmp(path, dir, dir_len) != 0 || path[dir_len] != '/')
@@ -356,7 +357,7 @@ mf_mime_type_is_valid(const char *type)
 gboolean
 mf_mime_glob_is_valid(const char *pattern)
 {
-    gsize literal = 0;
+    size_t literal = 0;
 
     if (pattern == NULL || pattern[strspn(pattern, MIME_GLOB_CHARS)] != '\0')
         return FALSE;
@@ -486,9 +487,9 @@ mf_version_compare(const char *a, const char *b)
  */
 int
 mf_version_compare_with_rev(const char *version_a,
-                            guint64 revision_a,
+                            uint64_t revision_a,
                             const char *version_b,
-                            guint64 revision_b)
+                            uint64_t revision_b)
 {
     int cmp = mf_version_compare(version_a, version_b);
 
@@ -525,11 +526,11 @@ mf_hex_hash_is_valid(const char *hash)
  * @dest: a buffer with room for 2 * @size hex digits and the NUL
  */
 static void
-mf_hash_to_hex_buffer(char *dest, const guint8 *hash, gsize size)
+mf_hash_to_hex_buffer(char *dest, const uint8_t *hash, size_t size)
 {
     static const char digits[] = "0123456789abcdef";
 
-    for (gsize i = 0; i < size; i++) {
+    for (size_t i = 0; i < size; i++) {
         dest[2 * i] = digits[hash[i] >> 4];
         dest[2 * i + 1] = digits[hash[i] & 0xf];
     }
@@ -561,10 +562,10 @@ mf_file_is_masked(const char *path)
 gboolean
 mf_bytes_are_jxl(GBytes *bytes)
 {
-    static const guint8 codestream[] = {0xff, 0x0a};
-    static const guint8 container[] = {0x00, 0x00, 0x00, 0x0c, 'J', 'X', 'L', ' ', '\r', '\n', 0x87, '\n'};
+    static const uint8_t codestream[] = {0xff, 0x0a};
+    static const uint8_t container[] = {0x00, 0x00, 0x00, 0x0c, 'J', 'X', 'L', ' ', '\r', '\n', 0x87, '\n'};
     gsize size;
-    const guint8 *data = g_bytes_get_data(bytes, &size);
+    const uint8_t *data = g_bytes_get_data(bytes, &size);
 
     return (size >= sizeof(codestream) && memcmp(data, codestream, sizeof(codestream)) == 0) ||
            (size >= sizeof(container) && memcmp(data, container, sizeof(container)) == 0);
@@ -576,7 +577,7 @@ mf_bytes_are_jxl(GBytes *bytes)
  * Computes the size, the SHA-256 hash and the BLAKE3 hash of a file whose contents are passed in pieces.
  */
 struct _MfHasher {
-    guint64 size;
+    uint64_t size;
     GChecksum *sha256;
     blake3_hasher blake3;
 };
@@ -612,10 +613,10 @@ mf_hasher_free(MfHasher *hasher)
  * @size: the size of @data
  */
 void
-mf_hasher_update(MfHasher *hasher, const void *data, gsize size)
+mf_hasher_update(MfHasher *hasher, const void *data, size_t size)
 {
     hasher->size += size;
-    g_checksum_update(hasher->sha256, data, (gssize) size);
+    g_checksum_update(hasher->sha256, data, (ssize_t) size);
     blake3_hasher_update(&hasher->blake3, data, size);
 }
 
@@ -628,9 +629,9 @@ mf_hasher_update(MfHasher *hasher, const void *data, gsize size)
 void
 mf_hasher_finish(MfHasher *hasher, MfFileEntry *ret)
 {
-    guint8 sha256[32];
+    uint8_t sha256[32];
     gsize sha256_size = sizeof(sha256);
-    guint8 blake3[BLAKE3_OUT_LEN];
+    uint8_t blake3[BLAKE3_OUT_LEN];
 
     g_checksum_get_digest(hasher->sha256, sha256, &sha256_size);
     blake3_hasher_finalize(&hasher->blake3, blake3, sizeof(blake3));
@@ -721,7 +722,7 @@ mf_get_host_architecture(void)
  * Returns: %TRUE on success, %FALSE on failure
  */
 gboolean
-mf_write_all(int fd, const char *buffer, gsize size, GError **error)
+mf_write_all(int fd, const char *buffer, size_t size, GError **error)
 {
     while (size > 0) {
         ssize_t n = write(fd, buffer, size);
@@ -733,7 +734,7 @@ mf_write_all(int fd, const char *buffer, gsize size, GError **error)
             return FALSE;
         }
         buffer += n;
-        size -= (gsize) n;
+        size -= (size_t) n;
     }
     return TRUE;
 }
@@ -750,9 +751,9 @@ mf_write_all(int fd, const char *buffer, gsize size, GError **error)
  * Returns: (transfer full): the full version string
  */
 char *
-mf_build_full_version(const char *version, guint64 revision)
+mf_build_full_version(const char *version, uint64_t revision)
 {
-    return g_strdup_printf("%s-%" G_GUINT64_FORMAT, version, revision);
+    return g_strdup_printf("%s-%" PRIu64, version, revision);
 }
 
 /**
@@ -768,9 +769,10 @@ mf_build_full_version(const char *version, guint64 revision)
  * Returns: %FALSE if @name is not a valid name of a version directory
  */
 gboolean
-mf_split_full_version(const char *name, char **ret_version, guint64 *ret_revision)
+mf_split_full_version(const char *name, char **ret_version, uint64_t *ret_revision)
 {
     g_autofree char *version = NULL;
+    guint64 revision;
     const char *dash;
 
     if (name == NULL)
@@ -778,13 +780,14 @@ mf_split_full_version(const char *name, char **ret_version, guint64 *ret_revisio
     dash = strrchr(name, '-');
     if (dash == NULL || dash == name || dash[1] == '\0')
         return FALSE;
-    if (!g_ascii_string_to_unsigned(dash + 1, 10, 0, G_MAXUINT64, ret_revision, NULL))
+    if (!g_ascii_string_to_unsigned(dash + 1, 10, 0, UINT64_MAX, &revision, NULL))
         return FALSE;
-    version = g_strndup(name, (gsize) (dash - name));
+    version = g_strndup(name, (size_t) (dash - name));
     if (!mf_version_is_valid(version))
         return FALSE;
 
     *ret_version = g_steal_pointer(&version);
+    *ret_revision = revision;
     return TRUE;
 }
 

@@ -27,8 +27,8 @@
 #include "mfd-policy.h"
 #include "mf-varlink-util.h"
 
-/* how long we stay around without a connection, when activated on demand */
-constexpr guint64 IDLE_TIMEOUT_USEC = 30 * G_USEC_PER_SEC;
+/* the time after which we exit if no connection is open, when we were activated on demand */
+constexpr uint64_t IDLE_TIMEOUT_USEC = 30 * G_USEC_PER_SEC;
 
 /**
  * MfdService:
@@ -494,8 +494,8 @@ mfd_service_on_progress(const MfProgress *progress, gpointer user_data)
     const char *subject = item != NULL ? mf_item_progress_get_subject(item) : NULL;
     const char *version = item != NULL ? mf_item_progress_get_version(item) : NULL;
     double item_percent = item != NULL ? mf_item_progress_get_percent(item) : 0;
-    guint64 bytes_done = item != NULL ? mf_item_progress_get_bytes_done(item) : 0;
-    guint64 bytes_total = item != NULL ? mf_item_progress_get_bytes_total(item) : 0;
+    uint64_t bytes_done = item != NULL ? mf_item_progress_get_bytes_done(item) : 0;
+    uint64_t bytes_total = item != NULL ? mf_item_progress_get_bytes_total(item) : 0;
 
     /* NOTE: The operation blocks the event loop, so we never wait for a caller that does
      * not read its progress. We drop the progress while the socket of the caller is full. */
@@ -544,10 +544,10 @@ mfd_service_remove(MfdService *service, MfdRequest *request)
     g_autoptr(GError) error = NULL;
 
     if (request->component_id == NULL)
-        g_message("User %u requested to clean up", (unsigned int) request->uid);
+        g_message("User %u requested to clean up", (guint) request->uid);
     else
         g_message("User %u requested to remove %s %s",
-                  (unsigned int) request->uid,
+                  (guint) request->uid,
                   request->component_id,
                   request->version != NULL ? request->version : "");
 
@@ -578,7 +578,7 @@ mfd_service_refresh(MfdService *service, MfdRequest *request)
     g_autoptr(GError) error = NULL;
 
     g_message("User %u requested to refresh %s",
-              (unsigned int) request->uid,
+              (guint) request->uid,
               request->remote_ids != NULL ? "some remotes" : "all remotes");
 
     result = mfd_manager_refresh(service->manager,
@@ -609,7 +609,7 @@ mfd_service_inspect_remote(MfdService *service, MfdRequest *request)
     g_autofree char *valid_until = NULL;
     MfRepoRootIndex *index;
 
-    g_message("User %u requested to inspect the repository at %s", (unsigned int) request->uid, request->url);
+    g_message("User %u requested to inspect the repository at %s", (guint) request->uid, request->url);
 
     inspection = mfd_manager_inspect_remote(service->manager, request->url, request->public_key, &error);
     if (inspection == NULL) {
@@ -651,7 +651,7 @@ mfd_service_add_remote(MfdService *service, MfdRequest *request)
     g_autoptr(GError) error = NULL;
 
     g_message("User %u requested to add the repository at %s as a remote",
-              (unsigned int) request->uid,
+              (guint) request->uid,
               request->url);
 
     result = mfd_manager_add_remote(service->manager,
@@ -680,7 +680,7 @@ mfd_service_remove_remote(MfdService *service, MfdRequest *request)
 {
     g_autoptr(GError) error = NULL;
 
-    g_message("User %u requested to remove the remote %s", (unsigned int) request->uid, request->remote_id);
+    g_message("User %u requested to remove the remote %s", (guint) request->uid, request->remote_id);
 
     if (!mfd_manager_remove_remote(service->manager, request->remote_id, &error)) {
         mfd_service_reply_error(request->link, error, NULL);
@@ -705,7 +705,7 @@ mfd_service_mark(MfdService *service, MfdRequest *request)
     int r;
 
     g_message("User %u requested to mark %s %s as %s",
-              (unsigned int) request->uid,
+              (guint) request->uid,
               request->component_id,
               request->version != NULL ? request->version : "",
               mf_install_mode_to_string(request->mode));
@@ -778,7 +778,7 @@ mfd_service_on_run_queue(sd_event_source *source, void *userdata)
     if (r < 0) {
         g_warning("Unable to reply to the call of %s by user %u: %s",
                   request->method,
-                  (unsigned int) request->uid,
+                  (guint) request->uid,
                   g_strerror(-r));
         /* reply with a generic error, so the caller learns that the call failed even if
          * building the reply was the step that failed */
@@ -805,7 +805,7 @@ mfd_service_refuse_request(MfdService *service, MfdRequest *request, const GErro
 
     if (error != NULL) {
         g_warning("Unable to authorize user %u for %s: %s",
-                  (unsigned int) request->uid,
+                  (guint) request->uid,
                   request->method,
                   error->message);
         r = sd_varlink_errorbo(request->link,
@@ -814,7 +814,7 @@ mfd_service_refuse_request(MfdService *service, MfdRequest *request, const GErro
     } else {
         g_message("Denied call of %s by user %u: not authorized for %s",
                   request->method,
-                  (unsigned int) request->uid,
+                  (guint) request->uid,
                   request->action_id);
         r = sd_varlink_error(request->link, SD_VARLINK_ERROR_PERMISSION_DENIED, NULL);
     }
@@ -840,7 +840,7 @@ mfd_service_on_polkit_reply(sd_bus_message *reply, void *userdata, sd_bus_error 
 
     r = mfd_policy_read_reply(reply, &error);
     if (r > 0) {
-        g_message("User %u is authorized for %s", (unsigned int) request->uid, request->action_id);
+        g_message("User %u is authorized for %s", (guint) request->uid, request->action_id);
         mfd_service_queue_request(service, request);
         return 0;
     }
@@ -958,7 +958,7 @@ mfd_service_install_bundle(MfdService *service, MfdRequest *request)
     if (request->install_set == NULL) {
         g_autoptr(MfBundle) bundle = NULL;
 
-        g_message("User %u requested to install a bundle", (unsigned int) request->uid);
+        g_message("User %u requested to install a bundle", (guint) request->uid);
 
         bundle = mf_bundle_new_from_fd(request->bundle_fd, &error);
         if (bundle == NULL) {
@@ -1077,7 +1077,7 @@ mfd_service_install_component(MfdService *service, MfdRequest *request)
 
     if (request->install_set == NULL)
         g_message("User %u requested to install %s%s%s",
-                  (unsigned int) request->uid,
+                  (guint) request->uid,
                   repo_request->component_id,
                   repo_request->origin != NULL ? " from " : "",
                   repo_request->origin != NULL ? repo_request->origin : "");
@@ -1095,7 +1095,7 @@ mfd_service_update(MfdService *service, MfdRequest *request)
 {
     if (request->install_set == NULL)
         g_message("User %u requested to update %s",
-                  (unsigned int) request->uid,
+                  (guint) request->uid,
                   request->repo_request->update_ids != NULL ? "some components" : "all components");
 
     return mfd_service_install_from_remotes(service, request);
@@ -1143,7 +1143,7 @@ mfd_varlink_method_install_file(sd_varlink *link,
 {
     MfdService *service = userdata;
     struct {
-        unsigned int fd_index;
+        guint fd_index;
         MfTransactionFlags flags;
     } p = {};
     static const sd_json_dispatch_field dispatch_table[] = {
@@ -1272,7 +1272,7 @@ mfd_varlink_method_update(sd_varlink *link,
 
     if (!mfd_json_variant_get_strv(p.component_ids, &component_ids))
         return sd_varlink_error_invalid_parameter_name(link, "componentIds");
-    for (gsize i = 0; component_ids != NULL && component_ids[i] != NULL; i++) {
+    for (size_t i = 0; component_ids != NULL && component_ids[i] != NULL; i++) {
         if (!mf_component_id_is_valid(component_ids[i]))
             return sd_varlink_error_invalid_parameter_name(link, "componentIds");
     }
@@ -1534,7 +1534,7 @@ mfd_varlink_method_add_remote(sd_varlink *link,
         return sd_varlink_error_invalid_parameter_name(link, "publicKey");
     if (!mfd_json_variant_get_strv(p.channels, &channels))
         return sd_varlink_error_invalid_parameter_name(link, "channels");
-    for (gsize i = 0; channels != NULL && channels[i] != NULL; i++) {
+    for (size_t i = 0; channels != NULL && channels[i] != NULL; i++) {
         if (!mf_remote_channel_is_valid(channels[i]) ||
             g_strv_contains((const char *const *) channels + i + 1, channels[i]))
             return sd_varlink_error_invalid_parameter_name(link, "channels");
@@ -1769,7 +1769,7 @@ mfd_service_on_disconnect(sd_varlink_server *server, sd_varlink *link, void *use
     /* drop the request of the disconnected caller */
     if (request != NULL) {
         g_message("User %u disconnected before their call of %s was done",
-                  (unsigned int) request->uid,
+                  (guint) request->uid,
                   request->method);
         mfd_service_drop_request(service, request);
     }

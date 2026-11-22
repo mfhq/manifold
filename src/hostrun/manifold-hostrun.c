@@ -17,6 +17,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <glib.h>
@@ -426,7 +427,7 @@ typedef struct {
     const char *working_directory;
     char **environment;
     sd_json_variant *fd_indices;
-    unsigned int working_directory_fd_index;
+    guint working_directory_fd_index;
     sd_json_variant *signal_fd_index;
 } MfhRunParameters;
 

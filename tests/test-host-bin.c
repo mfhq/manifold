@@ -97,7 +97,7 @@ test_sync(void)
 static void
 mft_wait_for_link(sd_event *event, const char *links_dir, const char *name, gboolean expected)
 {
-    gint64 deadline = g_get_monotonic_time() + 10 * G_USEC_PER_SEC;
+    int64_t deadline = g_get_monotonic_time() + 10 * G_USEC_PER_SEC;
 
     while (mft_has_link(links_dir, name) != expected) {
         g_assert_cmpint(g_get_monotonic_time(), <, deadline);

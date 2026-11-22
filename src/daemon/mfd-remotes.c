@@ -34,7 +34,7 @@
 #define PUBLIC_KEY_FILE_SUFFIX "_key.pub"
 
 /* the largest size of a public key file, which is one short line */
-constexpr guint64 PUBLIC_KEY_DOWNLOAD_MAX = 16 * 1024;
+constexpr uint64_t PUBLIC_KEY_DOWNLOAD_MAX = 16 * 1024;
 
 void
 mfd_remote_inspection_free(MfdRemoteInspection *inspection)
@@ -206,7 +206,7 @@ mfd_remotes_check_channels(MfdRemoteInspection *inspection, const char *const *c
 
     if (!mf_remote_check_channels(remote_id, channels, error))
         return FALSE;
-    for (gsize i = 0; channels[i] != NULL; i++) {
+    for (size_t i = 0; channels[i] != NULL; i++) {
         if (g_strv_contains((const char *const *) available, channels[i]))
             continue;
 

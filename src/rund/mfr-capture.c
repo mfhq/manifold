@@ -1482,7 +1482,7 @@ mfr_capture_job_install_loader_manifests(MfrCaptureJob *job, GPtrArray *groups, 
         const MfrLoaderManifestKind *kind = group->kind;
         g_autofree char *dest_rel = NULL;
         g_autofree char *dest_dir = NULL;
-        unsigned int written = 0;
+        guint written = 0;
 
         dest_rel = g_build_filename(GRAPHICS_OVERRIDES,
                                     kind->per_arch ? job->arch_tuple : "common",
@@ -1807,10 +1807,10 @@ mfr_capture_job_add_driver_path_vars(MfrCaptureJob *job)
  *
  * Returns: the modification time of @st, in nanoseconds
  */
-static guint64
+static uint64_t
 mfr_stat_mtime_ns(const struct stat *st)
 {
-    return (guint64) st->st_mtim.tv_sec * G_USEC_PER_SEC * 1000 + (guint64) st->st_mtim.tv_nsec;
+    return (uint64_t) st->st_mtim.tv_sec * G_USEC_PER_SEC * 1000 + (uint64_t) st->st_mtim.tv_nsec;
 }
 
 /**
@@ -1825,7 +1825,7 @@ static int
 mfr_stamp_add_dir(sd_json_variant **dirs, const char *path)
 {
     struct stat st;
-    guint64 mtime = stat(path, &st) == 0 ? mfr_stat_mtime_ns(&st) : 0;
+    uint64_t mtime = stat(path, &st) == 0 ? mfr_stat_mtime_ns(&st) : 0;
 
     return sd_json_variant_append_arraybo(dirs,
                                           SD_JSON_BUILD_PAIR_STRING("path", path),
@@ -1873,7 +1873,7 @@ mfr_stamp_targets_add(MfrStampTargets *targets, const char *host_path, GError **
         return glnx_throw_errno_prefix(error, "Captured %s is missing on the host", host_path);
     r = sd_json_variant_append_arraybo(&targets->entries,
                                        SD_JSON_BUILD_PAIR_STRING("path", host_path),
-                                       SD_JSON_BUILD_PAIR_UNSIGNED("size", (guint64) st.st_size),
+                                       SD_JSON_BUILD_PAIR_UNSIGNED("size", (uint64_t) st.st_size),
                                        SD_JSON_BUILD_PAIR_UNSIGNED("mtime", mfr_stat_mtime_ns(&st)));
     if (r < 0)
         return glnx_throw(error, "Unable to record %s: %s", host_path, g_strerror(-r));
@@ -2233,7 +2233,7 @@ mfr_stamp_entry_changed(sd_json_variant *entry)
     if (mfr_stat_mtime_ns(&st) != sd_json_variant_unsigned(mtime))
         return TRUE;
     if (size != NULL &&
-        (!sd_json_variant_is_unsigned(size) || sd_json_variant_unsigned(size) != (guint64) st.st_size))
+        (!sd_json_variant_is_unsigned(size) || sd_json_variant_unsigned(size) != (uint64_t) st.st_size))
         return TRUE;
     return FALSE;
 }

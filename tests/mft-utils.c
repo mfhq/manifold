@@ -8,6 +8,7 @@
 #include "mft-utils.h"
 
 #include <fcntl.h>
+#include <inttypes.h>
 #include <unistd.h>
 #include <glib/gstdio.h>
 #include <libglnx.h>
@@ -232,7 +233,7 @@ mft_manifest_json(const MftTestManifest *m)
             "      \"component\": \"%s\",\n"
             "      \"kind\": \"%s\",\n"
             "      \"version\": \"%s\",\n"
-            "      \"revision\": %" G_GUINT64_FORMAT ",\n"
+            "      \"revision\": %" PRIu64 ",\n"
             "      \"identity\": \"%s\",\n"
             "      \"content-hash\": \"%s\"\n"
             "   }",
@@ -259,19 +260,19 @@ mft_manifest_json(const MftTestManifest *m)
         "   \"component\": \"%s\",\n"
         "   \"kind\": \"%s\",\n"
         "   \"version\": \"%s\",\n"
-        "   \"revision\": %" G_GUINT64_FORMAT ",\n"
+        "   \"revision\": %" PRIu64 ",\n"
         "   \"architecture\": \"%s\",\n"
         "   \"sdk\": %s,\n"
         "   \"identity\": \"%s\",\n"
         "   \"content-hash\": \"%s\"%s%s%s%s,\n"
         "   \"image\": {\n"
         "      \"file\": \"%s\",\n"
-        "      \"size\": %" G_GSIZE_FORMAT ",\n"
+        "      \"size\": %zu,\n"
         "      \"sha256\": \"%s\",\n"
         "      \"blake3\": \"%s\",\n"
         "      \"verity-root-hash\": \"%s\",\n"
-        "      \"data-offset\": %" G_GUINT64_FORMAT ",\n"
-        "      \"hash-offset\": %" G_GUINT64_FORMAT "\n"
+        "      \"data-offset\": %" PRIu64 ",\n"
+        "      \"hash-offset\": %" PRIu64 "\n"
         "   }\n"
         "}",
         m->component_id,
@@ -319,7 +320,7 @@ mft_write_version(const char *root,
     g_autofree char *identity = mft_fake_hash(manifest->component_id);
     const char *hash = manifest->verity_root_hash != NULL ? manifest->verity_root_hash : identity;
     g_autofree char *component_dir = g_build_filename(root, subdir, manifest->component_id, NULL);
-    g_autofree char *version_name = g_strdup_printf("%s-%" G_GUINT64_FORMAT,
+    g_autofree char *version_name = g_strdup_printf("%s-%" PRIu64,
                                                     manifest->version,
                                                     manifest->revision != 0 ? manifest->revision : 1);
     g_autofree char *version_dir = g_build_filename(component_dir, version_name, NULL);

@@ -74,7 +74,7 @@ test_relative_path_is_valid(void)
     g_assert_true(mf_relative_path_is_valid("main/x86_64/media/org/example/App/3f0c/icons/64x64@2/App.jxl"));
     g_assert_true(mf_relative_path_is_valid("index.json"));
     g_assert_false(mf_relative_path_is_valid(NULL));
-    for (gsize i = 0; i < G_N_ELEMENTS(invalid); i++)
+    for (size_t i = 0; i < G_N_ELEMENTS(invalid); i++)
         g_assert_false(mf_relative_path_is_valid(invalid[i]));
 
     /* a path may be longer than a name, up to 1024 bytes */

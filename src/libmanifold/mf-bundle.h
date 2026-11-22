@@ -10,6 +10,7 @@
 #error "Only <manifold.h> can be included directly."
 #endif
 
+#include <stdint.h>
 #include <glib-object.h>
 
 #include "mf-manifest.h"
@@ -41,7 +42,7 @@ struct _MfBundleClass {
  *
  * Called while an image is copied, after every piece of it.
  */
-typedef void (*MfCopyProgressFunc)(guint64  bytes_copied,
+typedef void (*MfCopyProgressFunc)(uint64_t bytes_copied,
                                    gpointer user_data);
 
 MfBundle      *mf_bundle_new_from_fd(int      fd,

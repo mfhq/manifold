@@ -22,8 +22,8 @@ typedef struct {
     GPtrArray *installed;      /* of MfComponent */
     GPtrArray *removed;        /* of MfComponent */
     GPtrArray *removed_images; /* of char*, root hashes */
-    guint64 bytes_added;
-    guint64 bytes_freed;
+    uint64_t bytes_added;
+    uint64_t bytes_freed;
     GPtrArray *warnings; /* of char*, messages about problems that did not fail the operation */
 } MfResultPrivate;
 
@@ -111,7 +111,7 @@ mf_result_get_removed_images(MfResult *result)
  *
  * Returns: the disk space that the operation used, in bytes
  */
-guint64
+uint64_t
 mf_result_get_bytes_added(MfResult *result)
 {
     g_return_val_if_fail(MF_IS_RESULT(result), 0);
@@ -125,7 +125,7 @@ mf_result_get_bytes_added(MfResult *result)
  *
  * Returns: the disk space that the operation freed, in bytes
  */
-guint64
+uint64_t
 mf_result_get_bytes_freed(MfResult *result)
 {
     g_return_val_if_fail(MF_IS_RESULT(result), 0);
@@ -231,7 +231,7 @@ mf_result_add_warning(MfResult *result, const char *message)
  * Set the number of bytes that the operation added to the store.
  */
 void
-mf_result_set_bytes_added(MfResult *result, guint64 bytes)
+mf_result_set_bytes_added(MfResult *result, uint64_t bytes)
 {
     g_return_if_fail(MF_IS_RESULT(result));
     auto priv = GET_PRIVATE(result);
@@ -246,7 +246,7 @@ mf_result_set_bytes_added(MfResult *result, guint64 bytes)
  * Set the number of bytes that the operation freed in the store.
  */
 void
-mf_result_set_bytes_freed(MfResult *result, guint64 bytes)
+mf_result_set_bytes_freed(MfResult *result, uint64_t bytes)
 {
     g_return_if_fail(MF_IS_RESULT(result));
     auto priv = GET_PRIVATE(result);

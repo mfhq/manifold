@@ -255,7 +255,7 @@ mfd_remote_channel_set_load_remote(MfdRemoteChannelSet *set, const char *root, M
         return;
     }
 
-    for (gsize i = 0; channels[i] != NULL; i++) {
+    for (size_t i = 0; channels[i] != NULL; i++) {
         MfdRemoteChannel *channel = mfd_remote_channel_load(root, remote, index, channels[i], &error);
 
         if (channel == NULL) {

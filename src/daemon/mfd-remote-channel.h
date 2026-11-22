@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib.h>
 
 #include <manifold.h>
@@ -23,7 +24,7 @@ G_BEGIN_DECLS
 typedef struct {
     char                 *origin; /* <remote>-<channel>, see mf_component_get_origin() */
     MfRemote             *remote;
-    guint64               serial;           /* the serial of the root index */
+    uint64_t              serial;           /* the serial of the root index */
     char                 *image_url_prefix; /* the URL prefix where images are looked up first, or NULL */
     MfRepoComponentIndex *components;
 } MfdRemoteChannel;

@@ -17,8 +17,8 @@ struct _MfItemProgress {
     char *subject;
     char *version;
     double percent;
-    guint64 bytes_done;
-    guint64 bytes_total;
+    uint64_t bytes_done;
+    uint64_t bytes_total;
 };
 
 G_DEFINE_BOXED_TYPE(MfItemProgress, mf_item_progress, mf_item_progress_copy, mf_item_progress_free)
@@ -188,7 +188,7 @@ mf_item_progress_get_percent(const MfItemProgress *item)
  *
  * Returns: the number of bytes that were copied so far while an image is copied, otherwise 0
  */
-guint64
+uint64_t
 mf_item_progress_get_bytes_done(const MfItemProgress *item)
 {
     g_return_val_if_fail(item != NULL, 0);
@@ -201,7 +201,7 @@ mf_item_progress_get_bytes_done(const MfItemProgress *item)
  *
  * Returns: the size of the image in bytes while it is copied, otherwise 0
  */
-guint64
+uint64_t
 mf_item_progress_get_bytes_total(const MfItemProgress *item)
 {
     g_return_val_if_fail(item != NULL, 0);
@@ -226,7 +226,7 @@ mf_item_progress_set_percent(MfItemProgress *item, double percent)
  * @bytes_done: the number of bytes of the image that were copied so far
  */
 void
-mf_item_progress_set_bytes_done(MfItemProgress *item, guint64 bytes_done)
+mf_item_progress_set_bytes_done(MfItemProgress *item, uint64_t bytes_done)
 {
     g_return_if_fail(item != NULL);
     item->bytes_done = bytes_done;
@@ -238,7 +238,7 @@ mf_item_progress_set_bytes_done(MfItemProgress *item, guint64 bytes_done)
  * @bytes_total: the size of the image in bytes if the item copies one, otherwise 0
  */
 void
-mf_item_progress_set_bytes_total(MfItemProgress *item, guint64 bytes_total)
+mf_item_progress_set_bytes_total(MfItemProgress *item, uint64_t bytes_total)
 {
     g_return_if_fail(item != NULL);
     item->bytes_total = bytes_total;

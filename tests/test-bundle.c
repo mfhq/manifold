@@ -22,7 +22,7 @@ struct TestImage {
     const char *component_id;
     const char *kind;
     const char *version;
-    guint64 revision;
+    uint64_t revision;
     const TestImage *base; /* NULL for a core, or for a broken manifest */
     GBytes *data;
 };
@@ -53,7 +53,7 @@ typedef struct {
 } BundleFlaws;
 
 /* the start of a JPEG XL codestream */
-static const guint8 JXL_DATA[] = {0xff, 0x0a, 'f', 'a', 'k', 'e'};
+static const uint8_t JXL_DATA[] = {0xff, 0x0a, 'f', 'a', 'k', 'e'};
 
 typedef struct {
     char *dir;
@@ -63,10 +63,10 @@ typedef struct {
 } Fixture;
 
 static char *
-mft_blake3_of(gconstpointer data, gsize size)
+mft_blake3_of(gconstpointer data, size_t size)
 {
     GString *hex = g_string_new(NULL);
-    guint8 out[BLAKE3_OUT_LEN];
+    uint8_t out[BLAKE3_OUT_LEN];
     blake3_hasher hasher;
 
     blake3_hasher_init(&hasher);
@@ -87,12 +87,12 @@ mft_blake3_of_bytes(GBytes *bytes)
 }
 
 static GBytes *
-mft_fake_image_data(const char *seed, gsize size)
+mft_fake_image_data(const char *seed, size_t size)
 {
-    g_autofree guint8 *data = g_malloc(size);
+    g_autofree uint8_t *data = g_malloc(size);
 
-    for (gsize i = 0; i < size; i++)
-        data[i] = (guint8) (seed[i % strlen(seed)] + i);
+    for (size_t i = 0; i < size; i++)
+        data[i] = (uint8_t) (seed[i % strlen(seed)] + i);
     return g_bytes_new_take(g_steal_pointer(&data), size);
 }
 
@@ -132,7 +132,7 @@ mft_image_manifest_json(const TestImage *image, gboolean wrong_blake3)
 }
 
 static void
-mft_bundle_add(zip_t *zip, const char *name, gconstpointer data, gsize size)
+mft_bundle_add(zip_t *zip, const char *name, gconstpointer data, size_t size)
 {
     zip_source_t *source = zip_source_buffer(zip, g_memdup2(data, size), size, 1);
 
@@ -141,7 +141,7 @@ mft_bundle_add(zip_t *zip, const char *name, gconstpointer data, gsize size)
 }
 
 static void
-mft_index_add(GString *index, const char *name, gconstpointer data, gsize size)
+mft_index_add(GString *index, const char *name, gconstpointer data, size_t size)
 {
     g_autofree char *sha256 = g_compute_checksum_for_data(G_CHECKSUM_SHA256, data, size);
     g_autofree char *blake3 = mft_blake3_of(data, size);
@@ -170,7 +170,7 @@ mft_index_add(GString *index, const char *name, gconstpointer data, gsize size)
  * Add a file to a bundle and to its index.
  */
 static void
-mft_add_file(zip_t *zip, GString *index, const char *name, gconstpointer data, gsize size)
+mft_add_file(zip_t *zip, GString *index, const char *name, gconstpointer data, size_t size)
 {
     mft_index_add(index, name, data, size);
     mft_bundle_add(zip, name, data, size);
@@ -254,7 +254,7 @@ mft_write_bundle(Fixture *f, const char *name, const TestImage *const *images, c
         g_autofree char *manifest_name = g_strconcat(base_name, ".manifold.json", NULL);
         g_autofree char *manifest = mft_image_manifest_json(image, image == flaws->wrong_blake3);
         gsize data_size;
-        const guint8 *data = g_bytes_get_data(image->data, &data_size);
+        const uint8_t *data = g_bytes_get_data(image->data, &data_size);
 
         mft_index_add(index, manifest_name, manifest, strlen(manifest));
         if (image == flaws->listed_twice)
@@ -269,7 +269,7 @@ mft_write_bundle(Fixture *f, const char *name, const TestImage *const *images, c
         }
 
         if (image == flaws->corrupt) {
-            g_autofree guint8 *changed = g_memdup2(data, data_size);
+            g_autofree uint8_t *changed = g_memdup2(data, data_size);
 
             changed[0] ^= 0xff;
             mft_bundle_add(zip, file_name, changed, data_size);
@@ -346,12 +346,12 @@ mft_teardown(Fixture *f, gconstpointer user_data)
 
 /* the progress reported while an image was copied */
 typedef struct {
-    guint64 bytes_copied;
+    uint64_t bytes_copied;
     guint n_reports;
 } CopyProgress;
 
 static void
-mft_count_progress(guint64 bytes_copied, gpointer user_data)
+mft_count_progress(uint64_t bytes_copied, gpointer user_data)
 {
     CopyProgress *progress = user_data;
 
@@ -484,7 +484,7 @@ static void
 test_copy_image(Fixture *f, gconstpointer user_data)
 {
     /* mf_bundle_copy_image() copies 1 MiB at a time: this image takes three pieces, the last of which is not full */
-    gsize image_size = 2 * 1024 * 1024 + 12288;
+    size_t image_size = 2 * 1024 * 1024 + 12288;
     g_autofree char *path = NULL;
     g_autofree char *copy_path = g_build_filename(f->dir, "copy.raw", NULL);
     g_autoptr(GError) error = NULL;
@@ -762,8 +762,8 @@ test_refers_elsewhere(Fixture *f, gconstpointer user_data)
          TEST_APP_ID " has an icon of the type local, but bundles can only have cached and stock icons" },
     };
 
-    for (gsize i = 0; i < G_N_ELEMENTS(cases); i++) {
-        g_autofree char *name = g_strdup_printf("elsewhere-%" G_GSIZE_FORMAT ".manifold", i);
+    for (size_t i = 0; i < G_N_ELEMENTS(cases); i++) {
+        g_autofree char *name = g_strdup_printf("elsewhere-%zu.manifold", i);
         g_autofree char *path = mft_write_bundle(f,
                                                  name,
                                                  (const TestImage *[]){&f->kit, &f->app, NULL},
@@ -895,9 +895,9 @@ test_no_index(Fixture *f, gconstpointer user_data)
 static void
 test_metadata_limit(Fixture *f, gconstpointer user_data)
 {
-    const gsize filler_size = 16 * 1024 * 1024;
+    const size_t filler_size = 16 * 1024 * 1024;
     g_autofree char *path = g_build_filename(f->dir, "large.manifold", NULL);
-    g_autofree guint8 *filler = g_malloc0(filler_size);
+    g_autofree uint8_t *filler = g_malloc0(filler_size);
     g_autofree char *sha256 = g_compute_checksum_for_data(G_CHECKSUM_SHA256, filler, filler_size);
     g_autofree char *blake3 = mft_blake3_of(filler, filler_size);
     g_autoptr(GString) index = g_string_new("{\"format\": 1, \"files\": [");

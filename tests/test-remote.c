@@ -167,8 +167,8 @@ test_state(Fixture *f, gconstpointer user_data)
     g_autofree char *state_dir = g_build_filename(f->dir, "var-lib", NULL);
     g_autofree char *remote_state = g_build_filename(state_dir, "example", NULL);
     g_autofree char *index_path = g_build_filename(remote_state, "repo-index.json.zst", NULL);
-    gsize bound = ZSTD_compressBound(strlen(json));
-    g_autofree guint8 *compressed = g_malloc(bound);
+    size_t bound = ZSTD_compressBound(strlen(json));
+    g_autofree uint8_t *compressed = g_malloc(bound);
     size_t size = ZSTD_compress(compressed, bound, json, strlen(json), 3);
     g_autoptr(MfRemote) remote = NULL;
     g_autoptr(GError) error = NULL;
@@ -185,7 +185,7 @@ test_state(Fixture *f, gconstpointer user_data)
 
     g_assert_false(ZSTD_isError(size));
     mft_make_dirs(remote_state);
-    g_assert_true(g_file_set_contents(index_path, (const char *) compressed, (gssize) size, NULL));
+    g_assert_true(g_file_set_contents(index_path, (const char *) compressed, (ssize_t) size, NULL));
     remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, state_dir, "example", &error);
     g_assert_no_error(error);
     g_assert_cmpstr(mf_remote_get_summary(remote), ==, "Example applications");
@@ -261,7 +261,7 @@ test_invalid(Fixture *f, gconstpointer user_data)
     };
     static const char *const ids[] = {"manifold-local-x", "-x", "a/b", "a b"};
 
-    for (gsize i = 0; i < G_N_ELEMENTS(configs); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(configs); i++) {
         g_autoptr(GError) error = NULL;
         g_autoptr(MfRemote) remote = NULL;
         g_autoptr(GPtrArray) remotes = NULL;
@@ -280,7 +280,7 @@ test_invalid(Fixture *f, gconstpointer user_data)
         g_assert_cmpuint(remotes->len, ==, 0);
     }
 
-    for (gsize i = 0; i < G_N_ELEMENTS(ids); i++) {
+    for (size_t i = 0; i < G_N_ELEMENTS(ids); i++) {
         g_autoptr(GError) error = NULL;
         g_autoptr(MfRemote)
             remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, NULL, ids[i], &error);

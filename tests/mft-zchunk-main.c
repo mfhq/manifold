@@ -7,6 +7,7 @@
 #include "config.h"
 
 #include <fcntl.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <glib/gstdio.h>
@@ -24,7 +25,7 @@ main(int argc, char **argv)
 {
     g_autoptr(GError) error = NULL;
     g_autofree char *header_sha256 = NULL;
-    guint64 header_size;
+    uint64_t header_size;
     g_autofd int image_fd = -1;
     g_autofd int zck_fd = -1;
 
@@ -45,6 +46,6 @@ main(int argc, char **argv)
         return 1;
     }
 
-    printf("%" G_GUINT64_FORMAT " %s\n", header_size, header_sha256);
+    printf("%" PRIu64 " %s\n", header_size, header_sha256);
     return 0;
 }

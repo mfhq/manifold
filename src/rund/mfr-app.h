@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib-object.h>
 #include <manifold.h>
 #include <systemd/sd-json.h>
@@ -33,10 +34,10 @@ typedef enum {
  * The data needed to mount the filesystem of an image with dm-verity.
  */
 typedef struct {
-    char   *image_path;
-    char   *verity_hash;
-    guint64 data_offset; /* where the filesystem partition starts in the image */
-    guint64 hash_offset; /* where the verity partition starts in the image */
+    char    *image_path;
+    char    *verity_hash;
+    uint64_t data_offset; /* offset of the filesystem partition in the image */
+    uint64_t hash_offset; /* offset of the verity partition in the image */
 } MfrImage;
 
 /**
