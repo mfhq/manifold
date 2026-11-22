@@ -152,6 +152,10 @@ systemd_system_unit_dir = systemd_dep.get_variable(
     pkgconfig: 'systemdsystemunitdir',
     pkgconfig_define: ['prefix', mf_prefix],
 )
+systemd_user_unit_dir = systemd_dep.get_variable(
+    pkgconfig: 'systemduserunitdir',
+    pkgconfig_define: ['prefix', mf_prefix],
+)
 udev_rules_dir = udev_dep.get_variable(
     pkgconfig: 'udevdir',
     pkgconfig_define: ['prefix', mf_prefix],
@@ -167,6 +171,10 @@ mf_run_socket    = mf_runtimedir / mf_run_interface
 # interface between manifoldd and its download helper, only root may connect to the socket
 mf_fetch_interface = 'org.freedesktop.manifold.fetch'
 mf_fetch_socket    = mf_runtimedir / mf_fetch_interface
+# interface of the host command runner, which runs once for each user.
+# The socket name is relative to the runtime directory of the user.
+mf_host_interface   = 'org.freedesktop.manifold.host'
+mf_host_socket_name = 'manifold' / mf_host_interface
 
 #
 # Configuration
@@ -177,6 +185,8 @@ conf.set_quoted('MF_RUN_INTERFACE', mf_run_interface)
 conf.set_quoted('MF_RUN_SOCKET_PATH', mf_run_socket)
 conf.set_quoted('MF_FETCH_INTERFACE', mf_fetch_interface)
 conf.set_quoted('MF_FETCH_SOCKET_PATH', mf_fetch_socket)
+conf.set_quoted('MF_HOST_INTERFACE', mf_host_interface)
+conf.set_quoted('MF_HOST_SOCKET_NAME', mf_host_socket_name)
 conf.set_quoted('MF_INTERFACE', mf_interface)
 conf.set_quoted('MF_SOCKET_PATH', mf_socket)
 conf.set_quoted('MF_RUNTIME_DIR', mf_runtimedir)
@@ -189,8 +199,6 @@ conf.set_quoted('MF_RUN_CACHE_DIR', mf_run_cache_dir)
 conf.set_quoted('MF_CAPSULE_BIN_DIR', mf_capsule_bin_dir)
 conf.set_quoted('MF_INTEGRATION_PREFIX', mf_integration_prefix)
 conf.set_quoted('MF_MFRUN_PATH', mf_bindir / 'mfrun')
-# the program in a tree that asks the host to run a program, which the core provides
-conf.set_quoted('MF_HOST_RUN_PATH', '/usr/bin/mfhost-run')
 conf.set_quoted('GETTEXT_PACKAGE', 'manifold')
 conf.set_quoted('LOCALEDIR',
                 get_option('prefix') / get_option('localedir'))

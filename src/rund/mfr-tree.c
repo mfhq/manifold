@@ -19,13 +19,13 @@
 #include <libglnx.h>
 #include <systemd/sd-json.h>
 
+#include "mf-constants-private.h"
 #include "mf-json-private.h"
 #include "mfr-host-bin.h"
 #include "mf-sdautoptr-private.h"
 
 constexpr char LAYER_NAME[] = "layer";
 constexpr char WORK_NAME[] = "work";
-constexpr char ENVIRONMENT_RECORD[] = "run/manifold/environment.json";
 constexpr size_t KEY_LENGTH = 32;
 
 /* host paths bind-mounted into every tree, besides /run/host */
@@ -534,7 +534,7 @@ mfr_bind_etc_files(const char *tree_path, const char *layer_dir, GError **error)
 static gboolean
 mfr_tree_prepare_layer(MfrTree *tree, const char *layer_dir, GError **error)
 {
-    g_autofree char *record_path = g_build_filename(layer_dir, ENVIRONMENT_RECORD, NULL);
+    g_autofree char *record_path = g_build_filename(layer_dir, MF_TREE_ENVIRONMENT_RECORD, NULL);
     g_autofree char *record_dir = g_path_get_dirname(record_path);
     g_autofree char *host_dir = g_build_filename(layer_dir, MFR_HOST_DIR, NULL);
     g_autofree char *app_dir = g_build_filename(layer_dir, "app", NULL);
@@ -552,7 +552,7 @@ mfr_tree_prepare_layer(MfrTree *tree, const char *layer_dir, GError **error)
         return FALSE;
 
     if (mfr_app_has_permission(tree->app, MF_PERMISSION_HOST_COMMANDS)) {
-        g_autofree char *host_bin_dir = g_build_filename(layer_dir, MFR_HOST_BIN_DIR, NULL);
+        g_autofree char *host_bin_dir = g_build_filename(layer_dir, MF_HOST_BIN_DIR, NULL);
 
         if (!glnx_shutil_mkdir_p_at(AT_FDCWD, host_bin_dir, 0755, NULL, error))
             return FALSE;
@@ -699,7 +699,7 @@ mfr_tree_mount_tree(MfrTree *tree,
 
     /* bind-mount the directory with the links to the programs of the host */
     if (mfr_app_has_permission(tree->app, MF_PERMISSION_HOST_COMMANDS)) {
-        g_autofree char *host_bin_dir = g_build_filename(tree->mount_path, MFR_HOST_BIN_DIR, NULL);
+        g_autofree char *host_bin_dir = g_build_filename(tree->mount_path, MF_HOST_BIN_DIR, NULL);
 
         if (!mfr_bind_mount(MFR_HOST_BIN_LINKS_DIR, host_bin_dir, TRUE, error))
             return FALSE;
@@ -874,7 +874,7 @@ mfr_tree_assemble_internal(MfrTree *tree, GError **error)
     if (!mfr_tree_mount_tree(tree, lower, layer_dir, app_dir, error))
         return FALSE;
 
-    tree->executable = g_build_filename("/app/bin", tree->app->command, NULL);
+    tree->executable = g_build_filename(MF_TREE_APP_BIN_DIR, tree->app->command, NULL);
     if (!mfr_tree_has_program(tree, tree->executable))
         return glnx_throw(error, "The application has no program %s", tree->executable);
 
@@ -1052,7 +1052,7 @@ mfr_tree_collect_used_captures(GHashTable *used_layers)
 
     g_hash_table_iter_init(&iter, used_layers);
     while (g_hash_table_iter_next(&iter, &layer, NULL)) {
-        g_autofree char *record_path = g_build_filename(layer, ENVIRONMENT_RECORD, NULL);
+        g_autofree char *record_path = g_build_filename(layer, MF_TREE_ENVIRONMENT_RECORD, NULL);
         g_autoptr(sd_json_variant) record = mf_json_parse_file(record_path, NULL);
         const char *id = record != NULL ? mf_json_get_string(record, "capture") : NULL;
 

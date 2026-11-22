@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
+[Unit]
+Description=Manifold Host Command Runner
+# also unload the unit of a program that failed, the failure is handled by the application that ran it
+CollectMode=inactive-or-failed
+
+[Service]
+ExecStart=@MF_LIBEXECDIR@/manifold-hostrun
+
+# NOTE: The runner exits when the application closes its connection. systemd then
+# stops the processes of the program that are still running, and we do not want
+# to wait long for them.
+TimeoutStopSec=10s
+
+# every program runs in a unit of its own, and the start and stop messages of all
+# these units would fill the journal
+LogLevelMax=notice

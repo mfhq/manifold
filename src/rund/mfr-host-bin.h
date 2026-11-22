@@ -11,9 +11,6 @@
 
 G_BEGIN_DECLS
 
-/* where a tree has the links to run programs of the host */
-#define MFR_HOST_BIN_DIR "/run/host-bin"
-
 /* directory on the host that contains the links to the programs of the host */
 #define MFR_HOST_BIN_LINKS_DIR MF_RUN_CACHE_DIR "/host-bin"
 

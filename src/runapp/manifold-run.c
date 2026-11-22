@@ -27,6 +27,7 @@
 #include <systemd/sd-json.h>
 #include <systemd/sd-varlink.h>
 
+#include "mf-constants-private.h"
 #include "mf-run-interface.h"
 
 /*
@@ -44,18 +45,12 @@
 
 #define PROGRAM_NAME "mfrun"
 
-/* where the programs of an application are in its tree */
-#define APP_BIN_DIR "/app/bin"
-
 /* the search path we use if the caller has none */
 #define DEFAULT_SEARCH_PATH "/usr/local/bin:/usr/bin:/bin"
 
-/* the variable that tells the trampoline program which PATH the host has to use */
-#define HOST_PATH_VARIABLE "MANIFOLD_HOST_PATH"
-
 /*
- * The exit statuses we use when we can not run the program, the same ones
- * that shells and env(1) use. Once the program runs, its exit status is ours.
+ * The exit statuses that we return if we can not run the program. Shells and
+ * env(1) use the same values. If the program runs, we exit with its exit status.
  */
 enum {
     MFX_EXIT_FAILED = 125,         /* we failed ourselves, e.g. the component is not installed */
@@ -616,7 +611,7 @@ mfx_clean_search_path(const char *caller_path)
         /* "/usr/bin/" is the same directory as "/usr/bin" */
         while (length > 1 && entry[length - 1] == '/')
             length--;
-        if (length > 0 && entry[0] == '/' && !mfx_search_path_contains(APP_BIN_DIR, entry, length) &&
+        if (length > 0 && entry[0] == '/' && !mfx_search_path_contains(MF_TREE_APP_BIN_DIR, entry, length) &&
             !mfx_search_path_contains(search_path, entry, length))
             mfx_search_path_add(search_path, entry, length);
         entry = next;
@@ -758,7 +753,7 @@ mfx_ensure_user_links(const char *user_dirs, uint64_t key, const struct timespec
 
     if (runtime_dir == nullptr || runtime_dir[0] != '/')
         return nullptr;
-    if (asprintf(&links_dir, "%s/manifold/host-bin/%016" PRIx64, runtime_dir, key) < 0)
+    if (asprintf(&links_dir, "%s/" MF_HOST_USER_BIN_SUBDIR "/%016" PRIx64, runtime_dir, key) < 0)
         return nullptr;
     if (stat(links_dir, &st) == 0 && st.st_mtim.tv_sec == newest->tv_sec &&
         st.st_mtim.tv_nsec == newest->tv_nsec)
@@ -869,7 +864,7 @@ mfx_build_host_search_path(const char *caller_path, const MfxHostCommands *host_
     if (links_dir != nullptr || user_dirs[0] == '\0')
         r = asprintf(&search_path,
                      "%s%s%s%s%s:%s",
-                     APP_BIN_DIR,
+                     MF_TREE_APP_BIN_DIR,
                      system_dirs[0] != '\0' ? ":" : "",
                      system_dirs,
                      links_dir != nullptr ? ":" : "",
@@ -879,7 +874,7 @@ mfx_build_host_search_path(const char *caller_path, const MfxHostCommands *host_
         /* we have no links for the user directories, so we keep them and their programs run in the tree */
         r = asprintf(&search_path,
                      "%s%s%s:%s",
-                     APP_BIN_DIR,
+                     MF_TREE_APP_BIN_DIR,
                      caller_path[0] != '\0' ? ":" : "",
                      caller_path,
                      host_commands->directory);
@@ -911,9 +906,9 @@ mfx_set_search_path(const char *caller_path, const char *search_path, bool for_h
     if (setenv("PATH", search_path, 1) != 0)
         return -errno;
     if (for_host_commands)
-        return setenv(HOST_PATH_VARIABLE, caller_path, 1) != 0 ? -errno : 0;
+        return setenv(MF_HOST_PATH_VARIABLE, caller_path, 1) != 0 ? -errno : 0;
     /* the variable may be set if we were called by a different Manifold application */
-    return unsetenv(HOST_PATH_VARIABLE) != 0 ? -errno : 0;
+    return unsetenv(MF_HOST_PATH_VARIABLE) != 0 ? -errno : 0;
 }
 
 /**
@@ -1037,7 +1032,7 @@ main(int argc, char **argv)
     caller_path = mfx_clean_search_path(getenv("PATH"));
     if (caller_path != nullptr && for_host_commands)
         search_path = mfx_build_host_search_path(caller_path, &launch_data.host_commands);
-    else if (caller_path != nullptr && asprintf(&search_path, "%s:%s", APP_BIN_DIR, caller_path) < 0)
+    else if (caller_path != nullptr && asprintf(&search_path, "%s:%s", MF_TREE_APP_BIN_DIR, caller_path) < 0)
         search_path = nullptr;
     if (search_path == nullptr) {
         fprintf(stderr, "%s: Out of memory\n", PROGRAM_NAME);

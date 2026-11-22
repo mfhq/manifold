@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <glib/gstdio.h>
 
+#include "mf-constants-private.h"
 #include "mf-sdautoptr-private.h"
 #include "mfr-host-bin.h"
 #include "mft-utils.h"

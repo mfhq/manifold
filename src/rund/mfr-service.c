@@ -13,6 +13,7 @@
 #include <libglnx.h>
 #include <manifold.h>
 
+#include "mf-constants-private.h"
 #include "mf-sdautoptr-private.h"
 #include "mf-varlink-util.h"
 #include "mfr-composer.h"
@@ -153,7 +154,7 @@ mfr_varlink_method_prepare_launch(sd_varlink *link,
 
         r = sd_json_buildo(
             &host_commands,
-            SD_JSON_BUILD_PAIR_STRING("directory", MFR_HOST_BIN_DIR),
+            SD_JSON_BUILD_PAIR_STRING("directory", MF_HOST_BIN_DIR),
             SD_JSON_BUILD_PAIR_STRV("systemPaths", (char **) mfr_host_bin_get_program_dirs(host_bin)));
         if (r < 0)
             return sd_varlink_error_errno(link, r);

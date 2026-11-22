@@ -9,6 +9,7 @@ units_conf.set('MF_RUN_SOCKET_PATH', mf_run_socket)
 units_conf.set('MF_INTERFACE', mf_interface)
 units_conf.set('MF_SOCKET_PATH', mf_socket)
 units_conf.set('MF_FETCH_SOCKET_PATH', mf_fetch_socket)
+units_conf.set('MF_HOST_SOCKET_NAME', mf_host_socket_name)
 
 foreach unit : ['manifold-run.socket',
                 'manifold-run.service',
@@ -24,6 +25,23 @@ foreach unit : ['manifold-run.socket',
         install_dir: systemd_system_unit_dir,
     )
 endforeach
+
+# the units of the host command runner, which runs in the session of each user
+foreach unit : ['manifold-host.socket',
+                'manifold-host@.service']
+    configure_file(
+        input: unit + '.in',
+        output: unit,
+        configuration: units_conf,
+        install: true,
+        install_dir: systemd_user_unit_dir,
+    )
+endforeach
+# enable the socket for every user, a runner is only started once an application connects to it
+install_symlink('manifold-host.socket',
+    pointing_to: '../manifold-host.socket',
+    install_dir: systemd_user_unit_dir / 'sockets.target.wants',
+)
 
 #
 # polkit actions

@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
+[Unit]
+Description=Manifold Host Command Runner Socket
+
+[Socket]
+ListenStream=%t/@MF_HOST_SOCKET_NAME@
+FileDescriptorName=varlink
+# only the user's own applications talk to the runner
+SocketMode=0600
+# start a separate runner for every connection, each connection runs one program
+Accept=yes
+MaxConnections=1024
+# a build runs many programs in a short time, so we disable the trigger limit
+# that would make systemd stop the socket
+TriggerLimitIntervalSec=0
+PollLimitIntervalSec=0
+
+[Install]
+WantedBy=sockets.target

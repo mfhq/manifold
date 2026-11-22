@@ -21,6 +21,12 @@ mf_mngmt_fetch_varlink_src = files(
     'mf-fetch-interface.h',
 )
 
+# the interface applications use to run a program on the host
+mf_host_varlink_src = files(
+    'mf-host-interface.c',
+    'mf-host-interface.h',
+)
+
 # the semi-private interface for running a Manifold application
 mf_run_varlink_src = files(
     'mf-run-interface.c',

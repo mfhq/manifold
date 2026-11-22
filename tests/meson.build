@@ -202,7 +202,15 @@ test('fetch',
     timeout: 60,
 )
 
-# enters the sandbox itself, for one of its halves
+test('hostrun',
+    python_exe,
+    args: [files('test-hostrun.py'), '--runner', manifold_hostrun_exe.full_path()],
+    depends: [manifold_hostrun_exe],
+    suite: 'e2e',
+    timeout: 60,
+)
+
+# this test starts the sandbox itself, as only a part of it has to run in the sandbox
 test('runner',
     python_exe,
     args: [files('test-runner.py'), '--sandbox', test_sandbox_exe.full_path(), '--runner', manifold_run_exe.full_path()],

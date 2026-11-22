@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <libglnx.h>
 
+#include "mf-constants-private.h"
 #include "mf-store-private.h"
 
 /**
