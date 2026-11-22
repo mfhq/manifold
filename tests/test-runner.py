@@ -41,6 +41,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mftest import APP_ID, EXIT_SKIPPED, RUNTIME_DIR  # noqa: E402
 
 TREE = f'{RUNTIME_DIR}/test-tree'
+# an application with the permission to run programs of the host
+HOST_APP_ID = 'com.example.hostapp'
 INTERFACE = 'org.freedesktop.manifold.run'
 
 MS_BIND = 0x1000
@@ -133,7 +135,7 @@ class FakeService(threading.Thread):
         assert request['method'] == f'{INTERFACE}.PrepareLaunch', request
         component_id = request['parameters']['componentId']
 
-        if component_id != APP_ID:
+        if component_id not in (APP_ID, HOST_APP_ID):
             reply = {
                 'error': f'{INTERFACE}.NoSuchComponent',
                 'parameters': {'componentId': component_id},
@@ -149,6 +151,11 @@ class FakeService(threading.Thread):
                 'environment': ['MF_TEST_VAR=hello', 'MF_TEST_UNSET='],
             }
         }
+        if component_id == HOST_APP_ID:
+            reply['parameters']['hostCommands'] = {
+                'directory': '/run/host-bin',
+                'systemPaths': ['/usr/bin', '/bin'],
+            }
         fds = array.array('i', [mount_fd])
         connection.sendmsg(
             [json.dumps(reply).encode() + b'\0'], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, fds)]
@@ -164,13 +171,15 @@ class RunnerTest(unittest.TestCase):
     # drop all capabilities first, so root has to use a user namespace too
     without_capabilities = False
 
-    def run_runner(self, *args, cwd='/', search_path=None):
+    def run_runner(self, *args, cwd='/', search_path=None, runtime_dir=None):
         argv = [ARGS.runner, '--socket', self.socket_path, *args]
         if self.without_capabilities:
             argv = ['setpriv', '--bounding-set=-all', '--inh-caps=-all', *argv]
         environment = dict(os.environ, MF_TEST_UNSET='from the caller', HOME='/home')
         if search_path is not None:
             environment['PATH'] = search_path
+        if runtime_dir is not None:
+            environment['XDG_RUNTIME_DIR'] = runtime_dir
         return subprocess.run(
             argv, capture_output=True, text=True, check=False, cwd=cwd, env=environment
         )
@@ -227,6 +236,65 @@ class RunnerTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result)
         self.assertEqual(result.stdout, '/app/bin:/usr/bin:/home/user/bin\n')
+
+    def test_host_commands(self):
+        """A PATH directory of the caller that does not exist in the tree is replaced by
+        a directory with a link for each of its programs. The directory with the links is
+        created in the runtime directory of the user."""
+        work = tempfile.mkdtemp(prefix='manifold-test-')
+        self.addCleanup(shutil.rmtree, work)
+        user_bin = f'{work}/bin'
+        runtime_dir = f'{work}/runtime'
+        os.makedirs(user_bin)
+        os.makedirs(runtime_dir)
+        search_path = f'/usr/bin:{user_bin}:{work}/missing'
+
+        def make_program(name):
+            with open(f'{user_bin}/{name}', 'w', encoding='utf-8') as f:
+                f.write('#!/bin/sh\n')
+            os.chmod(f'{user_bin}/{name}', 0o755)
+
+        def launch():
+            result = self.run_runner(
+                '--command=sh',
+                HOST_APP_ID,
+                '-c',
+                'echo "$PATH"; echo "$MANIFOLD_HOST_PATH"',
+                search_path=search_path,
+                runtime_dir=runtime_dir,
+            )
+            self.assertEqual(result.returncode, 0, result)
+            self.assertEqual(result.stderr, '')
+            (links_name,) = os.listdir(f'{runtime_dir}/manifold/host-bin')
+            links_dir = f'{runtime_dir}/manifold/host-bin/{links_name}'
+            self.assertEqual(
+                result.stdout, f'/app/bin:/usr/bin:{links_dir}:/run/host-bin\n{search_path}\n'
+            )
+            return links_dir
+
+        make_program('first')
+        links_dir = launch()
+        self.assertEqual(os.listdir(links_dir), ['first'])
+        self.assertEqual(os.readlink(f'{links_dir}/first'), '/usr/bin/mfhost-run')
+
+        # the links are updated when the programs change, in the same directory, as running
+        # applications still use it
+        make_program('second')
+        os.unlink(f'{user_bin}/first')
+        self.assertEqual(launch(), links_dir)
+        self.assertEqual(os.listdir(links_dir), ['second'])
+
+        # for an application without the permission, the PATH directories of the caller are not
+        # replaced
+        result = self.run_runner(
+            '--command=sh',
+            APP_ID,
+            '-c',
+            'echo "$PATH"; echo "${MANIFOLD_HOST_PATH-absent}"',
+            search_path=search_path,
+            runtime_dir=runtime_dir,
+        )
+        self.assertEqual(result.stdout, f'/app/bin:{search_path}\nabsent\n')
 
     def test_not_installed(self):
         result = self.run_runner('com.example.missing')

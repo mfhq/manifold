@@ -189,6 +189,8 @@ conf.set_quoted('MF_RUN_CACHE_DIR', mf_run_cache_dir)
 conf.set_quoted('MF_CAPSULE_BIN_DIR', mf_capsule_bin_dir)
 conf.set_quoted('MF_INTEGRATION_PREFIX', mf_integration_prefix)
 conf.set_quoted('MF_MFRUN_PATH', mf_bindir / 'mfrun')
+# the program in a tree that asks the host to run a program, which the core provides
+conf.set_quoted('MF_HOST_RUN_PATH', '/usr/bin/mfhost-run')
 conf.set_quoted('GETTEXT_PACKAGE', 'manifold')
 conf.set_quoted('LOCALEDIR',
                 get_option('prefix') / get_option('localedir'))

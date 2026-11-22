@@ -40,7 +40,7 @@ mft_has_link(const char *links_dir, const char *name)
 
     if (target == NULL)
         return FALSE;
-    g_assert_cmpstr(target, ==, MFR_HOST_RUN_PATH);
+    g_assert_cmpstr(target, ==, MF_HOST_RUN_PATH);
     return TRUE;
 }
 

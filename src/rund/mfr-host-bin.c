@@ -209,7 +209,7 @@ mfr_host_bin_sync(MfrHostBin *host_bin, GError **error)
 
     g_hash_table_iter_init(&programs_iter, programs);
     while (g_hash_table_iter_next(&programs_iter, &name, NULL)) {
-        if (symlinkat(MFR_HOST_RUN_PATH, iter.fd, name) != 0)
+        if (symlinkat(MF_HOST_RUN_PATH, iter.fd, name) != 0)
             return glnx_throw_errno_prefix(error,
                                            "Unable to create %s/%s",
                                            host_bin->links_dir,

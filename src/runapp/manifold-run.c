@@ -8,9 +8,11 @@
 
 #include "config.h"
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <sched.h>
 #include <stdbool.h>
@@ -48,9 +50,12 @@
 /* the search path we use if the caller has none */
 #define DEFAULT_SEARCH_PATH "/usr/local/bin:/usr/bin:/bin"
 
+/* the variable that tells the trampoline program which PATH the host has to use */
+#define HOST_PATH_VARIABLE "MANIFOLD_HOST_PATH"
+
 /*
- * The exit statuses that we return if we can not run the program. Shells and
- * env(1) use the same values. If the program runs, we exit with its exit status.
+ * The exit statuses we use when we can not run the program, the same ones
+ * that shells and env(1) use. Once the program runs, its exit status is ours.
  */
 enum {
     MFX_EXIT_FAILED = 125,         /* we failed ourselves, e.g. the component is not installed */
@@ -59,16 +64,42 @@ enum {
 };
 
 /**
+ * MfxHostCommands:
+ *
+ * The directories that are needed to run programs of the host. The compose
+ * service only sends them for an application that has the permission to run
+ * programs of the host.
+ */
+typedef struct {
+    char *directory;     /* the directory with the links in the tree, or nullptr if there is none */
+    char **system_paths; /* the program directories of the host that the links were created for */
+} MfxHostCommands;
+
+/**
  * MfxLaunchData:
  *
  * The data that the compose service returns for a launch.
  */
 typedef struct {
-    unsigned int mount_fd_idx; /* which descriptor of the reply is the tree */
-    int mount_fd;              /* the tree, once taken from the reply */
-    char *executable;          /* absolute path within the tree */
-    char **environment;        /* NAME=VALUE, an empty value means unset */
+    unsigned int mount_fd_idx;     /* index of the file descriptor of the tree in the reply */
+    int mount_fd;                  /* file descriptor of the tree, or -1 if not received yet */
+    char *executable;              /* absolute path of the program within the tree */
+    char **environment;            /* NAME=VALUE entries, an empty VALUE means the variable is unset */
+    MfxHostCommands host_commands; /* only set if the application may run programs of the host */
 } MfxLaunchData;
+
+/**
+ * mfx_strv_free:
+ */
+static void
+mfx_strv_free(char **strv)
+{
+    if (strv == nullptr)
+        return;
+    for (char **s = strv; *s != nullptr; s++)
+        free(*s);
+    free(strv);
+}
 
 /**
  * mfx_launch_data_clear:
@@ -81,12 +112,12 @@ mfx_launch_data_clear(MfxLaunchData *launch_data)
     launch_data->mount_fd = -1;
     free(launch_data->executable);
     launch_data->executable = nullptr;
-    if (launch_data->environment != nullptr) {
-        for (char **e = launch_data->environment; *e != nullptr; e++)
-            free(*e);
-        free(launch_data->environment);
-        launch_data->environment = nullptr;
-    }
+    mfx_strv_free(launch_data->environment);
+    launch_data->environment = nullptr;
+    free(launch_data->host_commands.directory);
+    launch_data->host_commands.directory = nullptr;
+    mfx_strv_free(launch_data->host_commands.system_paths);
+    launch_data->host_commands.system_paths = nullptr;
 }
 
 /**
@@ -161,6 +192,34 @@ mfx_print_service_error(const char *component_id, const char *error_id, sd_json_
 }
 
 /**
+ * mfx_dispatch_host_commands:
+ *
+ * Read the hostCommands field of the reply of the compose service.
+ */
+static int
+mfx_dispatch_host_commands(const char *name,
+                           sd_json_variant *variant,
+                           sd_json_dispatch_flags_t flags,
+                           void *userdata)
+{
+    static const sd_json_dispatch_field dispatch_table[] = {
+        {"directory",
+         SD_JSON_VARIANT_STRING, sd_json_dispatch_string,
+         offsetof(MfxHostCommands, directory),
+         SD_JSON_MANDATORY},
+        {"systemPaths",
+         SD_JSON_VARIANT_ARRAY, sd_json_dispatch_strv,
+         offsetof(MfxHostCommands, system_paths),
+         0},
+        {},
+    };
+
+    if (sd_json_variant_is_null(variant))
+        return 0;
+    return sd_json_dispatch(variant, dispatch_table, flags, userdata);
+}
+
+/**
  * mfx_prepare_launch:
  *
  * Ask the compose service for the mount tree and the launch data of a component.
@@ -184,6 +243,10 @@ mfx_prepare_launch(const char *socket_path, const char *component_id, MfxLaunchD
          SD_JSON_VARIANT_ARRAY, sd_json_dispatch_strv,
          offsetof(MfxLaunchData, environment),
          0},
+        {"hostCommands",
+         SD_JSON_VARIANT_OBJECT, mfx_dispatch_host_commands,
+         offsetof(MfxLaunchData, host_commands),
+         SD_JSON_NULLABLE},
         {},
     };
     sd_varlink *link = nullptr;
@@ -232,6 +295,15 @@ mfx_prepare_launch(const char *socket_path, const char *component_id, MfxLaunchD
                 "%s: Received a relative executable path (this is not allowed): %s\n",
                 PROGRAM_NAME,
                 launch_data->executable);
+        r = -EINVAL;
+        goto out;
+    }
+
+    if (launch_data->host_commands.directory != nullptr && launch_data->host_commands.directory[0] != '/') {
+        fprintf(stderr,
+                "%s: Received a relative directory for the programs of the host (this is not allowed): %s\n",
+                PROGRAM_NAME,
+                launch_data->host_commands.directory);
         r = -EINVAL;
         goto out;
     }
@@ -497,26 +569,45 @@ mfx_search_path_contains(const char *search_path, const char *dir, size_t dir_le
 }
 
 /**
- * mfx_build_search_path:
+ * mfx_search_path_add:
+ * @search_path: (inout): directories, separated by colons, in a buffer with enough space for @dir
+ * @dir: a directory, which does not have to be null-terminated
+ * @dir_length: the length of @dir
+ *
+ * Add a directory to the end of a search path.
+ */
+static void
+mfx_search_path_add(char *search_path, const char *dir, size_t dir_length)
+{
+    char *end = search_path + strlen(search_path);
+
+    if (end != search_path)
+        *end++ = ':';
+    end = mempcpy(end, dir, dir_length);
+    *end = '\0';
+}
+
+/**
+ * mfx_clean_search_path:
  * @caller_path: (nullable): the PATH we were called with
  *
- * Build the PATH of the application from the one of the caller. The programs
- * of the application come first. We drop entries that are empty or relative,
- * as both search the current directory, and entries that are there already.
+ * Clean up the PATH of the caller. We drop empty and relative entries,
+ * because both make the current directory part of the search, and we drop
+ * duplicate entries. We also drop the program directory of the application,
+ * because we always add it ourselves.
  *
- * Returns: the search path, or nullptr if we are out of memory
+ * Returns: the cleaned search path, or nullptr if we are out of memory
  */
 static char *
-mfx_build_search_path(const char *caller_path)
+mfx_clean_search_path(const char *caller_path)
 {
     if (caller_path == nullptr)
         caller_path = DEFAULT_SEARCH_PATH;
 
-    /* we only ever drop entries of the caller, so this is large enough */
-    char *search_path = malloc(strlen(APP_BIN_DIR) + 1 + strlen(caller_path) + 1);
+    /* we only drop entries, so the result is never longer than the PATH of the caller */
+    char *search_path = calloc(1, strlen(caller_path) + 1);
     if (search_path == nullptr)
         return nullptr;
-    char *end = stpcpy(search_path, APP_BIN_DIR);
 
     for (const char *entry = caller_path; *entry != '\0';) {
         size_t length = strcspn(entry, ":");
@@ -525,15 +616,304 @@ mfx_build_search_path(const char *caller_path)
         /* "/usr/bin/" is the same directory as "/usr/bin" */
         while (length > 1 && entry[length - 1] == '/')
             length--;
-        if (length > 0 && entry[0] == '/' && !mfx_search_path_contains(search_path, entry, length)) {
-            *end++ = ':';
-            end = mempcpy(end, entry, length);
-            *end = '\0';
-        }
+        if (length > 0 && entry[0] == '/' && !mfx_search_path_contains(APP_BIN_DIR, entry, length) &&
+            !mfx_search_path_contains(search_path, entry, length))
+            mfx_search_path_add(search_path, entry, length);
         entry = next;
     }
 
     return search_path;
+}
+
+/**
+ * mfx_is_program:
+ *
+ * Returns: true if the directory has an executable file with the given name
+ */
+static bool
+mfx_is_program(int dir_fd, const char *name)
+{
+    struct stat st;
+
+    /* we follow links, so we accept a link to a program, and reject a broken link */
+    return fstatat(dir_fd, name, &st, 0) == 0 && S_ISREG(st.st_mode) && (st.st_mode & 0111) != 0;
+}
+
+/**
+ * mfx_sync_user_links:
+ * @links_fd: the directory with the links
+ * @user_dirs: program directories of the host, separated by colons
+ *
+ * Update the links in a directory to match the programs in the given
+ * program directories of the host. The directory gets one link to the
+ * trampoline program for every program. We add and remove links in the
+ * existing directory, because running applications may have it in their PATH.
+ *
+ * Returns: 0 on success, or a negative errno
+ */
+static int
+mfx_sync_user_links(int links_fd, const char *user_dirs)
+{
+    size_t n_dirs = 1;
+    int *dir_fds;
+    DIR *links;
+    int r = 0;
+
+    for (const char *c = user_dirs; *c != '\0'; c++) {
+        if (*c == ':')
+            n_dirs++;
+    }
+    dir_fds = calloc(n_dirs, sizeof(int));
+    if (dir_fds == nullptr)
+        return -ENOMEM;
+
+    n_dirs = 0;
+    for (const char *entry = user_dirs; *entry != '\0';) {
+        size_t length = strcspn(entry, ":");
+        char dir[PATH_MAX];
+
+        if (length < sizeof(dir)) {
+            memcpy(dir, entry, length);
+            dir[length] = '\0';
+            dir_fds[n_dirs] = open(dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            if (dir_fds[n_dirs] >= 0)
+                n_dirs++;
+        }
+        entry += length + (entry[length] == ':' ? 1 : 0);
+    }
+
+    /* remove the links of programs that the host no longer has */
+    int links_dup_fd = fcntl(links_fd, F_DUPFD_CLOEXEC, 3);
+    links = links_dup_fd >= 0 ? fdopendir(links_dup_fd) : nullptr;
+    if (links == nullptr) {
+        r = -errno;
+        if (links_dup_fd >= 0)
+            close(links_dup_fd);
+    } else {
+        for (struct dirent *entry = readdir(links); entry != nullptr; entry = readdir(links)) {
+            bool found = false;
+
+            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+                continue;
+            for (size_t i = 0; i < n_dirs && !found; i++)
+                found = mfx_is_program(dir_fds[i], entry->d_name);
+            if (!found && unlinkat(links_fd, entry->d_name, 0) != 0 && errno != ENOENT)
+                r = -errno;
+        }
+        closedir(links);
+    }
+
+    for (size_t i = 0; i < n_dirs; i++) {
+        /* the directory stream takes ownership of the file descriptor */
+        DIR *dir = fdopendir(dir_fds[i]);
+
+        if (dir == nullptr) {
+            close(dir_fds[i]);
+            continue;
+        }
+        for (struct dirent *entry = readdir(dir); entry != nullptr; entry = readdir(dir)) {
+            if (entry->d_name[0] == '.' || !mfx_is_program(dir_fds[i], entry->d_name))
+                continue;
+            /* a different launch may create the same link at the same time, so we ignore EEXIST */
+            if (symlinkat(MF_HOST_RUN_PATH, links_fd, entry->d_name) != 0 && errno != EEXIST)
+                r = -errno;
+        }
+        closedir(dir);
+    }
+
+    free(dir_fds);
+    return r;
+}
+
+/**
+ * mfx_ensure_user_links:
+ * @user_dirs: program directories of the host, separated by colons
+ * @key: a hash of @user_dirs
+ * @newest: the newest modification time of the directories in @user_dirs
+ *
+ * Get the directory with the links to the programs in @user_dirs. @user_dirs
+ * holds the program directories that the compose service has no links for,
+ * like the ones in the home directory of the user. We keep one links
+ * directory for every set of program directories. It is located in the
+ * runtime directory of the user, because that directory is available in
+ * every tree.
+ *
+ * To keep launches fast, we only read the program directories if one of them
+ * has changed. We set the modification time of the links directory to the
+ * newest modification time of its program directories. The links are up to
+ * date if the two times are still equal.
+ *
+ * Returns: the links directory, or nullptr if the user has no runtime
+ *          directory or we failed to create the links
+ */
+static char *
+mfx_ensure_user_links(const char *user_dirs, uint64_t key, const struct timespec *newest)
+{
+    const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
+    const struct timespec times[2] = {{.tv_nsec = UTIME_OMIT}, *newest};
+    char *links_dir = nullptr;
+    struct stat st;
+    int links_fd;
+    int r;
+
+    if (runtime_dir == nullptr || runtime_dir[0] != '/')
+        return nullptr;
+    if (asprintf(&links_dir, "%s/manifold/host-bin/%016" PRIx64, runtime_dir, key) < 0)
+        return nullptr;
+    if (stat(links_dir, &st) == 0 && st.st_mtim.tv_sec == newest->tv_sec &&
+        st.st_mtim.tv_nsec == newest->tv_nsec)
+        return links_dir;
+
+    /* create the links directory and its two parent directories, which usually exist already */
+    for (int level = 2; level >= 0; level--) {
+        char *end = links_dir + strlen(links_dir);
+
+        for (int i = 0; i < level; i++) {
+            do
+                end--;
+            while (*end != '/');
+        }
+        char saved = *end;
+        *end = '\0';
+        r = mkdir(links_dir, 0700) != 0 && errno != EEXIST ? -errno : 0;
+        *end = saved;
+        if (r < 0)
+            goto fail;
+    }
+
+    links_fd = open(links_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (links_fd < 0) {
+        r = -errno;
+        goto fail;
+    }
+    r = mfx_sync_user_links(links_fd, user_dirs);
+    /* NOTE: We do not set the current time here. If a program directory changes while
+     * we read it, its modification time is newer than the time that we set on the links
+     * directory, so the next launch updates the links again. */
+    if (r >= 0 && futimens(links_fd, times) != 0)
+        r = -errno;
+    close(links_fd);
+    if (r < 0)
+        goto fail;
+
+    return links_dir;
+
+fail:
+    fprintf(stderr,
+            "%s: Unable to link the programs of the host in %s: %s\n",
+            PROGRAM_NAME,
+            links_dir,
+            strerror(-r));
+    free(links_dir);
+    return nullptr;
+}
+
+/**
+ * mfx_build_host_search_path:
+ * @caller_path: the cleaned PATH of the caller
+ * @host_commands: the directories for running programs of the host
+ *
+ * Build the PATH of an application that may run programs of the host.
+ *
+ * A program of the host must not run in the tree, where it would use the
+ * libraries of the tree. So we only keep the directories of the caller that
+ * the compose service has links for. We replace all other directories, like
+ * directories in the home directory of the user, with a directory that has
+ * links to their programs. The directories with links are added last, so
+ * the programs of the tree are preferred.
+ *
+ * Returns: the search path, or nullptr if we are out of memory
+ */
+static char *
+mfx_build_host_search_path(const char *caller_path, const MfxHostCommands *host_commands)
+{
+    size_t size = strlen(caller_path) + 1;
+    char *system_dirs = calloc(1, size);
+    char *user_dirs = calloc(1, size);
+    char *links_dir = nullptr;
+    char *search_path = nullptr;
+    struct timespec newest = {0};
+    uint64_t key = 0xcbf29ce484222325; /* FNV-1a */
+    int r;
+
+    if (system_dirs == nullptr || user_dirs == nullptr)
+        goto out;
+
+    for (const char *entry = caller_path; *entry != '\0';) {
+        size_t length = strcspn(entry, ":");
+        bool is_system_dir = false;
+        char dir[PATH_MAX];
+        struct stat st;
+
+        for (char **s = host_commands->system_paths; s != nullptr && *s != nullptr && !is_system_dir; s++)
+            is_system_dir = strlen(*s) == length && strncmp(*s, entry, length) == 0;
+        if (is_system_dir) {
+            mfx_search_path_add(system_dirs, entry, length);
+        } else if (length < sizeof(dir)) {
+            memcpy(dir, entry, length);
+            dir[length] = '\0';
+            if (stat(dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+                mfx_search_path_add(user_dirs, entry, length);
+                for (size_t i = 0; i <= length; i++)
+                    key = (key ^ (unsigned char) dir[i]) * 0x100000001b3;
+                if (st.st_mtim.tv_sec > newest.tv_sec ||
+                    (st.st_mtim.tv_sec == newest.tv_sec && st.st_mtim.tv_nsec > newest.tv_nsec))
+                    newest = st.st_mtim;
+            }
+        }
+        entry += length + (entry[length] == ':' ? 1 : 0);
+    }
+
+    if (user_dirs[0] != '\0')
+        links_dir = mfx_ensure_user_links(user_dirs, key, &newest);
+    if (links_dir != nullptr || user_dirs[0] == '\0')
+        r = asprintf(&search_path,
+                     "%s%s%s%s%s:%s",
+                     APP_BIN_DIR,
+                     system_dirs[0] != '\0' ? ":" : "",
+                     system_dirs,
+                     links_dir != nullptr ? ":" : "",
+                     links_dir != nullptr ? links_dir : "",
+                     host_commands->directory);
+    else
+        /* we have no links for the user directories, so we keep them and their programs run in the tree */
+        r = asprintf(&search_path,
+                     "%s%s%s:%s",
+                     APP_BIN_DIR,
+                     caller_path[0] != '\0' ? ":" : "",
+                     caller_path,
+                     host_commands->directory);
+    if (r < 0)
+        search_path = nullptr;
+
+out:
+    free(system_dirs);
+    free(user_dirs);
+    free(links_dir);
+    return search_path;
+}
+
+/**
+ * mfx_set_search_path:
+ * @caller_path: the cleaned PATH of the caller
+ * @search_path: the PATH of the application
+ * @for_host_commands: whether the application may run programs of the host
+ *
+ * Set the PATH of the application. For an application that may run programs
+ * of the host, we also pass on the PATH of the caller in a separate variable.
+ * The host uses it as search path when it runs a program for the application.
+ *
+ * Returns: 0 on success, or a negative errno
+ */
+static int
+mfx_set_search_path(const char *caller_path, const char *search_path, bool for_host_commands)
+{
+    if (setenv("PATH", search_path, 1) != 0)
+        return -errno;
+    if (for_host_commands)
+        return setenv(HOST_PATH_VARIABLE, caller_path, 1) != 0 ? -errno : 0;
+    /* the variable may be set if we were called by a different Manifold application */
+    return unsetenv(HOST_PATH_VARIABLE) != 0 ? -errno : 0;
 }
 
 /**
@@ -615,7 +995,9 @@ main(int argc, char **argv)
     const char *command = nullptr;
     char cwd[PATH_MAX];
     MfxLaunchData launch_data = {.mount_fd = -1};
-    char *search_path;
+    char *caller_path;
+    char *search_path = nullptr;
+    bool for_host_commands;
     int opt;
 
     /* the leading "+" stops parsing at the first non-option argument */
@@ -650,6 +1032,19 @@ main(int argc, char **argv)
     if (mfx_prepare_launch(socket_path, component_id, &launch_data) < 0)
         return MFX_EXIT_FAILED;
 
+    /* build the search path before we enter the tree, as we need to read directories of the host for it */
+    for_host_commands = launch_data.host_commands.directory != nullptr;
+    caller_path = mfx_clean_search_path(getenv("PATH"));
+    if (caller_path != nullptr && for_host_commands)
+        search_path = mfx_build_host_search_path(caller_path, &launch_data.host_commands);
+    else if (caller_path != nullptr && asprintf(&search_path, "%s:%s", APP_BIN_DIR, caller_path) < 0)
+        search_path = nullptr;
+    if (search_path == nullptr) {
+        fprintf(stderr, "%s: Out of memory\n", PROGRAM_NAME);
+        mfx_launch_data_clear(&launch_data);
+        return MFX_EXIT_FAILED;
+    }
+
     if (getcwd(cwd, sizeof(cwd)) == nullptr)
         cwd[0] = '\0';
     if (mfx_enter_tree(launch_data.mount_fd, !mfx_have_cap_sys_admin()) < 0) {
@@ -662,12 +1057,12 @@ main(int argc, char **argv)
     mfx_change_directory(cwd[0] != '\0' ? cwd : nullptr);
     mfx_apply_environment(launch_data.environment);
 
-    search_path = mfx_build_search_path(getenv("PATH"));
-    if (search_path == nullptr || setenv("PATH", search_path, 1) != 0) {
+    if (mfx_set_search_path(caller_path, search_path, for_host_commands) < 0) {
         fprintf(stderr, "%s: Out of memory\n", PROGRAM_NAME);
         mfx_launch_data_clear(&launch_data);
         return MFX_EXIT_FAILED;
     }
+    free(caller_path);
     free(search_path);
 
     /* argv[optind] is replaced with the program name, the arguments after it are passed to the program */

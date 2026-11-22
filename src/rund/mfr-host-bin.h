@@ -17,9 +17,6 @@ G_BEGIN_DECLS
 /* directory on the host that contains the links to the programs of the host */
 #define MFR_HOST_BIN_LINKS_DIR MF_RUN_CACHE_DIR "/host-bin"
 
-/* the program in a tree that asks the host to run a program */
-#define MFR_HOST_RUN_PATH "/usr/bin/mfhost-run"
-
 #define MFR_TYPE_HOST_BIN (mfr_host_bin_get_type())
 G_DECLARE_FINAL_TYPE(MfrHostBin, mfr_host_bin, MFR, HOST_BIN, GObject)
 
