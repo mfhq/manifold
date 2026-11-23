@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <glib.h>
 
 #include <manifold.h>
@@ -73,8 +74,10 @@ void            mfd_install_set_add_remote(MfdInstallSet *set,
 
 MfdInstallItem *mfd_install_set_find_identity(MfdInstallSet *set,
                                               const char    *identity);
-MfdInstallItem *mfd_install_set_find_exact_base(MfdInstallSet *set,
-                                                MfManifest    *manifest);
+MfdInstallItem *mfd_install_set_find_version(MfdInstallSet *set,
+                                             const char    *component_id,
+                                             const char    *version,
+                                             uint64_t       revision);
 gboolean        mfd_install_set_is_privileged(MfdInstallSet *set);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdInstallSet, mfd_install_set_free)

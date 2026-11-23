@@ -247,8 +247,9 @@ test_base_link_must_name_a_component(Fixture *f, gconstpointer user_data)
 /**
  * test_sdk_app_is_a_runtime:
  *
- * An SDK is installed as a runtime, even the SDK of an application, which
- * builds on that application.
+ * Every SDK is installed in the `runtimes` directory, including the SDK of
+ * an application. The base of such an SDK is the application, and its base
+ * SDK is the SDK of the layer below.
  */
 static void
 test_sdk_app_is_a_runtime(Fixture *f, gconstpointer user_data)
@@ -256,6 +257,7 @@ test_sdk_app_is_a_runtime(Fixture *f, gconstpointer user_data)
     g_autoptr(GError) error = NULL;
     g_autoptr(MfComponent) sdk = NULL;
     g_autoptr(MfComponent) base = NULL;
+    g_autoptr(MfComponent) base_sdk = NULL;
 
     mft_write_runtime(f,
                       &(MftTestManifest){.component_id = TEST_APP_SDK_ID,
@@ -263,7 +265,10 @@ test_sdk_app_is_a_runtime(Fixture *f, gconstpointer user_data)
                                          .version = "0.1.0",
                                          .sdk = TRUE,
                                          .base_id = TEST_APP_ID,
-                                         .base_kind = "app"},
+                                         .base_kind = "app",
+                                         .base_sdk_id = TEST_SDK_ID,
+                                         .base_sdk_kind = "core",
+                                         .base_sdk_version = "13.4"},
                       NULL,
                       "manual");
     sdk = mf_store_get_component(f->store, TEST_APP_SDK_ID, NULL, &error);
@@ -276,6 +281,15 @@ test_sdk_app_is_a_runtime(Fixture *f, gconstpointer user_data)
     g_assert_no_error(error);
     g_assert_cmpstr(mf_component_get_id(base), ==, TEST_APP_ID);
     g_assert_cmpint(mf_component_get_kind(base), ==, MF_COMPONENT_KIND_APP);
+
+    base_sdk = mf_store_get_base_sdk(f->store, sdk, &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(mf_component_get_id(base_sdk), ==, TEST_SDK_ID);
+    g_assert_true(mf_component_is_sdk(base_sdk));
+    /* the SDK of a core has no base SDK */
+    g_assert_null(mf_store_get_base_sdk(f->store, base_sdk, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
+    g_assert_cmpstr(error->message, ==, TEST_SDK_ID " 13.4 has no base-sdk");
 }
 
 /**

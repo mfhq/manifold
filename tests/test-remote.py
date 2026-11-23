@@ -637,6 +637,60 @@ class RemoteTest(unittest.TestCase):
         self.assertIn('is installed already', self.install(APP_ID, expect=1))
         self.assertEqual(self.image_requests('/'), [])
 
+    def test_install_sdk_with_the_sdk_below(self):
+        sdk = Image(CORE_ID + '.sdk', 'core', '13.4', sdk=True, base=self.core)
+        kit_sdk = Image(
+            self.kit.component + '.sdk',
+            'kit',
+            self.kit.version,
+            sdk=True,
+            base=self.kit,
+            base_sdk=sdk,
+        )
+        for image in (self.core, sdk, self.kit, kit_sdk):
+            self.repo.add_image('main', image)
+        self.repo.publish()
+        self.configure_remote(channels=['main'])
+        self.refresh()
+
+        # the SDK brings the kit it extends, and the SDK of the core for the layer below
+        self.install(kit_sdk.component)
+        self.assertEqual(
+            self.installed(),
+            sorted(
+                [
+                    (kit_sdk.component, kit_sdk.version, 'manual', 'example-main'),
+                    (self.kit.component, self.kit.version, 'auto', 'example-main'),
+                    (sdk.component, '13.4', 'auto', 'example-main'),
+                    (CORE_ID, '13.4', 'auto', 'example-main'),
+                ]
+            ),
+        )
+        self.assertEqual(
+            os.readlink(
+                f'{STORE}/runtimes/{kit_sdk.component}/{kit_sdk.version}-{kit_sdk.revision}/base-sdk'
+            ),
+            f'../../../runtimes/{sdk.component}/13.4-{sdk.revision}',
+        )
+
+    def test_exact_base_is_installed_next_to_a_newer_version(self):
+        newer_core = Image(CORE_ID, 'core', '13.5', seed='newer core')
+        sdk = Image(CORE_ID + '.sdk', 'core', '13.4', sdk=True, base=self.core)
+        for image in (self.core, newer_core, sdk):
+            self.repo.add_image('main', image)
+        self.repo.publish()
+        self.configure_remote(channels=['main'])
+        self.refresh()
+        self.install(CORE_ID)
+
+        # the newer core provides the same identity, but the SDK needs the core it was built on
+        self.install(sdk.component)
+        self.assertIn((CORE_ID, '13.4', 'auto', 'example-main'), self.installed())
+        self.assertTrue(os.path.isdir(f'{STORE}/runtimes/{sdk.component}/13.4-{sdk.revision}/base'))
+        self.assertEqual(
+            os.readlink(f'{STORE}/runtimes/{CORE_ID}/current'), f'13.5-{newer_core.revision}'
+        )
+
     def test_install_from_the_external_location(self):
         self.repo.image_paths['main'] = '/releases/download/images'
         self.repo.pool_images = False

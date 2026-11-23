@@ -245,6 +245,7 @@ class Image:
         revision=22910000,
         sdk=False,
         base=None,
+        base_sdk=None,
         seed=None,
         architecture=None,
         integration=None,
@@ -259,6 +260,7 @@ class Image:
         self.revision = revision
         self.sdk = sdk
         self.base = base
+        self.base_sdk = base_sdk
         self.architecture = architecture or host_architecture()
         self.name = f'{component}_{version}.raw'
         self.identity = fake_hash('identity:' + component)
@@ -308,6 +310,8 @@ class Image:
         }
         if self.base is not None:
             m['base'] = self.base.reference()
+        if self.base_sdk is not None:
+            m['base-sdk'] = self.base_sdk.reference()
         if self.kind == 'app' and not self.sdk:
             m['app'] = {'command': 'app'}
         if self.integration is not None:

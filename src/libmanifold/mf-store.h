@@ -43,6 +43,9 @@ MfComponent *mf_store_get_component(MfStore    *store,
 MfComponent *mf_store_get_base(MfStore     *store,
                                MfComponent *component,
                                GError     **error);
+MfComponent *mf_store_get_base_sdk(MfStore     *store,
+                                   MfComponent *component,
+                                   GError     **error);
 
 char        *mf_store_get_image_path(MfStore     *store,
                                      MfComponent *component);

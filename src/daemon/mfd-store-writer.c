@@ -368,19 +368,20 @@ mfd_store_writer_write_files(const char *version_dir, const char *subdir, GHashT
  * @writer: the #MfdStoreWriter
  * @manifest: the manifest of the component, as it was in the bundle
  * @base: (nullable): link to the base of the component, or %NULL for a core
+ * @base_sdk: (nullable): link to the SDK of the layer below, or %NULL if the component has no base SDK
  * @catalog: (nullable): the AppStream catalog data of the component, for the local origin,
  *   or %NULL if its origin has a catalog of its own
  * @icons: (nullable) (element-type utf8 GBytes): the icons of the component by their size
  *   directory and file name, or %NULL
- * @exports: (nullable) (element-type utf8 GBytes): the files the component installs on the host,
+ * @exports: (nullable) (element-type utf8 GBytes): the integration files of the component,
  *   by their export path
  * @origin: the origin of the component, see mf_component_get_origin()
- * @mode: whether the component is a potential target for automatic removal
+ * @mode: the install mode of the component
  *
  * Record an installed version of a component: a directory with links to its
- * image and its base, its manifest, catalog data, icons and exports, where it
- * came from, and its install mode. We write the directory under a temporary name,
- * and rename it once it is complete, so it appears as a whole.
+ * image, its base and its base SDK, its manifest, catalog data, icons and exports, its
+ * origin, and its install mode. We write the directory under a temporary name,
+ * and rename it once it is complete, so the version directory appears as a whole.
  *
  * The `current` link of the component is updated afterwards, and a failure to
  * update the link only emits a warning.
@@ -395,6 +396,7 @@ gboolean
 mfd_store_writer_install_component(MfdStoreWriter *writer,
                                    MfManifest *manifest,
                                    const MfBaseLink *base,
+                                   const MfBaseLink *base_sdk,
                                    GBytes *catalog,
                                    GHashTable *icons,
                                    GHashTable *exports,
@@ -452,6 +454,13 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
     if (base != NULL) {
         g_autofree char *target = mf_base_link_get_target(base);
         g_autofree char *path = g_build_filename(tmp_dir, MF_STORE_BASE_LINK, NULL);
+
+        if (!mfd_make_symlink(target, path, error))
+            goto out;
+    }
+    if (base_sdk != NULL) {
+        g_autofree char *target = mf_base_link_get_target(base_sdk);
+        g_autofree char *path = g_build_filename(tmp_dir, MF_STORE_BASE_SDK_LINK, NULL);
 
         if (!mfd_make_symlink(target, path, error))
             goto out;

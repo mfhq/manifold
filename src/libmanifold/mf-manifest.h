@@ -91,6 +91,12 @@ const char     *mf_manifest_get_base_version(MfManifest *manifest);
 uint64_t        mf_manifest_get_base_revision(MfManifest *manifest);
 const char     *mf_manifest_get_base_identity(MfManifest *manifest);
 const char     *mf_manifest_get_base_content_hash(MfManifest *manifest);
+const char     *mf_manifest_get_base_sdk_id(MfManifest *manifest);
+MfComponentKind mf_manifest_get_base_sdk_kind(MfManifest *manifest);
+const char     *mf_manifest_get_base_sdk_version(MfManifest *manifest);
+uint64_t        mf_manifest_get_base_sdk_revision(MfManifest *manifest);
+const char     *mf_manifest_get_base_sdk_identity(MfManifest *manifest);
+const char     *mf_manifest_get_base_sdk_content_hash(MfManifest *manifest);
 
 const char     *mf_manifest_get_image_file(MfManifest *manifest);
 uint64_t        mf_manifest_get_image_size(MfManifest *manifest);

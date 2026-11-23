@@ -57,8 +57,8 @@ char *mft_catalog_xml(const char *components);
  * MftTestManifest:
  *
  * The fields of a made-up manifest. Fields left at 0 or %NULL take the
- * default named in their comment. The identity of a component, and of its
- * base, is always the fake hash of its ID.
+ * default named in their comment. The identity of a component, of its base
+ * and of its base SDK, is always the fake hash of its ID.
  */
 typedef struct {
     const char *component_id;
@@ -73,6 +73,11 @@ typedef struct {
     const char *base_kind;     /* required if there is a base */
     const char *base_version;  /* default: "1" */
     uint64_t    base_revision; /* default: 1 */
+
+    const char *base_sdk_id;       /* default: none */
+    const char *base_sdk_kind;     /* required if there is a base SDK */
+    const char *base_sdk_version;  /* default: "1" */
+    uint64_t    base_sdk_revision; /* default: 1 */
 
     const char *command;     /* default: "app", for an application */
     const char *integration; /* the integration section as JSON, default: none */

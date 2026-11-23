@@ -208,7 +208,9 @@ test_sdk_is_not_supported_yet(Fixture *fixture, gconstpointer user_data)
                                          .version = "20260114T0238",
                                          .sdk = TRUE,
                                          .base_id = TEST_PLATFORM_KIT_ID,
-                                         .base_kind = "kit"},
+                                         .base_kind = "kit",
+                                         .base_sdk_id = TEST_PLATFORM_ID ".sdk",
+                                         .base_sdk_kind = "platform"},
                       NULL,
                       NULL);
     mft_replace_link("../../../runtimes/" TEST_PLATFORM_KIT_ID ".sdk/current",

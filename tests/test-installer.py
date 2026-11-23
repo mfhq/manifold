@@ -92,9 +92,7 @@ class InstallerTestCase(unittest.TestCase):
         cls.core = Image(CORE_ID, 'core', '13.4')
         cls.sdk = Image(CORE_ID + '.sdk', 'core', '13.4', sdk=True, base=cls.core)
         cls.kit = Image(CORE_ID + '.7d225c1fe79b1c5e', 'kit', '20260114T0238', base=cls.core)
-        cls.kit_sdk = Image(
-            cls.kit.component + '.sdk', 'kit', cls.kit.version, sdk=True, base=cls.kit
-        )
+        cls.kit_sdk = cls.kit_sdk_on(cls.sdk)
         cls.app = Image(APP_ID, 'app', '0.1.0', base=cls.kit)
         cls.app2 = Image(APP_ID, 'app', '0.2.0', base=cls.kit)
 
@@ -102,6 +100,18 @@ class InstallerTestCase(unittest.TestCase):
     def tearDownClass(cls):
         cls.daemon.stop()
         shutil.rmtree(cls.work, ignore_errors=True)
+
+    @classmethod
+    def kit_sdk_on(cls, base_sdk):
+        """Make the SDK of the kit, with base_sdk as the SDK of the layer below."""
+        return Image(
+            cls.kit.component + '.sdk',
+            'kit',
+            cls.kit.version,
+            sdk=True,
+            base=cls.kit,
+            base_sdk=base_sdk,
+        )
 
     @classmethod
     def stub_host_tools(cls):
@@ -599,6 +609,59 @@ class InstallTest(InstallerTestCase):
             self.install(sdk, expect=1),
         )
         self.assertNotIn(sdk.verity_hash, self.stored_images())
+
+    def test_sdk_links_to_the_sdk_of_the_layer_below(self):
+        self.install_core()
+        self.install(self.kit, self.kit_sdk)
+        sdk_dir = f'{STORE}/runtimes/{self.kit_sdk.component}'
+        self.assertEqual(
+            os.readlink(f'{sdk_dir}/{self.kit_sdk.version}-{self.kit_sdk.revision}/base-sdk'),
+            f'../../../runtimes/{self.sdk.component}/13.4-{self.sdk.revision}',
+        )
+
+    def test_sdk_needs_the_sdk_of_the_layer_below(self):
+        self.install_core()
+        self.assertIn(
+            'the SDK of a kit must name the SDK of the layer below it',
+            self.install(self.kit, self.kit_sdk_on(None), expect=1),
+        )
+
+        # the manifest references the SDK of the core, but that SDK is not installed
+        self.manifold('remove', self.sdk.component)
+        out = self.install(self.kit, self.kit_sdk, expect=1)
+        self.assertIn(self.sdk.component, out)
+        self.assertNotIn(self.kit_sdk.verity_hash, self.stored_images())
+
+    def test_only_an_sdk_on_its_own_layer_names_the_sdk_below(self):
+        app_sdk = Image(
+            APP_ID + '.sdk', 'app', '0.1.0', sdk=True, base=self.kit_sdk, base_sdk=self.sdk
+        )
+        kit = Image(self.kit.component, 'kit', self.kit.version, base=self.core, base_sdk=self.sdk)
+        self.install_core()
+        self.install(self.kit, self.kit_sdk)
+        self.assertIn(
+            f'app SDK {app_sdk.component} can not have a base-sdk',
+            self.install(app_sdk, expect=1),
+        )
+        self.assertIn(f'kit {kit.component} can not have a base-sdk', self.install(kit, expect=1))
+
+    def test_sdk_below_must_fit_the_base(self):
+        # the SDK of another revision of the core, which the kit was not built on
+        core = rebuild(self.core)
+        other_sdk = Image(
+            CORE_ID + '.sdk', 'core', '13.4', revision=core.revision, sdk=True, base=core
+        )
+        self.install_core()
+        self.install(core, other_sdk)
+        self.assertIn(
+            f'the SDK {other_sdk.component} 13.4-{other_sdk.revision} is not the SDK of the base of',
+            self.install(self.kit, self.kit_sdk_on(other_sdk), expect=1),
+        )
+
+        self.assertIn(
+            f'has the base SDK {CORE_ID}, which is not an SDK',
+            self.install(self.kit, self.kit_sdk_on(self.core), expect=1),
+        )
 
     def test_failed_component_keeps_the_ones_installed_before(self):
         # the app comes first in the bundle, but is installed after the kit it builds on
@@ -1288,6 +1351,22 @@ class RemovalTest(InstallerTestCase):
         )
         self.assertIn(
             f'{APP_ID} 9.9.9 is not installed', self.manifold('remove', APP_ID, '9.9.9', expect=1)
+        )
+
+    def test_sdk_keeps_the_sdk_of_the_layer_below(self):
+        self.install_core()
+        self.install(self.kit, self.kit_sdk)
+        self.manifold('mark', 'auto', self.sdk.component)
+        self.manifold('cleanup')
+        self.assertIn((self.sdk.component, '13.4', 'auto'), self.installed())
+        self.assertIn('is used by', self.manifold('remove', self.sdk.component, expect=1))
+
+        # once the SDK of the kit is removed, nothing needs the SDK of the core anymore
+        out = self.manifold('remove', self.kit_sdk.component)
+        self.assertIn(f'{self.sdk.component} ', out)
+        self.assertEqual(
+            self.installed(),
+            [(CORE_ID, '13.4', 'manual'), (self.kit.component, self.kit.version, 'manual')],
         )
 
     def test_unneeded_dependents_are_removed_first(self):

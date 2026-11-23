@@ -33,11 +33,16 @@
  *   apps/<id>/<version>-<revision>/       an installed, launchable application
  *   plugins/<id>/<version>-<revision>/    a plugin of an application
  *   runtimes/<id>/<version>-<revision>/   a core, platform, kit or corresponding SDK
- *   <dir>/<id>/current                    link to the active version in use
+ *   <dir>/<id>/current                    link to the current version
  *
- * A version directory holds a link to its own image (`app.raw`, or
- * `runtime.raw` for a runtime), `base`, a link to the version directory of
- * the layer below, `manifest.json`, and the markers `origin` and `mode`.
+ * A version directory contains:
+ *
+ *   app.raw or runtime.raw   link to the image of the version
+ *   base                     link to the version directory of the base
+ *   base-sdk                 link to the version directory of the base SDK,
+ *                            only for an SDK that extends its own layer
+ *   manifest.json            the manifest of the image
+ *   origin, mode             marker files with the origin and the install mode
  */
 
 typedef struct {
@@ -596,11 +601,11 @@ mf_base_link_free(MfBaseLink *link)
 /**
  * mf_base_link_get_target:
  *
- * The target of a `base` link, relative to the version directory it is in:
- * `../../../<subdir>/<component>/<version or current>`, which
- * mf_store_read_base_link() reads back.
+ * Build the target of a `base` or `base-sdk` link. The target is relative to
+ * the version directory that contains the link, and has the form
+ * `../../../<subdir>/<component>/<version or current>`.
  *
- * Returns: (transfer full): the target
+ * Returns: (transfer full): the target of the link
  */
 char *
 mf_base_link_get_target(const MfBaseLink *link)
@@ -613,18 +618,17 @@ mf_base_link_get_target(const MfBaseLink *link)
 }
 
 /**
- * mf_store_read_base_link:
- * @component: a component read from a store
- * @error: a #GError
+ * mf_store_read_link:
+ * @link_name: the link to read, `base` or `base-sdk`
  *
- * Read the target of the `base` link of a component. The base itself is
- * not read.
+ * Read the target of the `base` or `base-sdk` link of a component. The
+ * component that the link points to is not read.
  *
  * Returns: (transfer full): the target of the link, or %NULL if the
- *   component has no base or the link is not valid
+ *   component does not have the link or the link is not valid
  */
-MfBaseLink *
-mf_store_read_base_link(MfComponent *component, GError **error)
+static MfBaseLink *
+mf_store_read_link(MfComponent *component, const char *link_name, GError **error)
 {
     const char *version_dir = mf_component_get_dir(component);
     g_autofree char *link_path = NULL;
@@ -642,16 +646,18 @@ mf_store_read_base_link(MfComponent *component, GError **error)
                     mf_component_get_version(component));
         return NULL;
     }
-    link_path = g_build_filename(version_dir, MF_STORE_BASE_LINK, NULL);
+    link_path = g_build_filename(version_dir, link_name, NULL);
     target = g_file_read_link(link_path, &local_error);
     if (g_error_matches(local_error, G_FILE_ERROR, G_FILE_ERROR_NOENT)) {
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_NOT_FOUND,
-                    /* TRANSLATORS: a component and its version */
-                    _("%s %s has no base"),
-                    mf_component_get_id(component),
-                    mf_component_get_version(component));
+        g_set_error(
+            error,
+            MF_ERROR,
+            MF_ERROR_NOT_FOUND,
+            /* TRANSLATORS: a component and its version, then the name of a link, "base" or "base-sdk" */
+            _("%s %s has no %s"),
+            mf_component_get_id(component),
+            mf_component_get_version(component),
+            link_name);
         return NULL;
     }
     if (target == NULL) {
@@ -659,7 +665,7 @@ mf_store_read_base_link(MfComponent *component, GError **error)
         return NULL;
     }
 
-    /* as written by mf_base_link_get_target() */
+    /* the target must have the form that mf_base_link_get_target() builds */
     if (!g_str_has_prefix(target, COMPONENT_TO_ROOT_PREFIX)) {
         g_set_error(error,
                     MF_ERROR,
@@ -687,6 +693,23 @@ mf_store_read_base_link(MfComponent *component, GError **error)
     return mf_base_link_new(parts[0],
                             parts[1],
                             g_str_equal(parts[2], MF_STORE_CURRENT_NAME) ? NULL : parts[2]);
+}
+
+/**
+ * mf_store_read_base_link:
+ * @component: a component read from a store
+ * @error: a #GError
+ *
+ * Read the target of the `base` link of a component. The base itself is
+ * not read.
+ *
+ * Returns: (transfer full): the target of the link, or %NULL if the
+ *   component has no base or the link is not valid
+ */
+MfBaseLink *
+mf_store_read_base_link(MfComponent *component, GError **error)
+{
+    return mf_store_read_link(component, MF_STORE_BASE_LINK, error);
 }
 
 /**
@@ -969,28 +992,21 @@ mf_store_get_component(MfStore *store, const char *component_id, const char *ver
 }
 
 /**
- * mf_store_get_base:
- * @store: an #MfStore
- * @component: an installed component
- * @error: a #GError
+ * mf_store_follow_link:
+ * @link_name: the link to follow, `base` or `base-sdk`
  *
- * Follow the `base` link of a component to its base. The link points to
- * the current version of the base, unless the component needs an exact base.
- *
- * Returns: (transfer full): the base, or %NULL if the component has no base
+ * Returns: (transfer full): the installed component that the link points to,
+ *   or %NULL if @component does not have the link or the target is not installed
  */
-MfComponent *
-mf_store_get_base(MfStore *store, MfComponent *component, GError **error)
+static MfComponent *
+mf_store_follow_link(MfStore *store, MfComponent *component, const char *link_name, GError **error)
 {
     g_autoptr(MfBaseLink) base = NULL;
     g_autofree char *base_dir = NULL;
 
-    g_return_val_if_fail(MF_IS_STORE(store), NULL);
-    g_return_val_if_fail(MF_IS_COMPONENT(component), NULL);
-
     auto priv = GET_PRIVATE(store);
 
-    base = mf_store_read_base_link(component, error);
+    base = mf_store_read_link(component, link_name, error);
     if (base == NULL)
         return NULL;
     if (base->version_name == NULL)
@@ -1011,11 +1027,53 @@ mf_store_get_base(MfStore *store, MfComponent *component, GError **error)
                 MF_ERROR,
                 MF_ERROR_NOT_FOUND,
                 /* TRANSLATORS: the component, and the identifier and version of its base */
-                _("The base of %s, %s %s, is not installed"),
+                _("%s builds on %s %s, which is not installed"),
                 mf_component_get_id(component),
                 base->component_id,
                 base->version_name);
     return NULL;
+}
+
+/**
+ * mf_store_get_base:
+ * @store: an #MfStore
+ * @component: an installed component
+ * @error: a #GError
+ *
+ * Follow the `base` link of a component to its base. The link points to
+ * the current version of the base, unless the component needs an exact base.
+ *
+ * Returns: (transfer full): the base, or %NULL if the component has no base
+ */
+MfComponent *
+mf_store_get_base(MfStore *store, MfComponent *component, GError **error)
+{
+    g_return_val_if_fail(MF_IS_STORE(store), NULL);
+    g_return_val_if_fail(MF_IS_COMPONENT(component), NULL);
+
+    return mf_store_follow_link(store, component, MF_STORE_BASE_LINK, error);
+}
+
+/**
+ * mf_store_get_base_sdk:
+ * @store: an #MfStore
+ * @component: an installed component
+ * @error: a #GError
+ *
+ * Follow the `base-sdk` link of an SDK to its base SDK. Only an SDK that
+ * extends the component of its own layer has this link, and the link always
+ * points to an exact version.
+ *
+ * Returns: (transfer full): the base SDK, or %NULL if the component has no
+ *   base SDK
+ */
+MfComponent *
+mf_store_get_base_sdk(MfStore *store, MfComponent *component, GError **error)
+{
+    g_return_val_if_fail(MF_IS_STORE(store), NULL);
+    g_return_val_if_fail(MF_IS_COMPONENT(component), NULL);
+
+    return mf_store_follow_link(store, component, MF_STORE_BASE_SDK_LINK, error);
 }
 
 /**

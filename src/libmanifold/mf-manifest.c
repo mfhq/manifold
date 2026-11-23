@@ -100,6 +100,21 @@ mf_permission_from_string(const char *permission_str)
     return MF_PERMISSION_UNKNOWN;
 }
 
+/**
+ * MfManifestBase:
+ *
+ * Reference to a component that an image was built on, as given in the
+ * `base` or `base-sdk` section of a manifest.
+ */
+typedef struct {
+    char *id;
+    MfComponentKind kind;
+    char *version;
+    uint64_t revision;
+    char *identity;
+    char *content_hash;
+} MfManifestBase;
+
 typedef struct {
     GBytes *data;
 
@@ -112,12 +127,8 @@ typedef struct {
     char *identity;
     char *content_hash;
 
-    char *base_id; /* NULL for a core */
-    MfComponentKind base_kind;
-    char *base_version;
-    uint64_t base_revision;
-    char *base_identity;
-    char *base_content_hash; /* (nullable) */
+    MfManifestBase base;     /* its ID is NULL for a core */
+    MfManifestBase base_sdk; /* its ID is NULL if the manifest has no base SDK */
 
     char *image_file;
     uint64_t image_size;
@@ -141,6 +152,15 @@ G_DEFINE_TYPE_WITH_PRIVATE(MfManifest, mf_manifest, G_TYPE_OBJECT)
 #define GET_PRIVATE(o) ((MfManifestPrivate *) mf_manifest_get_instance_private(o))
 
 static void
+mf_manifest_base_clear(MfManifestBase *base)
+{
+    g_clear_pointer(&base->id, g_free);
+    g_clear_pointer(&base->version, g_free);
+    g_clear_pointer(&base->identity, g_free);
+    g_clear_pointer(&base->content_hash, g_free);
+}
+
+static void
 mf_manifest_finalize(GObject *object)
 {
     MfManifestPrivate *priv = GET_PRIVATE(MF_MANIFEST(object));
@@ -151,10 +171,8 @@ mf_manifest_finalize(GObject *object)
     g_free(priv->architecture);
     g_free(priv->identity);
     g_free(priv->content_hash);
-    g_free(priv->base_id);
-    g_free(priv->base_version);
-    g_free(priv->base_identity);
-    g_free(priv->base_content_hash);
+    mf_manifest_base_clear(&priv->base);
+    mf_manifest_base_clear(&priv->base_sdk);
     g_free(priv->image_file);
     for (guint i = 0; i < MF_CHECKSUM_KIND_LAST; i++)
         g_free(priv->image_checksums[i]);
@@ -285,41 +303,99 @@ mf_manifest_json_get_kind(sd_json_variant *object, const char *section, GError *
 
 /**
  * mf_manifest_json_parse_base:
+ * @section: the section to parse, "base" or "base-sdk"
+ * @ret_base: (out): the parsed reference, its ID stays %NULL if the manifest does not have the section
  *
- * Parse the base section of a manifest, which names what the image was built
- * on: by its identity, and by its ID, version and revision, which an exact
- * base link names. Its kind tells what the base is before anyone has found it.
+ * Parse the `base` or `base-sdk` section of a manifest. Both sections
+ * reference a component that the image was built on, with its ID, kind,
+ * version, revision, identity and content hash.
  */
 static gboolean
-mf_manifest_json_parse_base(sd_json_variant *manifest, MfManifestPrivate *priv, GError **error)
+mf_manifest_json_parse_base(sd_json_variant *manifest,
+                            const char *section,
+                            MfManifestBase *ret_base,
+                            GError **error)
 {
-    sd_json_variant *base = sd_json_variant_by_key(manifest, "base");
+    sd_json_variant *base = sd_json_variant_by_key(manifest, section);
 
     if (base == NULL || sd_json_variant_is_null(base))
         return TRUE;
     if (!sd_json_variant_is_object(base)) {
-        /* TRANSLATORS: "base" is a section of the manifest, and not translated */
-        mf_set_error_invalid_manifest(error, "%s", _("base is not an object"));
+        /* TRANSLATORS: %s is a section of the manifest, "base" or "base-sdk" */
+        mf_set_error_invalid_manifest(error, _("%s is not an object"), section);
         return FALSE;
     }
 
-    priv->base_identity = g_strdup(FIELD_HASH(base, "base", "identity", error));
-    if (priv->base_identity == NULL)
+    ret_base->identity = g_strdup(FIELD_HASH(base, section, "identity", error));
+    if (ret_base->identity == NULL)
         return FALSE;
-    priv->base_id = mf_manifest_json_get_component_id(base, "base", error);
-    if (priv->base_id == NULL)
+    ret_base->id = mf_manifest_json_get_component_id(base, section, error);
+    if (ret_base->id == NULL)
         return FALSE;
-    priv->base_kind = mf_manifest_json_get_kind(base, "base", error);
-    if (priv->base_kind == MF_COMPONENT_KIND_UNKNOWN)
+    ret_base->kind = mf_manifest_json_get_kind(base, section, error);
+    if (ret_base->kind == MF_COMPONENT_KIND_UNKNOWN)
         return FALSE;
-    priv->base_version = mf_manifest_json_get_version(base, "base", error);
-    if (priv->base_version == NULL)
+    ret_base->version = mf_manifest_json_get_version(base, section, error);
+    if (ret_base->version == NULL)
         return FALSE;
-    if (!FIELD_UNSIGNED(base, "base", "revision", &priv->base_revision, error))
+    if (!FIELD_UNSIGNED(base, section, "revision", &ret_base->revision, error))
         return FALSE;
-    priv->base_content_hash = g_strdup(FIELD_HASH(base, "base", "content-hash", error));
-    if (priv->base_content_hash == NULL)
+    ret_base->content_hash = g_strdup(FIELD_HASH(base, section, "content-hash", error));
+    if (ret_base->content_hash == NULL)
         return FALSE;
+
+    return TRUE;
+}
+
+/**
+ * mf_manifest_check_base_sdk:
+ *
+ * Check that a manifest has a `base-sdk` section if it needs one, and has
+ * none otherwise.
+ *
+ * An SDK only contains the development files of its own layer. An SDK that
+ * extends a platform, a kit or an application must therefore reference the
+ * SDK of the layer below. The SDK of a core has no layer below it, and all
+ * other components must not have a `base-sdk` section.
+ */
+static gboolean
+mf_manifest_check_base_sdk(MfManifestPrivate *priv, GError **error)
+{
+    gboolean needed = priv->sdk && priv->kind != MF_COMPONENT_KIND_CORE && priv->base.kind == priv->kind;
+
+    if (!needed) {
+        if (priv->base_sdk.id == NULL)
+            return TRUE;
+        mf_set_error_invalid_manifest(
+            error,
+            /* TRANSLATORS: the kind and ID of the component, "base-sdk" is a section of the manifest */
+            _("%s%s %s can not have a base-sdk"),
+            mf_component_kind_to_string(priv->kind),
+            priv->sdk ? " SDK" : "",
+            priv->component_id);
+        return FALSE;
+    }
+
+    if (priv->base_sdk.id == NULL) {
+        mf_set_error_invalid_manifest(
+            error,
+            /* TRANSLATORS: %s is the kind of the component, like "platform" or "kit" */
+            _("the SDK of a %s must name the SDK of the layer below it"),
+            mf_component_kind_to_string(priv->kind));
+        return FALSE;
+    }
+    /* the base SDK must be of a kind that the extended component can build on */
+    if (!mf_component_kind_can_build_on(priv->kind, FALSE, priv->base_sdk.kind, TRUE)) {
+        mf_set_error_invalid_manifest(
+            error,
+            /* TRANSLATORS: the kind and ID of the component, then the kind and ID of its base SDK */
+            _("%s SDK %s can not have the %s SDK %s below it"),
+            mf_component_kind_to_string(priv->kind),
+            priv->component_id,
+            mf_component_kind_to_string(priv->base_sdk.kind),
+            priv->base_sdk.id);
+        return FALSE;
+    }
 
     return TRUE;
 }
@@ -475,14 +551,14 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
     if (priv->content_hash == NULL)
         return FALSE;
 
-    if (!mf_manifest_json_parse_base(jo, priv, error))
+    if (!mf_manifest_json_parse_base(jo, "base", &priv->base, error))
         return FALSE;
     /* only a core has no base, and the SDK of a core has that core as its base */
-    if (priv->sdk && priv->base_id == NULL) {
+    if (priv->sdk && priv->base.id == NULL) {
         mf_set_error_invalid_manifest(error, "%s", _("an SDK must name the component it extends"));
         return FALSE;
     }
-    if (priv->kind != MF_COMPONENT_KIND_CORE && priv->base_id == NULL) {
+    if (priv->kind != MF_COMPONENT_KIND_CORE && priv->base.id == NULL) {
         mf_set_error_invalid_manifest(error,
                                       /* TRANSLATORS: %s is the kind of the component, like "app" or "kit" */
                                       _("a %s must name the layer it is built on"),
@@ -491,8 +567,8 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
     }
     /* the component that an SDK extends is never an SDK, and for all other components it makes
      * no difference whether the base is an SDK */
-    if (priv->base_id != NULL &&
-        !mf_component_kind_can_build_on(priv->kind, priv->sdk, priv->base_kind, FALSE)) {
+    if (priv->base.id != NULL &&
+        !mf_component_kind_can_build_on(priv->kind, priv->sdk, priv->base.kind, FALSE)) {
         mf_set_error_invalid_manifest(
             error,
             /* TRANSLATORS: the kind and ID of the component, then the kind and ID of its base */
@@ -500,10 +576,15 @@ mf_manifest_parse_json(MfManifest *manifest, GError **error)
             mf_component_kind_to_string(priv->kind),
             priv->sdk ? " SDK" : "",
             priv->component_id,
-            mf_component_kind_to_string(priv->base_kind),
-            priv->base_id);
+            mf_component_kind_to_string(priv->base.kind),
+            priv->base.id);
         return FALSE;
     }
+
+    if (!mf_manifest_json_parse_base(jo, "base-sdk", &priv->base_sdk, error))
+        return FALSE;
+    if (!mf_manifest_check_base_sdk(priv, error))
+        return FALSE;
 
     if (!mf_manifest_json_parse_image(jo, priv, error))
         return FALSE;
@@ -752,7 +833,7 @@ mf_manifest_get_base_id(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
     auto priv = GET_PRIVATE(manifest);
-    return priv->base_id;
+    return priv->base.id;
 }
 
 /**
@@ -767,7 +848,7 @@ mf_manifest_get_base_kind(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), MF_COMPONENT_KIND_UNKNOWN);
     auto priv = GET_PRIVATE(manifest);
-    return priv->base_kind;
+    return priv->base.kind;
 }
 
 /**
@@ -781,7 +862,7 @@ mf_manifest_get_base_version(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
     auto priv = GET_PRIVATE(manifest);
-    return priv->base_version;
+    return priv->base.version;
 }
 
 /**
@@ -795,7 +876,7 @@ mf_manifest_get_base_revision(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), 0);
     auto priv = GET_PRIVATE(manifest);
-    return priv->base_revision;
+    return priv->base.revision;
 }
 
 /**
@@ -809,7 +890,7 @@ mf_manifest_get_base_identity(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
     auto priv = GET_PRIVATE(manifest);
-    return priv->base_identity;
+    return priv->base.identity;
 }
 
 /**
@@ -823,7 +904,97 @@ mf_manifest_get_base_content_hash(MfManifest *manifest)
 {
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
     auto priv = GET_PRIVATE(manifest);
-    return priv->base_content_hash;
+    return priv->base.content_hash;
+}
+
+/**
+ * mf_manifest_get_base_sdk_id:
+ * @manifest: an #MfManifest
+ *
+ * An SDK only contains the development files of its own layer. An SDK that
+ * extends a platform, a kit or an application therefore references the SDK
+ * of the layer below in its manifest.
+ *
+ * Returns: (nullable): the identifier of the SDK of the layer below,
+ *          or %NULL if the image has none
+ */
+const char *
+mf_manifest_get_base_sdk_id(MfManifest *manifest)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
+    auto priv = GET_PRIVATE(manifest);
+    return priv->base_sdk.id;
+}
+
+/**
+ * mf_manifest_get_base_sdk_kind:
+ * @manifest: an #MfManifest
+ *
+ * Returns: the kind of the SDK of the layer below,
+ *          or %MF_COMPONENT_KIND_UNKNOWN if the image has none
+ */
+MfComponentKind
+mf_manifest_get_base_sdk_kind(MfManifest *manifest)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), MF_COMPONENT_KIND_UNKNOWN);
+    auto priv = GET_PRIVATE(manifest);
+    return priv->base_sdk.kind;
+}
+
+/**
+ * mf_manifest_get_base_sdk_version:
+ * @manifest: an #MfManifest
+ *
+ * Returns: (nullable): the version of the SDK of the layer below
+ */
+const char *
+mf_manifest_get_base_sdk_version(MfManifest *manifest)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
+    auto priv = GET_PRIVATE(manifest);
+    return priv->base_sdk.version;
+}
+
+/**
+ * mf_manifest_get_base_sdk_revision:
+ * @manifest: an #MfManifest
+ *
+ * Returns: the revision of the SDK of the layer below, or 0
+ */
+uint64_t
+mf_manifest_get_base_sdk_revision(MfManifest *manifest)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), 0);
+    auto priv = GET_PRIVATE(manifest);
+    return priv->base_sdk.revision;
+}
+
+/**
+ * mf_manifest_get_base_sdk_identity:
+ * @manifest: an #MfManifest
+ *
+ * Returns: (nullable): the identity of the SDK of the layer below
+ */
+const char *
+mf_manifest_get_base_sdk_identity(MfManifest *manifest)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
+    auto priv = GET_PRIVATE(manifest);
+    return priv->base_sdk.identity;
+}
+
+/**
+ * mf_manifest_get_base_sdk_content_hash:
+ * @manifest: an #MfManifest
+ *
+ * Returns: (nullable): the content hash of the SDK of the layer below
+ */
+const char *
+mf_manifest_get_base_sdk_content_hash(MfManifest *manifest)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), NULL);
+    auto priv = GET_PRIVATE(manifest);
+    return priv->base_sdk.content_hash;
 }
 
 /**

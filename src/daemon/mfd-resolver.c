@@ -25,7 +25,7 @@
  * set is installed.
  */
 
-/* the highest number of bases that we resolve for one component, each one building on the next */
+/* the maximum number of layers that we resolve below one component */
 constexpr guint BASE_DEPTH_MAX = 8;
 
 /**
@@ -129,35 +129,75 @@ mfd_resolver_add(MfdResolver *resolver,
     return item;
 }
 
+/* reference to a base or a base SDK, as read from a manifest */
+typedef struct {
+    const char *id;
+    const char *version;
+    uint64_t revision;
+    const char *identity;
+    gboolean exact; /* the component is required in exactly this version and revision */
+} MfdBaseRef;
+
+/**
+ * mfd_manifest_get_base_refs:
+ * @refs: (out caller-allocates) (array fixed-size=2): the references of @manifest
+ *
+ * Get the references to the base and to the base SDK of a manifest.
+ * A base SDK is always required in its exact version and revision.
+ *
+ * Returns: the number of references that were set
+ */
+static guint
+mfd_manifest_get_base_refs(MfManifest *manifest, MfdBaseRef refs[static 2])
+{
+    guint n_refs = 0;
+
+    if (mf_manifest_get_base_id(manifest) != NULL)
+        refs[n_refs++] = (MfdBaseRef){
+            .id = mf_manifest_get_base_id(manifest),
+            .version = mf_manifest_get_base_version(manifest),
+            .revision = mf_manifest_get_base_revision(manifest),
+            .identity = mf_manifest_get_base_identity(manifest),
+            .exact = mf_manifest_needs_exact_base(manifest),
+        };
+    if (mf_manifest_get_base_sdk_id(manifest) != NULL)
+        refs[n_refs++] = (MfdBaseRef){
+            .id = mf_manifest_get_base_sdk_id(manifest),
+            .version = mf_manifest_get_base_sdk_version(manifest),
+            .revision = mf_manifest_get_base_sdk_revision(manifest),
+            .identity = mf_manifest_get_base_sdk_identity(manifest),
+            .exact = TRUE,
+        };
+    return n_refs;
+}
+
 /**
  * mfd_resolver_has_base:
  *
- * Returns: %TRUE if the base of @manifest is installed, or is in the set
+ * Returns: %TRUE if the referenced component is installed, or is in the set
  */
 static gboolean
-mfd_resolver_has_base(MfdResolver *resolver, MfManifest *manifest)
+mfd_resolver_has_base(MfdResolver *resolver, const MfdBaseRef *ref)
 {
-    const char *base_id = mf_manifest_get_base_id(manifest);
-    const char *identity = mf_manifest_get_base_identity(manifest);
     g_autoptr(MfComponent) provider = NULL;
     g_autoptr(GPtrArray) versions = NULL;
 
-    if (!mf_manifest_needs_exact_base(manifest)) {
-        if (mfd_install_set_find_identity(resolver->set, identity) != NULL)
+    if (!ref->exact) {
+        if (mfd_install_set_find_identity(resolver->set, ref->identity) != NULL)
             return TRUE;
-        provider = mf_store_find_identity(resolver->store, identity, NULL);
+        provider = mf_store_find_identity(resolver->store, ref->identity, NULL);
         return provider != NULL;
     }
 
-    if (mfd_install_set_find_exact_base(resolver->set, manifest) != NULL)
+    if (mfd_install_set_find_version(resolver->set, ref->id, ref->version, ref->revision) != NULL)
         return TRUE;
-    versions = mf_store_list_components(resolver->store, base_id, MF_COMPONENT_KIND_UNKNOWN, NULL);
+    versions = mf_store_list_components(resolver->store, ref->id, MF_COMPONENT_KIND_UNKNOWN, NULL);
     for (guint i = 0; versions != NULL && i < versions->len; i++) {
         MfComponent *component = g_ptr_array_index(versions, i);
 
-        if (g_str_equal(mf_component_get_version(component), mf_manifest_get_base_version(manifest)) &&
-            mf_component_get_revision(component) == mf_manifest_get_base_revision(manifest) &&
-            g_strcmp0(mf_component_get_identity(component), identity) == 0)
+        if (g_str_equal(mf_component_get_version(component), ref->version) &&
+            mf_component_get_revision(component) == ref->revision &&
+            g_strcmp0(mf_component_get_identity(component), ref->identity) == 0)
             return TRUE;
     }
     return FALSE;
@@ -166,30 +206,26 @@ mfd_resolver_has_base(MfdResolver *resolver, MfManifest *manifest)
 /**
  * mfd_resolver_find_base:
  * @channel: the channel of the component, which is searched first
+ * @ref: the reference to the base or base SDK of the component
  * @ret_item: (out) (transfer none): the item of the base, or %NULL if no channel has it
  *
- * Find the base of a component in the channels of the remotes, and add it
- * to the set.
+ * Find a base or base SDK of a component in the channels of the remotes,
+ * and add it to the set.
  *
- * A component that needs its exact base only accepts the version and revision
- * its manifest names. Any other component accepts every version that provides
- * the identity its manifest names, and we try the named version first. The
- * identity of a version is only recorded in its manifest, so we download
- * manifests until we find a matching one.
+ * An exact reference only matches the referenced version and revision. Any
+ * other reference matches every version with the referenced identity, and
+ * the referenced version is tried first. The identity of a version is only
+ * recorded in its manifest, so we download manifests until one matches.
  *
  * Returns: %FALSE if a manifest could not be downloaded or verified
  */
 static gboolean
 mfd_resolver_find_base(MfdResolver *resolver,
                        MfdRemoteChannel *channel,
-                       MfManifest *manifest,
+                       const MfdBaseRef *ref,
                        MfdInstallItem **ret_item,
                        GError **error)
 {
-    const char *base_id = mf_manifest_get_base_id(manifest);
-    const char *base_version = mf_manifest_get_base_version(manifest);
-    uint64_t base_revision = mf_manifest_get_base_revision(manifest);
-    gboolean exact = mf_manifest_needs_exact_base(manifest);
     GPtrArray *channels = resolver->channel_set->channels;
     g_autoptr(GPtrArray) order = g_ptr_array_new();
 
@@ -202,23 +238,22 @@ mfd_resolver_find_base(MfdResolver *resolver,
 
     for (guint i = 0; i < order->len; i++) {
         MfdRemoteChannel *candidate_channel = g_ptr_array_index(order, i);
-        GPtrArray *versions = mf_repo_component_index_get_versions(candidate_channel->components, base_id);
+        GPtrArray *versions = mf_repo_component_index_get_versions(candidate_channel->components, ref->id);
 
         /* the first pass tries the named version, the second pass all other versions, newest first */
-        for (guint pass = 0; versions != NULL && pass < (exact ? 1 : 2); pass++) {
+        for (guint pass = 0; versions != NULL && pass < (ref->exact ? 1 : 2); pass++) {
             for (guint j = 0; j < versions->len; j++) {
                 MfRepoVersion *version = g_ptr_array_index(versions, j);
-                gboolean named = g_str_equal(version->version, base_version) &&
-                                 (!exact || version->revision == base_revision);
+                gboolean named = g_str_equal(version->version, ref->version) &&
+                                 (!ref->exact || version->revision == ref->revision);
                 g_autoptr(MfManifest) candidate = NULL;
 
                 if (named != (pass == 0))
                     continue;
-                candidate = mfd_resolver_fetch_manifest(resolver, candidate_channel, base_id, version, error);
+                candidate = mfd_resolver_fetch_manifest(resolver, candidate_channel, ref->id, version, error);
                 if (candidate == NULL)
                     return FALSE;
-                if (g_str_equal(mf_manifest_get_identity(candidate),
-                                mf_manifest_get_base_identity(manifest))) {
+                if (g_str_equal(mf_manifest_get_identity(candidate), ref->identity)) {
                     *ret_item = mfd_resolver_add(resolver, candidate_channel, version, candidate, TRUE);
                     return TRUE;
                 }
@@ -230,23 +265,70 @@ mfd_resolver_find_base(MfdResolver *resolver,
 }
 
 /**
- * mfd_resolver_find_item:
+ * mfd_resolver_add_bases:
+ * @item: an item of the set
+ * @depth: how many layers @item is below the requested component
+ * @need_bases: %TRUE to fail if no channel has a needed base, %FALSE to leave
+ *   the base out, so the installation reports that it is missing
  *
- * Returns: (transfer none) (nullable): the item for a version of a component,
- *   or %NULL if the set does not have it
+ * Add the base and the base SDK of an item to the set, unless they are
+ * installed or in the set already. We then do the same for every component
+ * that was added.
+ *
+ * Returns: %TRUE if all bases of @item are installed or in the set, or if a
+ *   missing base was ignored because @need_bases is %FALSE
  */
-static MfdInstallItem *
-mfd_resolver_find_item(MfdResolver *resolver, const char *component_id, MfRepoVersion *version)
+static gboolean
+mfd_resolver_add_bases(MfdResolver *resolver,
+                       MfdInstallItem *item,
+                       guint depth,
+                       gboolean need_bases,
+                       GError **error)
 {
-    for (guint i = 0; i < resolver->set->items->len; i++) {
-        MfdInstallItem *item = g_ptr_array_index(resolver->set->items, i);
+    MfdBaseRef refs[2];
+    guint n_refs = mfd_manifest_get_base_refs(item->manifest, refs);
 
-        if (g_str_equal(mf_manifest_get_component_id(item->manifest), component_id) &&
-            g_str_equal(mf_manifest_get_version(item->manifest), version->version) &&
-            mf_manifest_get_revision(item->manifest) == version->revision)
-            return item;
+    for (guint i = 0; i < n_refs; i++) {
+        MfdInstallItem *base = NULL;
+
+        if (mfd_resolver_has_base(resolver, &refs[i]))
+            continue;
+        if (depth == BASE_DEPTH_MAX) {
+            g_set_error(error,
+                        MF_ERROR,
+                        MF_ERROR_INVALID_REPOSITORY,
+                        _("%s is more than %u layers below the component that needs it"),
+                        mf_manifest_get_component_id(item->manifest),
+                        BASE_DEPTH_MAX);
+            return FALSE;
+        }
+        if (!mfd_resolver_find_base(resolver,
+                                    mfd_remote_channel_set_find(resolver->channel_set, item->origin),
+                                    &refs[i],
+                                    &base,
+                                    error))
+            return FALSE;
+        if (base != NULL) {
+            if (!mfd_resolver_add_bases(resolver, base, depth + 1, need_bases, error))
+                return FALSE;
+            continue;
+        }
+
+        if (!need_bases)
+            continue;
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_MISSING_BASE,
+                    /* TRANSLATORS: a component and its version, then its base and the version of the base */
+                    _("%s %s needs the base %s %s, which is not available in any remote"),
+                    mf_manifest_get_component_id(item->manifest),
+                    mf_manifest_get_version(item->manifest),
+                    refs[i].id,
+                    refs[i].version);
+        return FALSE;
     }
-    return NULL;
+
+    return TRUE;
 }
 
 /**
@@ -269,7 +351,10 @@ mfd_resolver_add_with_bases(MfdResolver *resolver,
                             gboolean need_bases,
                             GError **error)
 {
-    MfdInstallItem *item = mfd_resolver_find_item(resolver, component_id, version);
+    MfdInstallItem *item = mfd_install_set_find_version(resolver->set,
+                                                        component_id,
+                                                        version->version,
+                                                        version->revision);
     g_autoptr(MfManifest) manifest = NULL;
 
     /* the version may be in the set already, as the base of another component */
@@ -283,44 +368,7 @@ mfd_resolver_add_with_bases(MfdResolver *resolver,
         return FALSE;
     item = mfd_resolver_add(resolver, channel, version, manifest, dependency);
 
-    for (guint depth = 0;; depth++) {
-        MfdInstallItem *base = NULL;
-
-        if (mf_manifest_get_base_id(item->manifest) == NULL ||
-            mfd_resolver_has_base(resolver, item->manifest))
-            return TRUE;
-        if (depth == BASE_DEPTH_MAX) {
-            g_set_error(error,
-                        MF_ERROR,
-                        MF_ERROR_INVALID_REPOSITORY,
-                        _("%s builds on more than %u bases, one on top of the other"),
-                        component_id,
-                        BASE_DEPTH_MAX);
-            return FALSE;
-        }
-        if (!mfd_resolver_find_base(resolver,
-                                    mfd_remote_channel_set_find(resolver->channel_set, item->origin),
-                                    item->manifest,
-                                    &base,
-                                    error))
-            return FALSE;
-        if (base != NULL) {
-            item = base;
-            continue;
-        }
-
-        if (need_bases)
-            g_set_error(error,
-                        MF_ERROR,
-                        MF_ERROR_MISSING_BASE,
-                        /* TRANSLATORS: a component and its version, then its base and the version of that */
-                        _("%s %s needs the base %s %s, which is not available in any remote"),
-                        mf_manifest_get_component_id(item->manifest),
-                        mf_manifest_get_version(item->manifest),
-                        mf_manifest_get_base_id(item->manifest),
-                        mf_manifest_get_base_version(item->manifest));
-        return !need_bases;
-    }
+    return mfd_resolver_add_bases(resolver, item, 0, need_bases, error);
 }
 
 /**

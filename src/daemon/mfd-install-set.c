@@ -213,21 +213,22 @@ mfd_install_set_find_identity(MfdInstallSet *set, const char *identity)
 }
 
 /**
- * mfd_install_set_find_exact_base:
+ * mfd_install_set_find_version:
  *
- * Returns: (transfer none) (nullable): the item with the component, version
- *   and revision that @manifest names as its base
+ * Returns: (transfer none) (nullable): the item for one version and revision of a component
  */
 MfdInstallItem *
-mfd_install_set_find_exact_base(MfdInstallSet *set, MfManifest *manifest)
+mfd_install_set_find_version(MfdInstallSet *set,
+                             const char *component_id,
+                             const char *version,
+                             uint64_t revision)
 {
     for (guint i = 0; i < set->items->len; i++) {
         MfdInstallItem *item = g_ptr_array_index(set->items, i);
-        MfManifest *base = item->manifest;
 
-        if (g_str_equal(mf_manifest_get_component_id(base), mf_manifest_get_base_id(manifest)) &&
-            g_str_equal(mf_manifest_get_version(base), mf_manifest_get_base_version(manifest)) &&
-            mf_manifest_get_revision(base) == mf_manifest_get_base_revision(manifest))
+        if (g_str_equal(mf_manifest_get_component_id(item->manifest), component_id) &&
+            g_str_equal(mf_manifest_get_version(item->manifest), version) &&
+            mf_manifest_get_revision(item->manifest) == revision)
             return item;
     }
 

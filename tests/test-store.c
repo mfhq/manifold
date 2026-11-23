@@ -73,6 +73,7 @@ mft_install(const MftTestManifest *manifest, const char *base_version_dir, MfIns
     g_assert_true(mfd_store_writer_install_component(writer,
                                                      parsed,
                                                      base,
+                                                     NULL,
                                                      catalog,
                                                      icons,
                                                      NULL,

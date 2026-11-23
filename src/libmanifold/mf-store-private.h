@@ -46,6 +46,7 @@ MF_BEGIN_PRIVATE_DECLS
 #define MF_STORE_APP_IMAGE_LINK     "app.raw"
 #define MF_STORE_RUNTIME_IMAGE_LINK "runtime.raw"
 #define MF_STORE_BASE_LINK          "base"
+#define MF_STORE_BASE_SDK_LINK      "base-sdk"
 #define MF_STORE_MANIFEST_NAME      "manifest.json"
 #define MF_STORE_CURRENT_NAME       "current"
 #define MF_STORE_ORIGIN_NAME        "origin"
@@ -85,10 +86,10 @@ MfComponent *mf_store_find_identity(MfStore    *store,
  * MfBaseLink:
  * @subdir: the subdirectory of the store the base is in
  * @component_id: the identifier of the base
- * @version_name: the version directory of the base the link names,
- *   `<version>-<revision>`, or %NULL if it follows the current version
+ * @version_name: the name of the version directory of the base,
+ *   `<version>-<revision>`, or %NULL if the link points to the current version
  *
- * What the `base` link of a version of a component names.
+ * The target of the `base` or `base-sdk` link of a version directory.
  */
 typedef struct {
     char *subdir;

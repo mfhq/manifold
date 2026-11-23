@@ -209,6 +209,43 @@ mft_catalog_xml(const char *components)
 }
 
 /**
+ * mft_manifest_base_json:
+ * @section: the section to write, "base" or "base-sdk"
+ *
+ * Write out the reference to a base or a base SDK, as a section of a manifest.
+ */
+static char *
+mft_manifest_base_json(const char *section,
+                       const char *id,
+                       const char *kind,
+                       const char *version,
+                       uint64_t revision)
+{
+    g_autofree char *identity = mft_fake_hash(id);
+
+    g_assert_nonnull(kind);
+    /* clang-format off */
+    return g_strdup_printf(
+        ",\n"
+        "   \"%s\": {\n"
+        "      \"component\": \"%s\",\n"
+        "      \"kind\": \"%s\",\n"
+        "      \"version\": \"%s\",\n"
+        "      \"revision\": %" PRIu64 ",\n"
+        "      \"identity\": \"%s\",\n"
+        "      \"content-hash\": \"%s\"\n"
+        "   }",
+        section,
+        id,
+        kind,
+        version != NULL ? version : "1",
+        revision != 0 ? revision : 1,
+        identity,
+        identity);
+    /* clang-format on */
+}
+
+/**
  * mft_manifest_json:
  *
  * Write out a manifest as JSON.
@@ -218,33 +255,19 @@ mft_manifest_json(const MftTestManifest *m)
 {
     g_autofree char *identity = mft_fake_hash(m->component_id);
     g_autofree char *base = NULL;
+    g_autofree char *base_sdk = NULL;
     g_autofree char *app = NULL;
     g_autofree char *integration = NULL;
     g_autofree char *permissions = NULL;
 
-    if (m->base_id != NULL) {
-        g_autofree char *base_identity = mft_fake_hash(m->base_id);
-
-        g_assert_nonnull(m->base_kind);
-        /* clang-format off */
-        base = g_strdup_printf(
-            ",\n"
-            "   \"base\": {\n"
-            "      \"component\": \"%s\",\n"
-            "      \"kind\": \"%s\",\n"
-            "      \"version\": \"%s\",\n"
-            "      \"revision\": %" PRIu64 ",\n"
-            "      \"identity\": \"%s\",\n"
-            "      \"content-hash\": \"%s\"\n"
-            "   }",
-            m->base_id,
-            m->base_kind,
-            m->base_version != NULL ? m->base_version : "1",
-            m->base_revision != 0 ? m->base_revision : 1,
-            base_identity,
-            base_identity);
-        /* clang-format on */
-    }
+    if (m->base_id != NULL)
+        base = mft_manifest_base_json("base", m->base_id, m->base_kind, m->base_version, m->base_revision);
+    if (m->base_sdk_id != NULL)
+        base_sdk = mft_manifest_base_json("base-sdk",
+                                          m->base_sdk_id,
+                                          m->base_sdk_kind,
+                                          m->base_sdk_version,
+                                          m->base_sdk_revision);
     if (g_strcmp0(m->kind, "app") == 0 && !m->sdk)
         app = g_strdup_printf(",\n   \"app\": {\n      \"command\": \"%s\"\n   }",
                               m->command != NULL ? m->command : "app");
@@ -264,7 +287,7 @@ mft_manifest_json(const MftTestManifest *m)
         "   \"architecture\": \"%s\",\n"
         "   \"sdk\": %s,\n"
         "   \"identity\": \"%s\",\n"
-        "   \"content-hash\": \"%s\"%s%s%s%s,\n"
+        "   \"content-hash\": \"%s\"%s%s%s%s%s,\n"
         "   \"image\": {\n"
         "      \"file\": \"%s\",\n"
         "      \"size\": %zu,\n"
@@ -284,6 +307,7 @@ mft_manifest_json(const MftTestManifest *m)
         identity,
         m->content_hash != NULL ? m->content_hash : identity,
         base != NULL ? base : "",
+        base_sdk != NULL ? base_sdk : "",
         app != NULL ? app : "",
         integration != NULL ? integration : "",
         permissions != NULL ? permissions : "",
@@ -303,12 +327,14 @@ mft_manifest_json(const MftTestManifest *m)
  * @subdir: the subdirectory of the store for the component, %MF_STORE_APPS_SUBDIR, %MF_STORE_PLUGINS_SUBDIR
  *   or %MF_STORE_RUNTIMES_SUBDIR
  * @manifest: the manifest of the component
- * @base_version_dir: the version directory of the base the base link names, %NULL for "current"
+ * @base_version_dir: the version directory of the base that the `base` link points to,
+ *   or %NULL for "current"
  * @mode: the install mode to record, or %NULL for none
  *
- * Write a version directory of a component, as the install daemon leaves
- * it: with its image, its base link and its manifest. The version written
- * last becomes the current one, whether it is the newest or not.
+ * Write the version directory of a component the way the install daemon
+ * creates it, with the image link, the `base` and `base-sdk` links and the
+ * manifest. The version that is written last becomes the current version,
+ * even if a newer version is installed.
  */
 void
 mft_write_version(const char *root,
@@ -350,6 +376,16 @@ mft_write_version(const char *root,
                                       manifest->base_id,
                                       base_version_dir != NULL ? base_version_dir : "current");
         mft_make_link(base_target, base_link);
+    }
+    if (manifest->base_sdk_id != NULL) {
+        g_autofree char *link = g_build_filename(version_dir, "base-sdk", NULL);
+        g_autofree char *target = g_strdup_printf(
+            "../../../" MF_STORE_RUNTIMES_SUBDIR "/%s/%s-%" PRIu64,
+            manifest->base_sdk_id,
+            manifest->base_sdk_version != NULL ? manifest->base_sdk_version : "1",
+            manifest->base_sdk_revision != 0 ? manifest->base_sdk_revision : 1);
+
+        mft_make_link(target, link);
     }
     mft_write_file(manifest_path, manifest_json);
     if (mode != NULL) {
