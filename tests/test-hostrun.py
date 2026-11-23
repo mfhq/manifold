@@ -266,9 +266,22 @@ class HostRunTest(unittest.TestCase):
         os.close(null_fd)
 
         deadline = time.monotonic() + 10
-        while os.path.exists(f'/proc/{pid}'):
+        while self.is_running(pid):
             self.assertLess(time.monotonic(), deadline, 'the program is still running')
             time.sleep(0.05)
+
+    def is_running(self, pid):
+        """Check if a process is still running. A zombie process does not count as running.
+
+        The runner exits right after it has terminated its program, so the program becomes
+        an orphan. In a container, there may be no init process that reaps orphans, and the
+        terminated program then remains as a zombie."""
+        try:
+            with open(f'/proc/{pid}/stat', encoding='utf-8') as f:
+                # the process state is the field after the program name, which is in parentheses
+                return f.read().rsplit(')', 1)[1].split()[0] != 'Z'
+        except (FileNotFoundError, ProcessLookupError):
+            return False
 
     def call_as_application(self, permissions):
         """Run a program on the host from a process that is in the mount tree of an
