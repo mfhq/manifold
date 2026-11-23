@@ -1043,15 +1043,24 @@ mfd_service_install_bundle(MfdService *service, MfdRequest *request)
 /**
  * mfd_service_needs_privileged:
  *
- * Returns: %TRUE if the request needs a second authorization from polkit,
- *   because a component of its install set can gain root access to the host
+ * Check whether a request still needs the second authorization from polkit.
+ * An update only needs the second authorization if a component becomes
+ * privileged with the update. A component that is privileged already was
+ * approved by an admin when it was installed.
+ *
+ * Returns: %TRUE if the request needs the second authorization
  */
 static gboolean
-mfd_service_needs_privileged(MfdRequest *request)
+mfd_service_needs_privileged(MfdService *service, MfdRequest *request)
 {
-    return !mf_peer_is_privileged(request->uid) &&
-           !g_str_equal(request->action_id, MFD_POLKIT_ACTION_INSTALL_PRIVILEGED) &&
-           mfd_install_set_is_privileged(request->install_set);
+    if (mf_peer_is_privileged(request->uid) ||
+        g_str_equal(request->action_id, MFD_POLKIT_ACTION_INSTALL_PRIVILEGED))
+        return FALSE;
+    /* a request without a component to install is an update */
+    if (request->repo_request->component_id == NULL)
+        return mfd_manager_install_set_gains_privileges(service->manager, request->install_set);
+
+    return mfd_install_set_is_privileged(request->install_set);
 }
 
 /**
@@ -1060,12 +1069,13 @@ mfd_service_needs_privileged(MfdRequest *request)
  * Install the components of the request from the remotes, with the bases
  * they need, and reply to the call.
  *
- * Like for bundles, a component that can gain root access to the host needs
- * a second authorization. We can only ask for it once we have the manifest
- * of the component. If the installation fails because a repository has
- * changed since the last refresh, we refresh the remotes once and resolve
- * the request again. The new install set is checked for privileged
- * components again as well.
+ * Like for bundles, a privileged component needs a second authorization.
+ * We can only ask polkit for it once the request is resolved, as we need
+ * the manifest of the component to know whether it is privileged.
+ *
+ * If the installation fails because a repository has changed since the last
+ * refresh, we refresh the remotes once and resolve the request again. The
+ * new install set is then checked for privileged components again.
  */
 static int
 mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
@@ -1081,7 +1091,7 @@ mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
                 mfd_service_reply_error(request->link, error, NULL);
                 return 0;
             }
-            if (mfd_service_needs_privileged(request)) {
+            if (mfd_service_needs_privileged(service, request)) {
                 request->action_id = MFD_POLKIT_ACTION_INSTALL_PRIVILEGED;
                 mfd_service_ask_polkit(service, request);
                 return MFD_REQUEST_DEFERRED;
@@ -1325,7 +1335,7 @@ mfd_varlink_method_update(sd_varlink *link,
     request = mfd_request_new(link,
                               mfd_service_update,
                               MF_VARLINK_METHOD_UPDATE,
-                              MFD_POLKIT_ACTION_INSTALL,
+                              MFD_POLKIT_ACTION_UPDATE,
                               flags);
     request->repo_request = mfd_repo_request_new_update((const char *const *) component_ids);
 

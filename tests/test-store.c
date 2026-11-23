@@ -14,6 +14,7 @@
 #include "mf-store-private.h"
 #include "mft-sandbox.h"
 #include "mft-utils.h"
+#include "mfd-install-set.h"
 #include "mfd-manager.h"
 #include "mfd-store-writer.h"
 #include "mfd-utils.h"
@@ -891,6 +892,86 @@ test_writes_stay_below_their_directory(void)
 }
 
 /**
+ * mft_app_manifest_new:
+ * @version: the version of the application
+ * @integration: (nullable): the integration section as JSON
+ *
+ * Returns: (transfer full): the parsed manifest of a version of the application
+ */
+static MfManifest *
+mft_app_manifest_new(const char *version, const char *integration)
+{
+    g_autofree char *json = mft_manifest_json(&(MftTestManifest){.component_id = TEST_APP_ID,
+                                                                 .kind = "app",
+                                                                 .version = version,
+                                                                 .base_id = TEST_KIT_ID,
+                                                                 .base_kind = "kit",
+                                                                 .integration = integration});
+    g_autoptr(GError) error = NULL;
+    MfManifest *manifest = mf_manifest_new_from_data(json, -1, &error);
+
+    g_assert_no_error(error);
+    return manifest;
+}
+
+static void
+test_update_gains_privileges(Fixture *f, gconstpointer user_data)
+{
+    const char *rule = "{\"udev-rule\": [{\"path\": \"/app/lib/udev/rules.d/60-" TEST_APP_ID
+                       ".rules\", "
+                       "\"sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", "
+                       "\"blake3\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}";
+    g_autoptr(MfManifest) plain = mft_app_manifest_new("0.2.0", NULL);
+    g_autoptr(MfManifest) with_rule = mft_app_manifest_new("0.2.0", rule);
+    g_autoptr(MfManifest) other = NULL;
+    g_autofree char *with_rule_hash = mft_fake_hash("app with rule");
+    g_autoptr(MfdInstallSet) set = mfd_install_set_new();
+    g_autoptr(GError) error = NULL;
+    g_autofree char *other_json = mft_manifest_json(&(MftTestManifest){.component_id = "org.example.other",
+                                                                       .kind = "app",
+                                                                       .version = "1.0",
+                                                                       .base_id = TEST_KIT_ID,
+                                                                       .base_kind = "kit",
+                                                                       .integration = rule});
+
+    mft_install_usual(f);
+    g_assert_true(mf_store_load(store, &error));
+    g_assert_no_error(error);
+
+    /* an update without integration files that an admin has to approve */
+    mfd_install_set_add(set, plain, "app", "example-main");
+    g_assert_false(mfd_manager_install_set_gains_privileges(manager, set));
+
+    /* the installed version has no udev rule, so the update makes the application privileged */
+    mfd_install_set_add(set, with_rule, "app", "example-main");
+    g_assert_true(mfd_manager_install_set_gains_privileges(manager, set));
+    g_clear_pointer(&set, mfd_install_set_free);
+
+    /* once a version with the rule is installed, an update that has it needs no approval */
+    mft_add_image(with_rule_hash, 1024);
+    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
+                                   .kind = "app",
+                                   .version = "0.1.5",
+                                   .verity_root_hash = with_rule_hash,
+                                   .base_id = TEST_KIT_ID,
+                                   .base_kind = "kit",
+                                   .integration = rule},
+                NULL,
+                MF_INSTALL_MODE_AUTO);
+    g_assert_true(mf_store_load(store, &error));
+    g_assert_no_error(error);
+    set = mfd_install_set_new();
+    mfd_install_set_add(set, with_rule, "app", "example-main");
+    g_assert_false(mfd_manager_install_set_gains_privileges(manager, set));
+
+    /* a privileged component that is not installed at all needs approval */
+    other = mf_manifest_new_from_data(other_json, -1, &error);
+    g_assert_no_error(error);
+    mfd_install_set_add(set, other, "other", "example-main");
+    g_assert_true(mfd_manager_install_set_gains_privileges(manager, set));
+}
+
+/**
  * main:
  */
 int
@@ -915,6 +996,7 @@ main(int argc, char **argv)
     add_test("dependency-chain-is-removed", test_dependency_chain_removal);
     add_test("newest-app-stays", test_newest_app_stays);
     add_test("remove", test_remove);
+    add_test("update-gains-privileges", test_update_gains_privileges);
 #undef add_test
     g_test_add_func("/store/writes-stay-below-their-directory", test_writes_stay_below_their_directory);
 

@@ -17,6 +17,7 @@ G_BEGIN_DECLS
 #define MFD_POLKIT_ACTION_INSTALL            "org.freedesktop.manifold.install"
 #define MFD_POLKIT_ACTION_INSTALL_UNTRUSTED  "org.freedesktop.manifold.install-untrusted"
 #define MFD_POLKIT_ACTION_INSTALL_PRIVILEGED "org.freedesktop.manifold.install-privileged"
+#define MFD_POLKIT_ACTION_UPDATE             "org.freedesktop.manifold.update"
 #define MFD_POLKIT_ACTION_REMOVE             "org.freedesktop.manifold.remove"
 #define MFD_POLKIT_ACTION_MARK               "org.freedesktop.manifold.mark"
 #define MFD_POLKIT_ACTION_REFRESH            "org.freedesktop.manifold.refresh"

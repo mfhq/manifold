@@ -41,6 +41,19 @@
     </defaults>
   </action>
 
+  <!-- An update is only installed from the remote that the component was installed from, and an
+       administrator trusted this remote when the component was installed. If an update makes a
+       component privileged that was not privileged before, install-privileged is needed in addition -->
+  <action id="org.freedesktop.manifold.update">
+    <description>Update installed components</description>
+    <message>Authentication is required to update installed software</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+  </action>
+
   <!-- A remote is trusted to deliver software, so adding one is as dangerous as installing from it.
        Inspecting a repository changes nothing, but makes the service download from any https URL -->
   <action id="org.freedesktop.manifold.manage-remotes">

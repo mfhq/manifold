@@ -95,6 +95,9 @@ MfResult            *mfd_manager_install_set(MfdManager     *manager,
                                              MfdErrorDetail *ret_detail,
                                              GError        **error);
 
+gboolean             mfd_manager_install_set_gains_privileges(MfdManager    *manager,
+                                                              MfdInstallSet *set);
+
 MfdRemovalPlan      *mfd_manager_plan_removal(MfdManager     *manager,
                                               const char     *component_id,
                                               const char     *version,

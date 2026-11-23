@@ -1650,6 +1650,51 @@ mfd_manager_results_add_installed(MfdManager *manager, MfResult *result, GArray 
 }
 
 /**
+ * mfd_manager_install_set_gains_privileges:
+ * @manager: an #MfdManager
+ * @set: the install set of an update
+ *
+ * Check whether installing a set makes a component privileged that was not
+ * privileged before, which gives the component root access to the host.
+ * This is the case if a component of the set is privileged, and its newest
+ * installed version is not privileged or no version of it is installed.
+ *
+ * NOTE: We do not compare the integration files themselves. An admin approved
+ * the component when it was installed, and with that trusts its origin to
+ * update it, even if the update changes the integration files.
+ * The changes are reported with the update, see #MfUpdate.
+ *
+ * Returns: %TRUE if a component becomes privileged
+ */
+gboolean
+mfd_manager_install_set_gains_privileges(MfdManager *manager, MfdInstallSet *set)
+{
+    g_return_val_if_fail(MFD_IS_MANAGER(manager), TRUE);
+
+    for (guint i = 0; i < set->items->len; i++) {
+        MfdInstallItem *item = g_ptr_array_index(set->items, i);
+        MfIntegration *integration = mf_manifest_get_integration(item->manifest);
+        g_autoptr(MfComponent) newest = NULL;
+        g_autoptr(MfManifest) manifest = NULL;
+        MfIntegration *installed;
+
+        if (integration == NULL || !mf_integration_is_privileged(integration))
+            continue;
+
+        newest = mf_store_get_component(manager->store,
+                                        mf_manifest_get_component_id(item->manifest),
+                                        NULL,
+                                        NULL);
+        manifest = newest != NULL ? mf_component_fetch_manifest(newest, NULL) : NULL;
+        installed = manifest != NULL ? mf_manifest_get_integration(manifest) : NULL;
+        if (installed == NULL || !mf_integration_is_privileged(installed))
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+/**
  * mfd_manager_install_set:
  * @manager: an #MfdManager
  * @set: the components to install
