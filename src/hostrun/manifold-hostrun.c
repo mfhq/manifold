@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <locale.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>

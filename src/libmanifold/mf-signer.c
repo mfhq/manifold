@@ -8,6 +8,7 @@
 #include "mf-signer.h"
 #include "mf-signer-private.h"
 
+#include <stdint.h>
 #include <string.h>
 #include <glib/gi18n-lib.h>
 #include <glib/gstdio.h>
