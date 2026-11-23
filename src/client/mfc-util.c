@@ -268,6 +268,41 @@ mfc_on_progress(const MfProgress *progress, gpointer user_data)
 }
 
 /**
+ * mfc_print_disk_space:
+ *
+ * Print how much disk space of the store an operation used or freed.
+ */
+static void
+mfc_print_disk_space(MfResult *result)
+{
+    uint64_t added = mf_result_get_bytes_added(result);
+    uint64_t freed = mf_result_get_bytes_freed(result);
+    g_autofree char *size = NULL;
+
+    if (added == 0 && freed == 0)
+        return;
+
+    if (freed == 0) {
+        size = g_format_size(added);
+        g_print(_("Disk space used: %s\n"), size);
+    } else if (added == 0) {
+        size = g_format_size(freed);
+        g_print(_("Disk space freed: %s\n"), size);
+    } else if (added > freed) {
+        /* the operation both added and removed images, so we show the difference */
+        size = g_format_size(added - freed);
+        /* TRANSLATORS: with how much more disk space is used than before the operation */
+        g_print(_("Disk space used: %s more\n"), size);
+    } else if (added < freed) {
+        size = g_format_size(freed - added);
+        /* TRANSLATORS: with how much less disk space is used than before the operation */
+        g_print(_("Disk space used: %s less\n"), size);
+    } else {
+        g_print("%s\n", _("Disk space used: unchanged"));
+    }
+}
+
+/**
  * mfc_print_result:
  *
  * Print the results of an operation.
@@ -294,16 +329,7 @@ mfc_print_result(MfResult *result)
                             "Removed %u images that are no longer used.\n",
                             n_images),
                 n_images);
-    if (mf_result_get_bytes_added(result) > 0) {
-        g_autofree char *size = g_format_size(mf_result_get_bytes_added(result));
-
-        g_print(_("Disk space used: %s\n"), size);
-    }
-    if (mf_result_get_bytes_freed(result) > 0) {
-        g_autofree char *size = g_format_size(mf_result_get_bytes_freed(result));
-
-        g_print(_("Disk space freed: %s\n"), size);
-    }
+    mfc_print_disk_space(result);
     for (guint i = 0; i < warnings->len; i++) {
         /* warnings can contain text from files of a bundle, so we escape control characters */
         g_autofree char *shown = g_strescape(g_ptr_array_index(warnings, i), NULL);
