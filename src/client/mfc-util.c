@@ -11,6 +11,8 @@
 #include <string.h>
 #include <glib/gi18n-lib.h>
 
+#include "mf-utils-private.h"
+
 #define BIN_NAME "manifold"
 
 void
@@ -243,6 +245,10 @@ mfc_on_progress(const MfProgress *progress, gpointer user_data)
         /* TRANSLATORS: label of a progress bar, with the component and its version */
         label = g_strdup_printf(_("Installing %s %s"), subject, version ? version : "");
         break;
+    case MF_ACTION_UPDATE:
+        /* TRANSLATORS: label of a progress bar, with the component and the version it is updated to */
+        label = g_strdup_printf(_("Updating %s %s"), subject, version ? version : "");
+        break;
     case MF_ACTION_REMOVE:
         /* TRANSLATORS: label of a progress bar, with the component and its version */
         label = g_strdup_printf(_("Removing %s %s"), subject, version ? version : "");
@@ -265,6 +271,68 @@ mfc_on_progress(const MfProgress *progress, gpointer user_data)
     mfc_progress_bar_update(ctx->progress_bar,
                             mf_item_progress_get_percent(item),
                             mf_item_progress_get_bytes_done(item));
+}
+
+/**
+ * mfc_print_updates:
+ * @updates: (element-type MfUpdate): the components that an operation updated
+ *
+ * Print a table of updated components, one per line, with the previous and
+ * the new version of each component. Below the table, we list the system
+ * services and udev rules that an update added to a component or removed
+ * from it.
+ */
+static void
+mfc_print_updates(GPtrArray *updates)
+{
+    g_autoptr(GString) table = g_string_new(NULL);
+    /* the kind column fits the longest kind, "platform" */
+    size_t kind_width = 8;
+    size_t id_width = 0;
+
+    for (guint i = 0; i < updates->len; i++) {
+        MfComponent *component = mf_update_get_component(g_ptr_array_index(updates, i));
+
+        id_width = MAX(id_width, strlen(mf_component_get_id(component)));
+    }
+
+    for (guint i = 0; i < updates->len; i++) {
+        MfUpdate *update = g_ptr_array_index(updates, i);
+        MfComponent *component = mf_update_get_component(update);
+
+        mfc_string_append_column(table,
+                                 mf_component_kind_to_string(mf_component_get_kind(component)),
+                                 kind_width);
+        mfc_string_append_column(table, mf_component_get_id(component), id_width);
+        g_string_append_printf(table,
+                               "%s → %s\n",
+                               mf_update_get_previous_version(update),
+                               mf_component_get_full_version(component));
+    }
+    g_print("%s", table->str);
+
+    for (guint i = 0; i < updates->len; i++) {
+        MfUpdate *update = g_ptr_array_index(updates, i);
+        const char *component_id = mf_component_get_id(mf_update_get_component(update));
+        GPtrArray *added = mf_update_get_integration_added(update);
+        GPtrArray *removed = mf_update_get_integration_removed(update);
+
+        /* the names come from the manifest of a component, so we escape control characters */
+        if (added->len > 0) {
+            g_autofree char *names = mf_ptr_array_join_strings(added, ", ");
+            g_autofree char *shown = g_strescape(names, NULL);
+
+            /* TRANSLATORS: a component, and the system services and udev rules that its update added */
+            g_print(_("%s now also installs: %s\n"), component_id, shown);
+        }
+        if (removed->len > 0) {
+            g_autofree char *names = mf_ptr_array_join_strings(removed, ", ");
+            g_autofree char *shown = g_strescape(names, NULL);
+
+            /* TRANSLATORS: a component, and the system services and udev rules that its update removed */
+            g_print(_("%s no longer installs: %s\n"), component_id, shown);
+        }
+    }
 }
 
 /**
@@ -291,11 +359,11 @@ mfc_print_disk_space(MfResult *result)
     } else if (added > freed) {
         /* the operation both added and removed images, so we show the difference */
         size = g_format_size(added - freed);
-        /* TRANSLATORS: with how much more disk space is used than before the operation */
+        /* TRANSLATORS: %s is the size by which the used disk space grew, like "12.0 MB" */
         g_print(_("Disk space used: %s more\n"), size);
     } else if (added < freed) {
         size = g_format_size(freed - added);
-        /* TRANSLATORS: with how much less disk space is used than before the operation */
+        /* TRANSLATORS: %s is the size by which the used disk space shrank, like "12.0 MB" */
         g_print(_("Disk space used: %s less\n"), size);
     } else {
         g_print("%s\n", _("Disk space used: unchanged"));
@@ -310,11 +378,16 @@ mfc_print_disk_space(MfResult *result)
 void
 mfc_print_result(MfResult *result)
 {
+    GPtrArray *updated = mf_result_get_updated(result);
     GPtrArray *installed = mf_result_get_installed(result);
     GPtrArray *removed = mf_result_get_removed(result);
     GPtrArray *warnings = mf_result_get_warnings(result);
     guint n_images = mf_result_get_removed_images(result)->len;
 
+    if (updated->len > 0) {
+        g_print("%s\n", _("Updated:"));
+        mfc_print_updates(updated);
+    }
     if (installed->len > 0) {
         g_print("%s\n", _("Installed:"));
         mfc_print_components(installed, FALSE);
@@ -323,7 +396,8 @@ mfc_print_result(MfResult *result)
         g_print("%s\n", _("Removed:"));
         mfc_print_components(removed, FALSE);
     }
-    if (n_images > 0)
+    /* we do not mention removed images that only belonged to versions which an update replaced */
+    if (n_images > 0 && (updated->len == 0 || removed->len > 0))
         g_print(g_dngettext(GETTEXT_PACKAGE,
                             "Removed %u image that is no longer used.\n",
                             "Removed %u images that are no longer used.\n",

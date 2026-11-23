@@ -614,7 +614,8 @@ mfc_run_update_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
     }
 
     /* components that could not be updated are listed in the warnings, the command still succeeds */
-    if (mf_result_get_installed(result)->len == 0 && mf_result_get_warnings(result)->len == 0) {
+    if (mf_result_get_updated(result)->len == 0 && mf_result_get_installed(result)->len == 0 &&
+        mf_result_get_warnings(result)->len == 0) {
         g_print("%s\n", _("There are no updates."));
         return MFC_EXIT_SUCCESS;
     }

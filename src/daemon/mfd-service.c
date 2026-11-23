@@ -431,21 +431,65 @@ mfd_varlink_build_strings_array(GPtrArray *strings, sd_json_variant **ret)
 }
 
 /**
+ * mfd_varlink_build_updates_array:
+ * @updates: (element-type MfUpdate): the components that an operation updated
+ * @ret_array: (out): the JSON array
+ *
+ * Returns: 0, or a negative errno
+ */
+static int
+mfd_varlink_build_updates_array(GPtrArray *updates, sd_json_variant **ret_array)
+{
+    g_autoptr(sd_json_variant) array = NULL;
+    int r;
+
+    for (guint i = 0; i < updates->len; i++) {
+        MfUpdate *update = g_ptr_array_index(updates, i);
+        g_autoptr(sd_json_variant) components = NULL;
+        g_autoptr(sd_json_variant) added = NULL;
+        g_autoptr(sd_json_variant) removed = NULL;
+
+        if ((r = mfd_varlink_append_component(&components, mf_update_get_component(update))) < 0)
+            return r;
+        if ((r = mfd_varlink_build_strings_array(mf_update_get_integration_added(update), &added)) < 0)
+            return r;
+        if ((r = mfd_varlink_build_strings_array(mf_update_get_integration_removed(update), &removed)) < 0)
+            return r;
+        r = sd_json_variant_append_arraybo(
+            &array,
+            SD_JSON_BUILD_PAIR_VARIANT("component", sd_json_variant_by_index(components, 0)),
+            SD_JSON_BUILD_PAIR_STRING("previousVersion", mf_update_get_previous_version(update)),
+            SD_JSON_BUILD_PAIR_VARIANT("integrationAdded", added),
+            SD_JSON_BUILD_PAIR_VARIANT("integrationRemoved", removed));
+        if (r < 0)
+            return r;
+    }
+    if ((r = mfd_json_ensure_array(&array)) < 0)
+        return r;
+
+    *ret_array = g_steal_pointer(&array);
+    return 0;
+}
+
+/**
  * mfd_service_reply_result:
  *
- * Send the final reply of an operation: the components it installed and
- * removed, the images it removed, the disk space it used and freed, and what
- * went wrong without failing it.
+ * Send the final reply of an operation: the components it updated, installed
+ * and removed, the images it removed, the disk space it used and freed, and
+ * its warnings.
  */
 static int
 mfd_service_reply_result(sd_varlink *link, MfResult *result)
 {
+    g_autoptr(sd_json_variant) updated = NULL;
     g_autoptr(sd_json_variant) installed = NULL;
     g_autoptr(sd_json_variant) removed = NULL;
     g_autoptr(sd_json_variant) removed_images = NULL;
     g_autoptr(sd_json_variant) warnings = NULL;
     int r;
 
+    if ((r = mfd_varlink_build_updates_array(mf_result_get_updated(result), &updated)) < 0)
+        return r;
     if ((r = mfd_varlink_build_components_array(mf_result_get_installed(result), &installed)) < 0)
         return r;
     if ((r = mfd_varlink_build_components_array(mf_result_get_removed(result), &removed)) < 0)
@@ -459,7 +503,8 @@ mfd_service_reply_result(sd_varlink *link, MfResult *result)
         link,
         SD_JSON_BUILD_PAIR(
             "result",
-            SD_JSON_BUILD_OBJECT(SD_JSON_BUILD_PAIR_VARIANT("installed", installed),
+            SD_JSON_BUILD_OBJECT(SD_JSON_BUILD_PAIR_VARIANT("updated", updated),
+                                 SD_JSON_BUILD_PAIR_VARIANT("installed", installed),
                                  SD_JSON_BUILD_PAIR_VARIANT("removed", removed),
                                  SD_JSON_BUILD_PAIR_VARIANT("removedImages", removed_images),
                                  SD_JSON_BUILD_PAIR_UNSIGNED("bytesAdded", mf_result_get_bytes_added(result)),

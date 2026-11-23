@@ -52,12 +52,14 @@ G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC(MfdErrorDetail,
  * @component: a version of a component that will be deleted
  * @action: the reason for the removal: %MF_ACTION_REMOVE if the removal was
  *   requested, %MF_ACTION_CLEANUP if nothing needs the version anymore
+ * @superseded: %TRUE if the version is removed as part of an update of the component
  *
  * One version of a component that a removal deletes.
  */
 typedef struct {
     MfComponent *component;
     MfAction     action;
+    gboolean     superseded;
 } MfdRemovalItem;
 
 /**

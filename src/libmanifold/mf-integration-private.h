@@ -19,4 +19,10 @@ gboolean       mf_integration_check(MfIntegration *integration,
                                     const char    *component_id,
                                     GError       **error);
 
+MF_INTERNAL_VISIBLE
+void mf_integration_diff_privileged(MfIntegration *previous,
+                                    MfIntegration *current,
+                                    GPtrArray     *added,
+                                    GPtrArray     *removed);
+
 MF_END_PRIVATE_DECLS

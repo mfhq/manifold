@@ -178,6 +178,23 @@ test_action_strings(void)
     g_assert_cmpint(mf_action_from_string("bogus"), ==, MF_ACTION_UNKNOWN);
 }
 
+static void
+test_ptr_array_join_strings(void)
+{
+    g_autoptr(GPtrArray) strings = g_ptr_array_new();
+    g_autofree char *none = mf_ptr_array_join_strings(strings, ", ");
+    g_autofree char *one = NULL;
+    g_autofree char *two = NULL;
+
+    g_assert_cmpstr(none, ==, "");
+    g_ptr_array_add(strings, "a");
+    one = mf_ptr_array_join_strings(strings, ", ");
+    g_assert_cmpstr(one, ==, "a");
+    g_ptr_array_add(strings, "b");
+    two = mf_ptr_array_join_strings(strings, ", ");
+    g_assert_cmpstr(two, ==, "a, b");
+}
+
 int
 main(int argc, char **argv)
 {
@@ -193,6 +210,7 @@ main(int argc, char **argv)
     g_test_add_func("/utils/signing-key-name-is-valid", test_signing_key_name_is_valid);
     g_test_add_func("/utils/component-kind-strings", test_component_kind_strings);
     g_test_add_func("/utils/action-strings", test_action_strings);
+    g_test_add_func("/utils/ptr-array-join-strings", test_ptr_array_join_strings);
 
     return g_test_run();
 }

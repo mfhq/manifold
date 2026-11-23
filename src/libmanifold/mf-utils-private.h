@@ -91,5 +91,8 @@ gboolean mf_split_full_version(const char *name,
 
 gboolean mf_str_consists_of(const char *str,
                             const char *chars);
+MF_INTERNAL_VISIBLE
+char *mf_ptr_array_join_strings(GPtrArray  *strings,
+                                const char *separator);
 
 MF_END_PRIVATE_DECLS

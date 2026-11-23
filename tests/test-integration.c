@@ -9,6 +9,7 @@
 #include <string.h>
 #include <manifold.h>
 
+#include "mf-integration-private.h"
 #include "mft-utils.h"
 
 #define SHA256_A "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -110,6 +111,57 @@ test_privileged(void)
     g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_DESKTOP_ENTRY));
     g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_UNKNOWN));
     g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_LAST));
+}
+
+static void
+test_diff_privileged(void)
+{
+    g_autoptr(GError) error = NULL;
+    g_autoptr(GPtrArray) added = g_ptr_array_new_with_free_func(g_free);
+    g_autoptr(GPtrArray) removed = g_ptr_array_new_with_free_func(g_free);
+    g_autoptr(MfManifest) previous = NULL;
+    g_autoptr(MfManifest) current = NULL;
+
+    previous = mft_manifest_new(
+        "{\"udev-rule\": [{\"path\": \"/app/lib/udev/rules.d/60-com.example.app.rules\", " HASHES
+        "}], "
+        "\"systemd-unit-system\": [{\"path\": \"/app/lib/systemd/system/com.example.app.service\", " HASHES
+        "}], "
+        "\"systemd-unit-user\": [{\"path\": \"/app/lib/systemd/user/com.example.app.service\", " HASHES "}]}",
+        &error);
+    g_assert_no_error(error);
+    current = mft_manifest_new(
+        "{\"udev-rule\": [{\"path\": \"/app/lib/udev/rules.d/60-com.example.app.rules\", " HASHES
+        "}], "
+        "\"systemd-unit-system\": [{\"path\": \"/app/lib/systemd/system/com.example.app.timer\", " HASHES
+        "}]}",
+        &error);
+    g_assert_no_error(error);
+
+    /* the udev rule is in both versions and a user unit is not privileged, so neither is reported */
+    mf_integration_diff_privileged(mf_manifest_get_integration(previous),
+                                   mf_manifest_get_integration(current),
+                                   added,
+                                   removed);
+    g_assert_cmpuint(added->len, ==, 1);
+    g_assert_cmpstr(g_ptr_array_index(added, 0), ==, "com.example.app.timer");
+    g_assert_cmpuint(removed->len, ==, 1);
+    g_assert_cmpstr(g_ptr_array_index(removed, 0), ==, "com.example.app.service");
+
+    /* a version without an integration section installs nothing */
+    g_ptr_array_set_size(added, 0);
+    g_ptr_array_set_size(removed, 0);
+    mf_integration_diff_privileged(NULL, mf_manifest_get_integration(current), added, removed);
+    g_assert_cmpuint(added->len, ==, 2);
+    g_assert_cmpuint(removed->len, ==, 0);
+
+    g_ptr_array_set_size(added, 0);
+    mf_integration_diff_privileged(mf_manifest_get_integration(current),
+                                   mf_manifest_get_integration(current),
+                                   added,
+                                   removed);
+    g_assert_cmpuint(added->len, ==, 0);
+    g_assert_cmpuint(removed->len, ==, 0);
 }
 
 static void
@@ -1282,6 +1334,7 @@ main(int argc, char **argv)
 
     g_test_add_func("/integration/kind-strings", test_kind_strings);
     g_test_add_func("/integration/privileged", test_privileged);
+    g_test_add_func("/integration/diff-privileged", test_diff_privileged);
     g_test_add_func("/integration/export-paths", test_export_paths);
     g_test_add_func("/integration/section", test_section);
     g_test_add_func("/integration/no-section", test_no_section);

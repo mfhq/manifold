@@ -502,6 +502,54 @@ mf_integration_is_privileged(MfIntegration *integration)
 }
 
 /**
+ * mf_integration_add_missing_privileged:
+ * @integration: (nullable): the integration to list privileged files of
+ * @other: (nullable): the integration to compare with
+ * @names: (element-type utf8): the array to add the file names to
+ *
+ * Add the name of every privileged file of @integration that @other does not have.
+ */
+static void
+mf_integration_add_missing_privileged(MfIntegration *integration, MfIntegration *other, GPtrArray *names)
+{
+    for (guint i = 0; integration != NULL && i < integration->files->len; i++) {
+        MfIntegrationFile *file = g_ptr_array_index(integration->files, i);
+        gboolean found = FALSE;
+
+        if (!mf_integration_kind_is_privileged(file->kind))
+            continue;
+        for (guint j = 0; other != NULL && !found && j < other->files->len; j++) {
+            MfIntegrationFile *other_file = g_ptr_array_index(other->files, j);
+
+            found = other_file->kind == file->kind && g_str_equal(other_file->path, file->path);
+        }
+        if (!found)
+            g_ptr_array_add(names, g_path_get_basename(file->path));
+    }
+}
+
+/**
+ * mf_integration_diff_privileged:
+ * @previous: (nullable): the integration of the previous version of a component
+ * @current: (nullable): the integration of the new version of the component
+ * @added: (element-type utf8): the array to add the names of files that only @current has
+ * @removed: (element-type utf8): the array to add the names of files that only @previous has
+ *
+ * Find the privileged files that were added or removed between two versions
+ * of a component. We only compare the kinds and paths of the files, and not
+ * their contents.
+ */
+void
+mf_integration_diff_privileged(MfIntegration *previous,
+                               MfIntegration *current,
+                               GPtrArray *added,
+                               GPtrArray *removed)
+{
+    mf_integration_add_missing_privileged(current, previous, added);
+    mf_integration_add_missing_privileged(previous, current, removed);
+}
+
+/**
  * mf_integration_build_export_path:
  * @kind: the kind of the file
  * @path: the path of the file in the image

@@ -35,6 +35,8 @@ mf_action_to_string(MfAction action)
     switch (action) {
     case MF_ACTION_INSTALL:
         return "install";
+    case MF_ACTION_UPDATE:
+        return "update";
     case MF_ACTION_REMOVE:
         return "remove";
     case MF_ACTION_CLEANUP:
@@ -57,6 +59,8 @@ mf_action_from_string(const char *action_str)
 {
     if (g_strcmp0(action_str, "install") == 0)
         return MF_ACTION_INSTALL;
+    if (g_strcmp0(action_str, "update") == 0)
+        return MF_ACTION_UPDATE;
     if (g_strcmp0(action_str, "remove") == 0)
         return MF_ACTION_REMOVE;
     if (g_strcmp0(action_str, "cleanup") == 0)

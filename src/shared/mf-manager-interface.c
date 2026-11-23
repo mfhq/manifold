@@ -63,6 +63,8 @@ static SD_VARLINK_DEFINE_ENUM_TYPE(
     Action,
     SD_VARLINK_FIELD_COMMENT("A component is installed."),
     SD_VARLINK_DEFINE_ENUM_VALUE(install),
+    SD_VARLINK_FIELD_COMMENT("A component is updated to a newer version."),
+    SD_VARLINK_DEFINE_ENUM_VALUE(update),
     SD_VARLINK_FIELD_COMMENT("A component is removed on request."),
     SD_VARLINK_DEFINE_ENUM_VALUE(remove),
     SD_VARLINK_FIELD_COMMENT("An unused component is removed."),
@@ -93,8 +95,24 @@ static SD_VARLINK_DEFINE_STRUCT_TYPE(
     SD_VARLINK_DEFINE_FIELD_BY_TYPE(item, ItemProgress, SD_VARLINK_NULLABLE));
 
 static SD_VARLINK_DEFINE_STRUCT_TYPE(
+    Update,
+    SD_VARLINK_FIELD_COMMENT("The component, in the version that was installed."),
+    SD_VARLINK_DEFINE_FIELD_BY_TYPE(component, Component, 0),
+    SD_VARLINK_FIELD_COMMENT("The version that was current before, with its revision: '<version>-<rev>'."),
+    SD_VARLINK_DEFINE_FIELD(previousVersion, SD_VARLINK_STRING, 0),
+    SD_VARLINK_FIELD_COMMENT("The system services and udev rules that the component installs on the host now, "
+                             "and that the previous version did not install."),
+    SD_VARLINK_DEFINE_FIELD(integrationAdded, SD_VARLINK_STRING, SD_VARLINK_ARRAY),
+    SD_VARLINK_FIELD_COMMENT("The system services and udev rules that the previous version installed on the host, "
+                             "and that the component no longer installs."),
+    SD_VARLINK_DEFINE_FIELD(integrationRemoved, SD_VARLINK_STRING, SD_VARLINK_ARRAY));
+
+static SD_VARLINK_DEFINE_STRUCT_TYPE(
     Result,
-    SD_VARLINK_FIELD_COMMENT("The components that were installed."),
+    SD_VARLINK_FIELD_COMMENT("The components that were updated: a newer version was installed, and the "
+                             "versions it supersedes were removed. They are not listed as installed or removed."),
+    SD_VARLINK_DEFINE_FIELD_BY_TYPE(updated, Update, SD_VARLINK_ARRAY),
+    SD_VARLINK_FIELD_COMMENT("The components that are new: no version of them was installed before."),
     SD_VARLINK_DEFINE_FIELD_BY_TYPE(installed, Component, SD_VARLINK_ARRAY),
     SD_VARLINK_FIELD_COMMENT("The components that were removed, including dependencies that were no longer needed."),
     SD_VARLINK_DEFINE_FIELD_BY_TYPE(removed, Component, SD_VARLINK_ARRAY),
@@ -376,6 +394,8 @@ SD_VARLINK_DEFINE_INTERFACE(
     &vl_type_ItemProgress,
     SD_VARLINK_SYMBOL_COMMENT("Progress of an operation."),
     &vl_type_Progress,
+    SD_VARLINK_SYMBOL_COMMENT("A component that was updated to a newer version."),
+    &vl_type_Update,
     SD_VARLINK_SYMBOL_COMMENT("Result of an operation."),
     &vl_type_Result,
     SD_VARLINK_SYMBOL_COMMENT("Result of an operation that does not install or remove components."),

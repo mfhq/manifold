@@ -11,6 +11,7 @@
 #include <appstream.h>
 
 #include "mf-component-private.h"
+#include "mf-integration-private.h"
 #include "mf-manifest-private.h"
 #include "mf-result-private.h"
 #include "mf-store-private.h"
@@ -230,6 +231,18 @@ mfd_progress_end_item(MfdProgressTracker *tracker)
 }
 
 /**
+ * mfd_progress_skip_item:
+ *
+ * Count an item as done, without reporting it as an item of its own.
+ */
+static void
+mfd_progress_skip_item(MfdProgressTracker *tracker)
+{
+    tracker->done++;
+    mfd_progress_report(tracker);
+}
+
+/**
  * mfd_progress_split_last_item:
  * @n_items: the number of items to split the last item into
  *
@@ -297,6 +310,9 @@ typedef struct {
     gboolean skip;      /* the item is installed already or is not needed, so there is nothing to do */
     gboolean add_image; /* the image has to be added to the store */
     MfBaseLink *base;   /* link to the base of the component, NULL for a core */
+    /* the version of the same component that is installed now, if the item is newer than it.
+     * NULL if the component is new, or if a newer version of it is installed already.*/
+    MfComponent *previous;
 } MfdInstallPlan;
 
 /**
@@ -306,6 +322,7 @@ static void
 mfd_install_plan_clear(MfdInstallPlan *iplan)
 {
     g_clear_pointer(&iplan->base, mf_base_link_free);
+    g_clear_object(&iplan->previous);
 }
 
 /**
@@ -708,6 +725,7 @@ mfd_manager_plan_item_install(MfdManager *manager,
     gboolean dependency = item->is_dependency;
     g_autoptr(MfComponent) other_kind = NULL;
     g_autoptr(MfComponent) existing = NULL;
+    g_autoptr(MfComponent) newest = NULL;
 
     if (!g_str_equal(mf_manifest_get_architecture(manifest), mf_get_host_architecture())) {
         mfd_set_error_wrong_architecture(error,
@@ -755,6 +773,13 @@ mfd_manager_plan_item_install(MfdManager *manager,
         }
         g_info("%s %s was a dependency, and is installed on purpose now", component_id, version);
     }
+
+    newest = mf_store_get_component(manager->store, component_id, NULL, NULL);
+    if (newest != NULL && mf_version_compare_with_rev(mf_component_get_version(newest),
+                                                      mf_component_get_revision(newest),
+                                                      version,
+                                                      mf_manifest_get_revision(manifest)) < 0)
+        iplan->previous = g_steal_pointer(&newest);
 
     /* a kit that came along with an application is not needed if the application can run on
      * a newer version that we already have in the store */
@@ -866,8 +891,10 @@ mfd_removal_plan_new(void)
  * @action: the reason for the removal, see #MfdRemovalItem
  *
  * Add a component to a removal plan.
+ *
+ * Returns: (transfer none): the new item of the plan
  */
-static void
+static MfdRemovalItem *
 mfd_removal_plan_add_item(MfdRemovalPlan *rmplan, MfComponent *component, MfAction action)
 {
     MfdRemovalItem *item = g_new0(MfdRemovalItem, 1);
@@ -876,6 +903,8 @@ mfd_removal_plan_add_item(MfdRemovalPlan *rmplan, MfComponent *component, MfActi
     item->action = action;
     g_ptr_array_add(rmplan->items, item);
     g_hash_table_add(rmplan->cpts_set, item->component);
+
+    return item;
 }
 
 /**
@@ -1261,7 +1290,7 @@ mfd_manager_plan_supersede(MfdManager *manager, GArray *plans, GError **error)
         MfComponent *component = g_ptr_array_index(installed, i);
 
         if (g_hash_table_contains(superseded, component))
-            mfd_removal_plan_add_item(rmplan, component, MF_ACTION_CLEANUP);
+            mfd_removal_plan_add_item(rmplan, component, MF_ACTION_CLEANUP)->superseded = TRUE;
     }
 
     /* if no version is superseded, we do not clean up anything else either */
@@ -1273,11 +1302,14 @@ mfd_manager_plan_supersede(MfdManager *manager, GArray *plans, GError **error)
 
 /**
  * mfd_manager_execute_removal:
- * @result: where to add what was removed
+ * @result: the result to add the removed components and images to
  *
  * Execute a removal plan: remove the version directories first, then the images.
  *
- * Progress is reported for the components only.
+ * Progress is reported for the components only. A superseded version is
+ * reported as part of the update that replaced it (see #MfUpdate), so no
+ * progress item is reported for it, and it is not added to the removed
+ * components of @result.
  */
 static gboolean
 mfd_manager_execute_removal(MfdManager *manager,
@@ -1288,6 +1320,13 @@ mfd_manager_execute_removal(MfdManager *manager,
 {
     for (guint i = 0; i < rmplan->items->len; i++) {
         MfdRemovalItem *item = g_ptr_array_index(rmplan->items, i);
+
+        if (item->superseded) {
+            if (!mfd_store_writer_remove_component(manager->writer, item->component, error))
+                return FALSE;
+            mfd_progress_skip_item(tracker);
+            continue;
+        }
 
         mfd_progress_begin_item(tracker,
                                 item->action,
@@ -1444,7 +1483,11 @@ mfd_manager_execute_install_plan(MfdManager *manager,
     }
 
     if (iplan->add_image)
-        mfd_progress_begin_item(tracker, MF_ACTION_INSTALL, component_id, full_version, image_size);
+        mfd_progress_begin_item(tracker,
+                                iplan->previous != NULL ? MF_ACTION_UPDATE : MF_ACTION_INSTALL,
+                                component_id,
+                                full_version,
+                                image_size);
 
     /* a component of the set that was installed before may have added the same image already */
     if (iplan->add_image && !mf_store_has_image(manager->store, verity_hash)) {
@@ -1563,11 +1606,12 @@ mfd_manager_plan_install(MfdManager *manager, MfdInstallSet *set, MfdErrorDetail
 
 /**
  * mfd_manager_results_add_installed:
- * @result: where to add what was installed
+ * @result: the result to add the installed components to
  * @plans: (element-type MfdInstallPlan): the plans of the installation
  *
- * Add the components of the set that the installation installed to
- * @result, but not the dependencies that were there already.
+ * Add the components that were installed from the set to @result.
+ * Dependencies that were installed already are not added. If an older
+ * version of a component was installed, the component is added as an update.
  */
 static void
 mfd_manager_results_add_installed(MfdManager *manager, MfResult *result, GArray *plans)
@@ -1586,7 +1630,22 @@ mfd_manager_results_add_installed(MfdManager *manager, MfResult *result, GArray 
         if (component == NULL ||
             g_strcmp0(mf_component_get_verity_hash(component), mf_manifest_get_verity_hash(manifest)) != 0)
             continue;
-        mf_result_add_installed(result, component);
+        if (plan->previous == NULL) {
+            mf_result_add_installed(result, component);
+            continue;
+        }
+
+        g_autoptr(MfUpdate) update = mf_update_new(component, mf_component_get_full_version(plan->previous));
+        g_autoptr(MfManifest) previous_manifest = mf_component_fetch_manifest(plan->previous, NULL);
+
+        /* NOTE: The previous version may be removed already, but its manifest was loaded together
+         * with the store, so we can still read its integration. */
+        mf_integration_diff_privileged(
+            previous_manifest != NULL ? mf_manifest_get_integration(previous_manifest) : NULL,
+            mf_manifest_get_integration(manifest),
+            mf_update_get_integration_added(update),
+            mf_update_get_integration_removed(update));
+        mf_result_add_updated(result, update);
     }
 }
 

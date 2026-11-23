@@ -801,3 +801,27 @@ mf_str_consists_of(const char *str, const char *chars)
 {
     return str[0] != '\0' && str[strspn(str, chars)] == '\0';
 }
+
+/**
+ * mf_ptr_array_join_strings:
+ * @strings: (element-type utf8): some strings
+ * @separator: the string to insert between two strings
+ *
+ * Join the strings of an array, like g_strjoinv() does for a %NULL-terminated
+ * array of strings.
+ *
+ * Returns: (transfer full): the joined strings, an empty string for an empty array
+ */
+char *
+mf_ptr_array_join_strings(GPtrArray *strings, const char *separator)
+{
+    g_autoptr(GString) joined = g_string_new(NULL);
+
+    for (guint i = 0; i < strings->len; i++) {
+        if (i > 0)
+            g_string_append(joined, separator);
+        g_string_append(joined, g_ptr_array_index(strings, i));
+    }
+
+    return g_string_free(g_steal_pointer(&joined), FALSE);
+}

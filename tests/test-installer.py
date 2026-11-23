@@ -408,7 +408,15 @@ class InstallTest(InstallerTestCase):
 
         # the application is auto, and so is the kit that was installed with it
         out = self.install(kit, app)
-        self.assertIn('Removed:', out)
+        # the old revisions are part of the update, and are not listed as removed
+        self.assertIn(
+            [APP_ID, f'0.1.0-{self.app.revision}', '→', f'0.1.0-{app.revision}'],
+            [line.split()[1:] for line in out[out.index('Updated:') :].splitlines()],
+        )
+        self.assertNotIn('Installed:', out)
+        self.assertNotIn('Removed', out)
+        # used and freed disk space are reported together in one line
+        self.assertEqual(out.count('Disk space'), 1)
         self.assertEqual(self.version_dirs('apps', APP_ID), [f'0.1.0-{app.revision}'])
         self.assertEqual(
             self.version_dirs('runtimes', kit.component), [f'{kit.version}-{kit.revision}']
@@ -425,7 +433,19 @@ class InstallTest(InstallerTestCase):
         # the progress replies can only be checked on a direct call
         replies = self.install_file(self.bundle(kit, app))
         progress = [r['progress'] for r in replies[:-1]]
-        self.assertIn('cleanup', [p['item']['action'] for p in progress if 'item' in p])
+        # the removal of a superseded version is part of its update, and is not reported as a
+        # separate item
+        self.assertEqual({p['item']['action'] for p in progress if 'item' in p}, {'update'})
+        updated = replies[-1]['result']['updated']
+        self.assertEqual(
+            [(u['component']['componentId'], u['previousVersion']) for u in updated],
+            [
+                (kit.component, f'{kit.version}-{self.kit.revision}'),
+                (APP_ID, f'0.1.0-{self.app.revision}'),
+            ],
+        )
+        self.assertEqual(replies[-1]['result']['installed'], [])
+        self.assertEqual(replies[-1]['result']['removed'], [])
         # the removal of superseded versions does not reset the progress
         percents = [p['percent'] for p in progress]
         self.assertEqual(percents, sorted(percents))
@@ -466,7 +486,11 @@ class InstallTest(InstallerTestCase):
 
         # the kit stays installed, as the new version uses it too
         out = self.install(self.kit, self.app2)
-        self.assertIn(f'app      {APP_ID} 0.1.0', out[out.index('Removed:') :])
+        self.assertIn(
+            f'app      {APP_ID} 0.1.0-{self.app.revision} → 0.2.0-{self.app2.revision}',
+            out[out.index('Updated:') :],
+        )
+        self.assertNotIn('Removed', out)
         self.assertEqual(self.version_dirs('apps', APP_ID), [f'0.2.0-{self.app2.revision}'])
         self.assertIn((self.kit.component, self.kit.version, 'auto'), self.installed())
         self.assertNotIn(self.app.verity_hash, self.stored_images())
@@ -1091,16 +1115,24 @@ class HostIntegrationTest(InstallerTestCase):
         self.install_core()
         name = f'60-{APP_ID}.rules'
         rule = b'KERNEL=="null", TAG+="app"\n'
-        with_rule = self.app_with({'udev-rule': {f'/app/lib/udev/rules.d/{name}': rule}})
+        with_rule = self.app_with(
+            {'udev-rule': {f'/app/lib/udev/rules.d/{name}': rule}}, version='0.1.5'
+        )
+        self.install_app()
+        self.assertEqual(self.host_tool_calls(), [])
 
         # existing devices are left alone, so only the rules are reloaded
-        self.install(self.kit, with_rule)
+        out = self.install(self.kit, with_rule)
+        self.assertIn(f'{APP_ID} now also installs: {name}', out)
+        self.assertNotIn('no longer installs', out)
         self.assertEqual(self.host_tool_calls(), ['udevadm control --reload'])
         self.assertEqual(self.read_export(f'{self.udev_rules}/{name}'), rule)
         self.assertEqual(os.stat(f'{self.udev_rules}/{name}').st_mode & 0o777, 0o644)
 
+        # the result of an update lists the rules and system services that it added and removed
         without_rule = self.integrated_app('0.2.0')
-        self.install(self.kit, without_rule)
+        out = self.install(self.kit, without_rule)
+        self.assertIn(f'{APP_ID} no longer installs: {name}', out)
         self.assertIn('udevadm control --reload', self.host_tool_calls())
         self.assertEqual(os.listdir(self.udev_rules), [])
 

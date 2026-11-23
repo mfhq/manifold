@@ -247,6 +247,20 @@ class RemoteTest(unittest.TestCase):
             rows.append((columns[1], columns[2].rsplit('-', 1)[0]))
         return rows
 
+    def updated(self, output):
+        """Return the (ID, previous version, new version) of the components that the tool
+        listed as updated in its output. The versions are returned without their revision."""
+        lines = output.splitlines()
+        if 'Updated:' not in lines:
+            return []
+        rows = []
+        for line in lines[lines.index('Updated:') + 1 :]:
+            columns = line.split()
+            if len(columns) != 5 or columns[3] != '→':
+                break
+            rows.append((columns[1], columns[2].rsplit('-', 1)[0], columns[4].rsplit('-', 1)[0]))
+        return rows
+
     def installed(self):
         """Return the installed components with their version, install mode and origin,
         as read from the store."""
@@ -717,8 +731,11 @@ class RemoteTest(unittest.TestCase):
         self.server.sent.clear()
         out = self.update()
 
-        self.assertEqual(self.listed(out, 'Installed:'), [(APP_ID, '0.2.0')])
-        self.assertEqual(self.listed(out, 'Removed:'), [(APP_ID, '0.1.0')])
+        # the old version is part of the update, and is not listed as removed
+        self.assertEqual(self.updated(out), [(APP_ID, '0.1.0', '0.2.0')])
+        self.assertNotIn('Installed:', out)
+        self.assertNotIn('Removed', out)
+        self.assertEqual(out.count('Disk space'), 1)
         self.assertEqual(
             [(cid, version) for cid, version, *_ in self.installed() if cid == APP_ID],
             [(APP_ID, '0.2.0')],
@@ -754,7 +771,7 @@ class RemoteTest(unittest.TestCase):
 
         # the kit of the application accepts any core with the same identity, so the core is updated
         self.install(APP_ID)
-        self.assertEqual(self.listed(self.update(), 'Installed:'), [(CORE_ID, '13.5')])
+        self.assertEqual(self.updated(self.update()), [(CORE_ID, '13.4', '13.5')])
         self.assertIn((CORE_ID, '13.5', 'auto', 'example-main'), self.installed())
         self.assertIn((CORE_ID, '13.4', 'auto', 'example-main'), self.installed())
         self.assertTrue(os.readlink(f'{STORE}/runtimes/{CORE_ID}/current').startswith('13.5-'))
@@ -774,7 +791,7 @@ class RemoteTest(unittest.TestCase):
         self.server.requests.clear()
         out = self.update()
 
-        self.assertEqual(self.listed(out, 'Installed:'), [(CORE_ID, '13.5')])
+        self.assertEqual(self.updated(out), [(CORE_ID, '13.4', '13.5')])
         self.assertIn(f'Warning: Unable to update {APP_ID}', out)
         self.assertIn((APP_ID, '0.1.0', 'auto', 'example-main'), self.installed())
         # the root index was downloaded once more, and it had not changed
@@ -783,7 +800,7 @@ class RemoteTest(unittest.TestCase):
         # a component from a remote that is not configured anymore is not updated, with a warning
         shutil.rmtree(os.path.join(ARGS.remotes_dir, 'example'))
         out = self.update()
-        self.assertEqual(self.listed(out, 'Installed:'), [])
+        self.assertEqual(self.updated(out), [])
         self.assertIn(
             f'Warning: {APP_ID} was installed from example-main, which is no longer configured', out
         )
@@ -891,8 +908,7 @@ class RemoteTest(unittest.TestCase):
         self.assertIn('There are no updates.', self.update())
         self.assertEqual(self.server.requests, [])
         out = self.manifold('update', APP_ID)
-        self.assertEqual(self.listed(out, 'Installed:'), [(APP_ID, '0.2.0')])
-        self.assertEqual(self.listed(out, 'Removed:'), [(APP_ID, '0.1.0')])
+        self.assertEqual(self.updated(out), [(APP_ID, '0.1.0', '0.2.0')])
 
         # a remote that fails to refresh does not stop the update
         app3 = Image(APP_ID, 'app', '0.3.0', base=self.kit)
@@ -903,7 +919,7 @@ class RemoteTest(unittest.TestCase):
         del self.server.files['/example/repo-index.json.zst']
         out = self.manifold('update')
         self.assertIn('Warning: Unable to refresh, updating from the cached metadata', out)
-        self.assertIn(f'app      {APP_ID} 0.3.0', out)
+        self.assertEqual(self.updated(out), [(APP_ID, '0.2.0', '0.3.0')])
 
         self.assertIn(
             'not a valid component identifier', self.manifold('update', 'not/valid', expect=2)
