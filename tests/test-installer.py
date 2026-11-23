@@ -778,9 +778,12 @@ class HostIntegrationTest(InstallerTestCase):
         )
         self.install_core()
         out = self.install(self.kit, app)
-        self.assertIn(f'system service: {service} (privileged)\n', out)
+        self.assertIn(f'system service: {service}\n', out)
         self.assertIn(f'user service: {service}\n', out)
-        self.assertIn('Privileged items can gain full access', out)
+        self.assertIn(f'{APP_ID} requests these permissions', out)
+        self.assertIn('install system services (privileged)\n', out)
+        self.assertNotIn('install udev rules', out)
+        self.assertIn('Privileged permissions can give full access', out)
 
         exports = f'{STORE}/apps/{APP_ID}/0.1.0-{app.revision}/exports'
         for path, content in (
@@ -812,10 +815,17 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertIn('from-the-future is not known', out)
         self.assertEqual(self.stored_images(), images)
 
+        # a permission that the integration section implies can not be requested
+        app = Image(APP_ID, 'app', '0.1.0', base=self.kit, permissions=['udev-rules'])
+        out = self.install(self.kit, app, expect=1)
+        self.assertIn('udev-rules can not be requested', out)
+        self.assertEqual(self.stored_images(), images)
+
         app = Image(APP_ID, 'app', '0.1.0', base=self.kit, permissions=['host-commands'])
         out = self.install(self.kit, app)
         self.assertIn(f'{APP_ID} requests these permissions', out)
-        self.assertIn('run programs of this system', out)
+        self.assertIn('run programs of this system\n', out)
+        self.assertNotIn('Privileged permissions', out)
 
     def test_integration_file_has_to_match_its_manifest(self):
         self.install_core()

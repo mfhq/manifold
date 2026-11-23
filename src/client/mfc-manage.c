@@ -116,11 +116,7 @@ mfc_print_image_integration(MfManifest *manifest, MfIntegration *integration)
             continue;
         }
 
-        if (mf_integration_kind_is_privileged(kind))
-            /* TRANSLATORS: the kind of a file and its name, see "Privileged items" */
-            g_print(_("  %s: %s (privileged)\n"), mfc_integration_kind_get_label(kind), name);
-        else
-            g_print("  %s: %s\n", mfc_integration_kind_get_label(kind), name);
+        g_print("  %s: %s\n", mfc_integration_kind_get_label(kind), name);
     }
     if (n_icons > 0)
         /* TRANSLATORS: label for the number of icons that an application installs, shown in a list */
@@ -131,9 +127,6 @@ mfc_print_image_integration(MfManifest *manifest, MfIntegration *integration)
         /* TRANSLATORS: label for a command that an application installs, shown in a list */
         g_print("  %s: %s\n", _("command"), mf_integration_alias_get_name(alias));
     }
-
-    if (mf_integration_is_privileged(integration))
-        g_print("%s\n", _("Privileged items can gain full access to this system."));
 }
 
 /**
@@ -151,6 +144,12 @@ mfc_permission_get_label(MfPermission permission)
     case MF_PERMISSION_HOST_TMP:
         /* TRANSLATORS: a permission of an application, in a list */
         return _("share /tmp with this system");
+    case MF_PERMISSION_SYSTEM_SERVICES:
+        /* TRANSLATORS: a permission of an application, in a list */
+        return _("install system services");
+    case MF_PERMISSION_UDEV_RULES:
+        /* TRANSLATORS: a permission of an application, in a list */
+        return _("install udev rules");
     default:
         return mf_permission_to_string(permission);
     }
@@ -160,7 +159,8 @@ mfc_permission_get_label(MfPermission permission)
  * mfc_print_image_permissions:
  * @manifest: a manifest that passed mf_manifest_check_permissions()
  *
- * List the permissions a component requests.
+ * List the permissions of a component. The list has the permissions that the
+ * manifest requests and the permissions that its integration section implies.
  */
 static void
 mfc_print_image_permissions(MfManifest *manifest)
@@ -175,8 +175,15 @@ mfc_print_image_permissions(MfManifest *manifest)
             g_print(_("%s requests these permissions:\n"), mf_manifest_get_component_id(manifest));
             have_header = TRUE;
         }
-        g_print("  %s\n", mfc_permission_get_label(permission));
+        if (mf_permission_is_privileged(permission))
+            /* TRANSLATORS: a permission of an application, see "Privileged permissions" */
+            g_print(_("  %s (privileged)\n"), mfc_permission_get_label(permission));
+        else
+            g_print("  %s\n", mfc_permission_get_label(permission));
     }
+
+    if (mf_manifest_is_privileged(manifest))
+        g_print("%s\n", _("Privileged permissions can give full access to this system."));
 }
 
 /**

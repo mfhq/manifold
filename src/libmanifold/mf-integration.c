@@ -49,7 +49,7 @@ static const struct {
     const char *name;            /* the key in the manifest */
     const char *dir;             /* the directory of the files, relative to /app and to the exports */
     const char *const *suffixes; /* the allowed file name suffixes, %NULL terminated */
-    gboolean privileged;         /* whether a file of this kind can give an image root access to the host */
+    MfPermission permission;     /* the permission that an image has if it installs a file of this kind */
 } KINDS[MF_INTEGRATION_KIND_LAST] = {
     [MF_INTEGRATION_KIND_UNKNOWN] = {.name = "unknown"},
     [MF_INTEGRATION_KIND_DESKTOP_ENTRY] = {"desktop-entry",
@@ -60,11 +60,11 @@ static const struct {
                                      "share/mime/packages", (const char *const[]){".xml", NULL}},
     [MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM] = {"systemd-unit-system",
                                      "lib/systemd/system", UNIT_SUFFIXES,
-                                     TRUE},
+                                     MF_PERMISSION_SYSTEM_SERVICES},
     [MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER] = {"systemd-unit-user", "lib/systemd/user", UNIT_SUFFIXES},
     [MF_INTEGRATION_KIND_UDEV_RULE] = {"udev-rule",
                                      "lib/udev/rules.d", (const char *const[]){".rules", NULL},
-                                     TRUE},
+                                     MF_PERMISSION_UDEV_RULES},
 };
 
 /* Alias names that we refuse. Aliases come last in the PATH, so an alias can not replace a
@@ -193,6 +193,21 @@ mf_integration_kind_get_dir(MfIntegrationKind kind)
 }
 
 /**
+ * mf_integration_kind_get_permission:
+ * @kind: a #MfIntegrationKind
+ *
+ * Returns: the permission that an image has if it installs a file of this
+ *   kind, or %MF_PERMISSION_UNKNOWN if the kind implies no permission
+ */
+MfPermission
+mf_integration_kind_get_permission(MfIntegrationKind kind)
+{
+    if (kind <= MF_INTEGRATION_KIND_UNKNOWN || kind >= MF_INTEGRATION_KIND_LAST)
+        return MF_PERMISSION_UNKNOWN;
+    return KINDS[kind].permission;
+}
+
+/**
  * mf_integration_kind_is_privileged:
  * @kind: a #MfIntegrationKind
  *
@@ -202,9 +217,7 @@ mf_integration_kind_get_dir(MfIntegrationKind kind)
 gboolean
 mf_integration_kind_is_privileged(MfIntegrationKind kind)
 {
-    if (kind <= MF_INTEGRATION_KIND_UNKNOWN || kind >= MF_INTEGRATION_KIND_LAST)
-        return FALSE;
-    return KINDS[kind].privileged;
+    return mf_permission_is_privileged(mf_integration_kind_get_permission(kind));
 }
 
 /**
@@ -480,25 +493,28 @@ mf_integration_get_unknown_kinds(MfIntegration *integration)
 }
 
 /**
- * mf_integration_is_privileged:
+ * mf_integration_get_permissions:
  * @integration: an #MfIntegration
  *
- * Returns: %TRUE if an admin has to approve any file of @integration,
- *   see mf_integration_kind_is_privileged()
+ * Returns: the permissions that the files of @integration imply, as one bit
+ *   for each #MfPermission
  */
-gboolean
-mf_integration_is_privileged(MfIntegration *integration)
+guint
+mf_integration_get_permissions(MfIntegration *integration)
 {
-    g_return_val_if_fail(MF_IS_INTEGRATION(integration), FALSE);
+    guint permissions = 0;
+
+    g_return_val_if_fail(MF_IS_INTEGRATION(integration), 0);
 
     for (guint i = 0; i < integration->files->len; i++) {
         MfIntegrationFile *file = g_ptr_array_index(integration->files, i);
+        MfPermission permission = mf_integration_kind_get_permission(file->kind);
 
-        if (mf_integration_kind_is_privileged(mf_integration_file_get_kind(file)))
-            return TRUE;
+        if (permission != MF_PERMISSION_UNKNOWN)
+            permissions |= 1u << permission;
     }
 
-    return FALSE;
+    return permissions;
 }
 
 /**

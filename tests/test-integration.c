@@ -95,7 +95,11 @@ test_privileged(void)
     g_autoptr(MfManifest) unit = NULL;
 
     g_assert_no_error(error);
-    g_assert_true(mf_integration_is_privileged(mf_manifest_get_integration(rule)));
+    g_assert_true(mf_manifest_is_privileged(rule));
+    g_assert_true(mf_manifest_has_permission(rule, MF_PERMISSION_UDEV_RULES));
+    g_assert_false(mf_manifest_has_permission(rule, MF_PERMISSION_SYSTEM_SERVICES));
+    g_assert_true(mf_manifest_check_permissions(rule, &error));
+    g_assert_no_error(error);
 
     /* a user unit does not make a component privileged, as it only runs as a user */
     unit = mft_manifest_new(
@@ -103,7 +107,14 @@ test_privileged(void)
         "}]}",
         &error);
     g_assert_no_error(error);
-    g_assert_false(mf_integration_is_privileged(mf_manifest_get_integration(unit)));
+    g_assert_false(mf_manifest_is_privileged(unit));
+    g_assert_false(mf_manifest_has_permission(unit, MF_PERMISSION_SYSTEM_SERVICES));
+
+    g_assert_true(mf_permission_is_privileged(MF_PERMISSION_SYSTEM_SERVICES));
+    g_assert_true(mf_permission_is_privileged(MF_PERMISSION_UDEV_RULES));
+    g_assert_false(mf_permission_is_privileged(MF_PERMISSION_HOST_COMMANDS));
+    g_assert_false(mf_permission_is_privileged(MF_PERMISSION_UNKNOWN));
+    g_assert_false(mf_permission_is_privileged(MF_PERMISSION_LAST));
 
     g_assert_true(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM));
     g_assert_true(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_UDEV_RULE));
@@ -609,15 +620,28 @@ test_permissions(void)
     MftTestManifest core = {.component_id = "net.example.core", .kind = "core", .version = "1"};
     g_autofree char *json = NULL;
     g_autofree char *unknown_json = NULL;
+    g_autofree char *implied_json = NULL;
     g_autofree char *core_json = NULL;
     g_autofree char *malformed_json = NULL;
     g_autoptr(MfManifest) plain = mft_manifest_new(NULL, NULL);
     g_autoptr(MfManifest) manifest = NULL;
     g_autoptr(MfManifest) unknown = NULL;
+    g_autoptr(MfManifest) implied = NULL;
     g_autoptr(MfManifest) on_core = NULL;
     g_autoptr(GError) error = NULL;
 
+    for (MfPermission permission = MF_PERMISSION_UNKNOWN + 1; permission < MF_PERMISSION_LAST; permission++)
+        g_assert_cmpint(mf_permission_from_string(mf_permission_to_string(permission)), ==, permission);
+    g_assert_cmpstr(mf_permission_to_string(MF_PERMISSION_LAST), ==, "unknown");
+    g_assert_cmpint(mf_permission_from_string("unknown"), ==, MF_PERMISSION_UNKNOWN);
+    g_assert_cmpint(mf_permission_from_string(NULL), ==, MF_PERMISSION_UNKNOWN);
+    g_assert_false(mf_permission_is_implied(MF_PERMISSION_HOST_COMMANDS));
+    g_assert_false(mf_permission_is_implied(MF_PERMISSION_HOST_TMP));
+    g_assert_true(mf_permission_is_implied(MF_PERMISSION_SYSTEM_SERVICES));
+    g_assert_true(mf_permission_is_implied(MF_PERMISSION_UDEV_RULES));
+
     g_assert_false(mf_manifest_has_permission(plain, MF_PERMISSION_HOST_COMMANDS));
+    g_assert_false(mf_manifest_is_privileged(plain));
     g_assert_true(mf_manifest_check_permissions(plain, &error));
     g_assert_no_error(error);
 
@@ -639,6 +663,17 @@ test_permissions(void)
     g_assert_false(mf_manifest_check_permissions(unknown, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
     g_assert_null(strchr(error->message, '\033'));
+    g_clear_error(&error);
+
+    /* a manifest can not request a permission that its integration section implies */
+    app.permissions = "[\"udev-rules\"]";
+    implied_json = mft_manifest_json(&app);
+    implied = mf_manifest_new_from_data(implied_json, -1, &error);
+    g_assert_no_error(error);
+    g_assert_false(mf_manifest_has_permission(implied, MF_PERMISSION_UDEV_RULES));
+    g_assert_false(mf_manifest_is_privileged(implied));
+    g_assert_false(mf_manifest_check_permissions(implied, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
     g_clear_error(&error);
 
     /* only applications are launched */

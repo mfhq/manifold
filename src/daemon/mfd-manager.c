@@ -1842,12 +1842,10 @@ mfd_manager_install_set_gains_privileges(MfdManager *manager, MfdInstallSet *set
 
     for (guint i = 0; i < set->items->len; i++) {
         MfdInstallItem *item = g_ptr_array_index(set->items, i);
-        MfIntegration *integration = mf_manifest_get_integration(item->manifest);
         g_autoptr(MfComponent) newest = NULL;
         g_autoptr(MfManifest) manifest = NULL;
-        MfIntegration *installed;
 
-        if (integration == NULL || !mf_integration_is_privileged(integration))
+        if (!mf_manifest_is_privileged(item->manifest))
             continue;
 
         newest = mf_store_get_component(manager->store,
@@ -1855,8 +1853,7 @@ mfd_manager_install_set_gains_privileges(MfdManager *manager, MfdInstallSet *set
                                         NULL,
                                         NULL);
         manifest = newest != NULL ? mf_component_fetch_manifest(newest, NULL) : NULL;
-        installed = manifest != NULL ? mf_manifest_get_integration(manifest) : NULL;
-        if (installed == NULL || !mf_integration_is_privileged(installed))
+        if (manifest == NULL || !mf_manifest_is_privileged(manifest))
             return TRUE;
     }
 

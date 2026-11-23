@@ -15,6 +15,8 @@ MF_BEGIN_PRIVATE_DECLS
 
 MfIntegration *mf_integration_new_from_json(sd_json_variant *section,
                                             GError         **error);
+MfPermission   mf_integration_kind_get_permission(MfIntegrationKind kind);
+guint          mf_integration_get_permissions(MfIntegration *integration);
 gboolean       mf_integration_check(MfIntegration *integration,
                                     const char    *component_id,
                                     GError       **error);

@@ -245,9 +245,8 @@ mfd_install_set_is_privileged(MfdInstallSet *set)
 {
     for (guint i = 0; i < set->items->len; i++) {
         MfdInstallItem *item = g_ptr_array_index(set->items, i);
-        MfIntegration *integration = mf_manifest_get_integration(item->manifest);
 
-        if (integration != NULL && mf_integration_is_privileged(integration))
+        if (mf_manifest_is_privileged(item->manifest))
             return TRUE;
     }
 

@@ -43,19 +43,25 @@ MfChecksumKind mf_checksum_kind_from_string(const char *kind_str);
  * @MF_PERMISSION_UNKNOWN: Unknown permission.
  * @MF_PERMISSION_HOST_COMMANDS: Run programs of the host system.
  * @MF_PERMISSION_HOST_TMP: Share `/tmp` with the host system, instead of using a private one.
+ * @MF_PERMISSION_SYSTEM_SERVICES: Install units of the systemd system manager on the host.
+ * @MF_PERMISSION_UDEV_RULES: Install udev rules on the host.
  *
- * Permissions an application can request in its manifest.
+ * Permissions of an application.
  */
 typedef enum {
     MF_PERMISSION_UNKNOWN,
     MF_PERMISSION_HOST_COMMANDS,
     MF_PERMISSION_HOST_TMP,
+    MF_PERMISSION_SYSTEM_SERVICES,
+    MF_PERMISSION_UDEV_RULES,
     /*< private >*/
     MF_PERMISSION_LAST
 } MfPermission;
 
 const char  *mf_permission_to_string(MfPermission permission);
 MfPermission mf_permission_from_string(const char *permission_str);
+gboolean     mf_permission_is_implied(MfPermission permission);
+gboolean     mf_permission_is_privileged(MfPermission permission);
 
 #define MF_TYPE_MANIFEST (mf_manifest_get_type())
 G_DECLARE_DERIVABLE_TYPE(MfManifest, mf_manifest, MF, MANIFEST, GObject)
@@ -118,5 +124,6 @@ gboolean        mf_manifest_has_permission(MfManifest  *manifest,
                                            MfPermission permission);
 gboolean        mf_manifest_check_permissions(MfManifest *manifest,
                                               GError    **error);
+gboolean        mf_manifest_is_privileged(MfManifest *manifest);
 
 G_END_DECLS

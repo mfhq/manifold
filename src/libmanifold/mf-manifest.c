@@ -65,6 +65,17 @@ mf_checksum_kind_from_string(const char *kind_str)
     return MF_CHECKSUM_KIND_UNKNOWN;
 }
 
+static const struct {
+    const char *name;    /* the name in the permissions list of a manifest */
+    gboolean privileged; /* whether the permission can give an image root access to the host */
+} PERMISSIONS[MF_PERMISSION_LAST] = {
+    [MF_PERMISSION_UNKNOWN] = {"unknown"},
+    [MF_PERMISSION_HOST_COMMANDS] = {"host-commands"},
+    [MF_PERMISSION_HOST_TMP] = {"host-tmp"},
+    [MF_PERMISSION_SYSTEM_SERVICES] = {"system-services", TRUE},
+    [MF_PERMISSION_UDEV_RULES] = {"udev-rules", TRUE},
+};
+
 /**
  * mf_permission_to_string:
  * @permission: a #MfPermission
@@ -74,14 +85,9 @@ mf_checksum_kind_from_string(const char *kind_str)
 const char *
 mf_permission_to_string(MfPermission permission)
 {
-    switch (permission) {
-    case MF_PERMISSION_HOST_COMMANDS:
-        return "host-commands";
-    case MF_PERMISSION_HOST_TMP:
-        return "host-tmp";
-    default:
-        return "unknown";
-    }
+    if (permission <= MF_PERMISSION_UNKNOWN || permission >= MF_PERMISSION_LAST)
+        return PERMISSIONS[MF_PERMISSION_UNKNOWN].name;
+    return PERMISSIONS[permission].name;
 }
 
 /**
@@ -93,11 +99,54 @@ mf_permission_to_string(MfPermission permission)
 MfPermission
 mf_permission_from_string(const char *permission_str)
 {
-    if (g_strcmp0(permission_str, "host-commands") == 0)
-        return MF_PERMISSION_HOST_COMMANDS;
-    if (g_strcmp0(permission_str, "host-tmp") == 0)
-        return MF_PERMISSION_HOST_TMP;
+    for (MfPermission permission = MF_PERMISSION_UNKNOWN + 1; permission < MF_PERMISSION_LAST; permission++) {
+        if (g_strcmp0(permission_str, PERMISSIONS[permission].name) == 0)
+            return permission;
+    }
+
     return MF_PERMISSION_UNKNOWN;
+}
+
+/**
+ * mf_permission_is_implied:
+ * @permission: a #MfPermission
+ *
+ * Check whether a permission is implied by the integration section of a manifest.
+ *
+ * An image has an implied permission if it installs a file of a certain kind
+ * on the host, like a udev rule. The integration section already lists these
+ * files, so a manifest can not request an implied permission in its
+ * permissions list.
+ *
+ * Returns: %TRUE if @permission is implied by an integration kind
+ */
+gboolean
+mf_permission_is_implied(MfPermission permission)
+{
+    if (permission <= MF_PERMISSION_UNKNOWN || permission >= MF_PERMISSION_LAST)
+        return FALSE;
+
+    for (MfIntegrationKind kind = MF_INTEGRATION_KIND_UNKNOWN + 1; kind < MF_INTEGRATION_KIND_LAST; kind++) {
+        if (mf_integration_kind_get_permission(kind) == permission)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
+/**
+ * mf_permission_is_privileged:
+ * @permission: a #MfPermission
+ *
+ * Returns: %TRUE if @permission can give an image root access to the host,
+ *   so that an admin has to approve the installation of the image
+ */
+gboolean
+mf_permission_is_privileged(MfPermission permission)
+{
+    if (permission <= MF_PERMISSION_UNKNOWN || permission >= MF_PERMISSION_LAST)
+        return FALSE;
+    return PERMISSIONS[permission].privileged;
 }
 
 /**
@@ -144,7 +193,7 @@ typedef struct {
     MfIntegration *integration; /* (nullable) */
 
     guint permissions;              /* one bit for each MfPermission the manifest requests */
-    GPtrArray *unknown_permissions; /* names of requested permissions we do not know */
+    GPtrArray *refused_permissions; /* names of requested permissions that are unknown or implied */
 } MfManifestPrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE(MfManifest, mf_manifest, G_TYPE_OBJECT)
@@ -179,7 +228,7 @@ mf_manifest_finalize(GObject *object)
     g_free(priv->verity_hash);
     g_free(priv->command);
     g_clear_object(&priv->integration);
-    g_ptr_array_unref(priv->unknown_permissions);
+    g_ptr_array_unref(priv->refused_permissions);
 
     G_OBJECT_CLASS(mf_manifest_parent_class)->finalize(object);
 }
@@ -195,7 +244,7 @@ mf_manifest_init(MfManifest *manifest)
 {
     MfManifestPrivate *priv = GET_PRIVATE(manifest);
 
-    priv->unknown_permissions = g_ptr_array_new_with_free_func(g_free);
+    priv->refused_permissions = g_ptr_array_new_with_free_func(g_free);
 }
 
 /* manifest field accessors, which report every failure as MF_ERROR_INVALID_MANIFEST */
@@ -453,8 +502,8 @@ mf_manifest_json_parse_image(sd_json_variant *manifest, MfManifestPrivate *priv,
  * mf_manifest_json_parse_permissions:
  *
  * Parse the permissions list of a manifest. We only check its structure here.
- * The names of permissions we do not know are kept, so they can be refused
- * when the image is installed.
+ * The names of permissions that a manifest can not request are kept, so
+ * mf_manifest_check_permissions() can refuse them when the image is installed.
  */
 static gboolean
 mf_manifest_json_parse_permissions(sd_json_variant *jo, MfManifestPrivate *priv, GError **error)
@@ -480,8 +529,8 @@ mf_manifest_json_parse_permissions(sd_json_variant *jo, MfManifestPrivate *priv,
         }
 
         permission = mf_permission_from_string(sd_json_variant_string(entry));
-        if (permission == MF_PERMISSION_UNKNOWN)
-            g_ptr_array_add(priv->unknown_permissions, g_strdup(sd_json_variant_string(entry)));
+        if (permission == MF_PERMISSION_UNKNOWN || mf_permission_is_implied(permission))
+            g_ptr_array_add(priv->refused_permissions, g_strdup(sd_json_variant_string(entry)));
         else
             priv->permissions |= 1u << permission;
     }
@@ -1208,7 +1257,11 @@ mf_manifest_check_integration(MfManifest *manifest, GError **error)
  * @manifest: an #MfManifest
  * @permission: a #MfPermission
  *
- * Returns: %TRUE if the manifest requests @permission
+ * Check whether the image of a manifest has a permission. An image has the
+ * permissions that its manifest requests, and the permissions that its
+ * integration section implies.
+ *
+ * Returns: %TRUE if the image has @permission
  */
 gboolean
 mf_manifest_has_permission(MfManifest *manifest, MfPermission permission)
@@ -1216,7 +1269,31 @@ mf_manifest_has_permission(MfManifest *manifest, MfPermission permission)
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), FALSE);
     g_return_val_if_fail(permission > MF_PERMISSION_UNKNOWN && permission < MF_PERMISSION_LAST, FALSE);
     auto priv = GET_PRIVATE(manifest);
-    return (priv->permissions & (1u << permission)) != 0;
+    guint permissions = priv->permissions;
+
+    if (priv->integration != NULL)
+        permissions |= mf_integration_get_permissions(priv->integration);
+
+    return (permissions & (1u << permission)) != 0;
+}
+
+/**
+ * mf_manifest_is_privileged:
+ * @manifest: an #MfManifest
+ *
+ * Returns: %TRUE if the image has a privileged permission, which an admin has to approve
+ */
+gboolean
+mf_manifest_is_privileged(MfManifest *manifest)
+{
+    g_return_val_if_fail(MF_IS_MANIFEST(manifest), FALSE);
+
+    for (MfPermission permission = MF_PERMISSION_UNKNOWN + 1; permission < MF_PERMISSION_LAST; permission++) {
+        if (mf_permission_is_privileged(permission) && mf_manifest_has_permission(manifest, permission))
+            return TRUE;
+    }
+
+    return FALSE;
 }
 
 /**
@@ -1238,18 +1315,27 @@ mf_manifest_check_permissions(MfManifest *manifest, GError **error)
     g_return_val_if_fail(MF_IS_MANIFEST(manifest), FALSE);
     auto priv = GET_PRIVATE(manifest);
 
-    if (priv->permissions == 0 && priv->unknown_permissions->len == 0)
+    if (priv->permissions == 0 && priv->refused_permissions->len == 0)
         return TRUE;
     /* only applications are launched, so other components can not use a permission */
     if (priv->kind != MF_COMPONENT_KIND_APP || priv->sdk) {
         mf_set_error_invalid_manifest(error, "%s", _("permissions: only applications can use this"));
         return FALSE;
     }
-    if (priv->unknown_permissions->len > 0) {
-        g_autofree char *shown = g_strescape(g_ptr_array_index(priv->unknown_permissions, 0), NULL);
+    if (priv->refused_permissions->len > 0) {
+        const char *name = g_ptr_array_index(priv->refused_permissions, 0);
+        g_autofree char *shown = g_strescape(name, NULL);
 
-        /* TRANSLATORS: "permissions" is a field of the manifest, and not translated, %s is an entry of it */
-        mf_set_error_invalid_manifest(error, _("permissions: %s is not known"), shown);
+        if (mf_permission_from_string(name) == MF_PERMISSION_UNKNOWN)
+            /* TRANSLATORS: "permissions" is a field of the manifest, and not translated, %s is an entry of it */
+            mf_set_error_invalid_manifest(error, _("permissions: %s is not known"), shown);
+        else
+            /* TRANSLATORS: "permissions" and "integration" are fields of the manifest, and not translated,
+             * %s is an entry of the permissions field */
+            mf_set_error_invalid_manifest(
+                error,
+                _("permissions: %s can not be requested, it follows from integration"),
+                shown);
         return FALSE;
     }
 

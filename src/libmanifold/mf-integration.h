@@ -79,6 +79,5 @@ G_DECLARE_FINAL_TYPE(MfIntegration, mf_integration, MF, INTEGRATION, GObject)
 GPtrArray *mf_integration_get_files(MfIntegration *integration);
 GPtrArray *mf_integration_get_aliases(MfIntegration *integration);
 GPtrArray *mf_integration_get_unknown_kinds(MfIntegration *integration);
-gboolean   mf_integration_is_privileged(MfIntegration *integration);
 
 G_END_DECLS
