@@ -274,6 +274,184 @@ mfd_install_plan_init_base_sdk(MfdInstallPlan *iplan,
 }
 
 /**
+ * mfd_install_item_check_installable:
+ *
+ * Check that an item can be installed on this host at all: Its image must be
+ * built for the architecture of the host, its ID must not be installed as a
+ * component of a different kind, and its integration and permissions must be
+ * valid.
+ *
+ * Returns: %TRUE if the item can be installed
+ */
+static gboolean
+mfd_install_item_check_installable(MfdInstallItem *item,
+                                   MfStore *store,
+                                   MfdErrorDetail *ret_detail,
+                                   GError **error)
+{
+    MfManifest *manifest = item->manifest;
+    g_autoptr(MfComponent) other_kind = NULL;
+
+    if (!g_str_equal(mf_manifest_get_architecture(manifest), mf_get_host_architecture())) {
+        mfd_set_error_wrong_architecture(error,
+                                         ret_detail,
+                                         mf_manifest_get_component_id(manifest),
+                                         mf_manifest_get_architecture(manifest));
+        return FALSE;
+    }
+    other_kind = mfd_find_other_kind(store, manifest);
+    if (other_kind != NULL) {
+        mfd_set_error_id_conflict(error, ret_detail, other_kind);
+        return FALSE;
+    }
+    if (!mf_manifest_check_integration(manifest, error))
+        return FALSE;
+    if (!mf_manifest_check_permissions(manifest, error))
+        return FALSE;
+
+    return TRUE;
+}
+
+/**
+ * mfd_install_plan_check_installed:
+ *
+ * Check whether the version and revision of the item is installed already.
+ *
+ * A dependency that is installed already is skipped. A component that was
+ * requested is refused, unless it is a runtime with the install-mode auto:
+ * installing such a runtime again makes it manual.
+ *
+ * Returns: %FALSE if the item is installed already and can not be installed again
+ */
+static gboolean
+mfd_install_plan_check_installed(MfdInstallPlan *iplan,
+                                 MfStore *store,
+                                 MfdErrorDetail *ret_detail,
+                                 GError **error)
+{
+    MfManifest *manifest = iplan->item->manifest;
+    const char *component_id = mf_manifest_get_component_id(manifest);
+    const char *version = mf_manifest_get_version(manifest);
+    const char *verity_hash = mf_manifest_get_verity_hash(manifest);
+    g_autoptr(MfComponent) existing = NULL;
+
+    existing = mf_store_find_version(store, component_id, version, mf_manifest_get_revision(manifest), NULL);
+    if (existing == NULL)
+        return TRUE;
+
+    if (g_strcmp0(mf_component_get_verity_hash(existing), verity_hash) != 0) {
+        g_warning("%s %s is installed already, with another image: %s instead of %s",
+                  component_id,
+                  version,
+                  mf_component_get_verity_hash(existing),
+                  verity_hash);
+        mfd_set_error_already_installed(error, ret_detail, component_id, version);
+        return FALSE;
+    }
+    if (iplan->item->is_dependency) {
+        /* already installed (how it got there doesn't matter) */
+        iplan->skip = TRUE;
+        return TRUE;
+    }
+    if (mf_component_kind_is_always_auto(mf_manifest_get_kind(manifest), mf_manifest_is_sdk(manifest)) ||
+        mf_component_get_install_mode(existing) != MF_INSTALL_MODE_AUTO) {
+        mfd_set_error_already_installed(error, ret_detail, component_id, version);
+        return FALSE;
+    }
+    g_info("%s %s was a dependency, and is installed on purpose now", component_id, version);
+
+    return TRUE;
+}
+
+/**
+ * mfd_install_plan_check_needed:
+ *
+ * Skip a dependency that is not needed.
+ *
+ * A dependency is not needed if the same or a newer version of the component
+ * is installed and provides the same identity. A dependency that another item
+ * requires in its exact version is always installed, as a different version
+ * can not replace it.
+ */
+static void
+mfd_install_plan_check_needed(MfdInstallPlan *iplan, MfStore *store, MfdInstallSet *set)
+{
+    MfManifest *manifest = iplan->item->manifest;
+    g_autoptr(MfComponent) provider = NULL;
+
+    if (!iplan->item->is_dependency || mfd_install_set_needs_exact_version(set, manifest))
+        return;
+
+    provider = mf_store_find_identity(store, mf_manifest_get_identity(manifest), NULL);
+    if (mfd_check_if_pending_item_wins(manifest, provider))
+        return;
+
+    g_info("%s %s is not needed, %s is installed",
+           mf_manifest_get_component_id(manifest),
+           mf_manifest_get_version(manifest),
+           mf_component_get_full_version(provider));
+    iplan->skip = TRUE;
+    iplan->add_image = FALSE;
+}
+
+/**
+ * mfd_install_plan_init_base:
+ *
+ * Find the base and the base SDK of the item in the set or in the store, and
+ * set the links of @iplan to them. A core has neither.
+ *
+ * Returns: %TRUE if the links were set, or if the item is a core
+ */
+static gboolean
+mfd_install_plan_init_base(MfdInstallPlan *iplan,
+                           MfStore *store,
+                           MfdInstallSet *set,
+                           MfdErrorDetail *ret_detail,
+                           GError **error)
+{
+    MfdInstallItem *item = iplan->item;
+    MfManifest *manifest = item->manifest;
+    const char *component_id = mf_manifest_get_component_id(manifest);
+    const MfBaseReference *base_ref = mf_manifest_get_base(manifest);
+    MfComponentKind kind = mf_manifest_get_kind(manifest);
+    gboolean sdk = mf_manifest_is_sdk(manifest);
+    g_autoptr(MfManifest) base = NULL;
+    MfComponentKind base_kind;
+    gboolean base_sdk;
+
+    if (base_ref == NULL)
+        return TRUE;
+
+    iplan->base = mfd_plan_base_link(store, set, component_id, base_ref, &base, ret_detail, error);
+    if (iplan->base == NULL)
+        return FALSE;
+
+    base_kind = mf_manifest_get_kind(base);
+    base_sdk = mf_manifest_is_sdk(base);
+    if (!mf_component_kind_can_build_on(kind, sdk, base_kind, base_sdk)) {
+        g_set_error(error,
+                    MF_ERROR,
+                    MF_ERROR_INVALID_BUNDLE,
+                    "%s: %s%s %s can not build on %s%s %s",
+                    item->name,
+                    mf_component_kind_to_string(kind),
+                    sdk ? " SDK" : "",
+                    component_id,
+                    mf_component_kind_to_string(base_kind),
+                    base_sdk ? " SDK" : "",
+                    iplan->base->component_id);
+        return FALSE;
+    }
+
+    /* only an SDK has a base SDK */
+    if (mf_manifest_get_base_sdk(manifest) != NULL &&
+        !mfd_install_plan_init_base_sdk(iplan, store, set, item, base, ret_detail, error))
+        return FALSE;
+
+    return TRUE;
+}
+
+/**
  * mfd_install_plan_init:
  *
  * Plan the installation of an item of the set.
@@ -293,123 +471,39 @@ mfd_install_plan_init(MfdInstallPlan *iplan,
                       GError **error)
 {
     MfManifest *manifest = item->manifest;
-    const char *component_id = mf_manifest_get_component_id(manifest);
-    const char *version = mf_manifest_get_version(manifest);
-    const char *verity_hash = mf_manifest_get_verity_hash(manifest);
-    const MfBaseReference *base_ref = mf_manifest_get_base(manifest);
     MfComponentKind kind = mf_manifest_get_kind(manifest);
     gboolean sdk = mf_manifest_is_sdk(manifest);
-    gboolean dependency = item->is_dependency;
-    g_autoptr(MfComponent) other_kind = NULL;
-    g_autoptr(MfComponent) existing = NULL;
     g_autoptr(MfComponent) newest = NULL;
 
-    if (!g_str_equal(mf_manifest_get_architecture(manifest), mf_get_host_architecture())) {
-        mfd_set_error_wrong_architecture(error,
-                                         ret_detail,
-                                         component_id,
-                                         mf_manifest_get_architecture(manifest));
-        return FALSE;
-    }
-    other_kind = mfd_find_other_kind(store, manifest);
-    if (other_kind != NULL) {
-        mfd_set_error_id_conflict(error, ret_detail, other_kind);
-        return FALSE;
-    }
-    if (!mf_manifest_check_integration(manifest, error))
-        return FALSE;
-    if (!mf_manifest_check_permissions(manifest, error))
+    if (!mfd_install_item_check_installable(item, store, ret_detail, error))
         return FALSE;
 
     iplan->item = item;
-    iplan->add_image = !mf_store_has_image(store, verity_hash);
-    iplan->mode = dependency || mf_component_kind_is_always_auto(kind, sdk) ? MF_INSTALL_MODE_AUTO
-                                                                            : MF_INSTALL_MODE_MANUAL;
+    iplan->add_image = !mf_store_has_image(store, mf_manifest_get_verity_hash(manifest));
+    iplan->mode = item->is_dependency || mf_component_kind_is_always_auto(kind, sdk) ? MF_INSTALL_MODE_AUTO
+                                                                                     : MF_INSTALL_MODE_MANUAL;
 
-    existing = mf_store_find_version(store, component_id, version, mf_manifest_get_revision(manifest), NULL);
-    if (existing != NULL) {
-        if (g_strcmp0(mf_component_get_verity_hash(existing), verity_hash) != 0) {
-            g_warning("%s %s is installed already, with another image: %s instead of %s",
-                      component_id,
-                      version,
-                      mf_component_get_verity_hash(existing),
-                      verity_hash);
-            mfd_set_error_already_installed(error, ret_detail, component_id, version);
-            return FALSE;
-        }
-        if (dependency) {
-            /* already installed (how it got there doesn't matter) */
-            iplan->skip = TRUE;
-            return TRUE;
-        }
-        /* only a runtime with the install mode auto can be installed again, which makes it manual */
-        if (mf_component_kind_is_always_auto(kind, sdk) ||
-            mf_component_get_install_mode(existing) != MF_INSTALL_MODE_AUTO) {
-            mfd_set_error_already_installed(error, ret_detail, component_id, version);
-            return FALSE;
-        }
-        g_info("%s %s was a dependency, and is installed on purpose now", component_id, version);
-    }
+    /* check if this version is installed already */
+    if (!mfd_install_plan_check_installed(iplan, store, ret_detail, error))
+        return FALSE;
+    if (iplan->skip)
+        return TRUE;
 
-    newest = mf_store_get_component(store, component_id, NULL, NULL);
+    /* remember the installed version that the item updates */
+    newest = mf_store_get_component(store, mf_manifest_get_component_id(manifest), NULL, NULL);
     if (newest != NULL && mf_version_compare_with_rev(mf_component_get_version(newest),
                                                       mf_component_get_revision(newest),
-                                                      version,
+                                                      mf_manifest_get_version(manifest),
                                                       mf_manifest_get_revision(manifest)) < 0)
         iplan->previous = g_steal_pointer(&newest);
 
-    /* a dependency is not needed if the same or a newer version of the component is installed
-     * and provides the same identity. A dependency that another item requires in its exact
-     * version is always installed, as a different version can not replace it. */
-    if (dependency && !mfd_install_set_needs_exact_version(set, manifest)) {
-        g_autoptr(MfComponent)
-            provider = mf_store_find_identity(store, mf_manifest_get_identity(manifest), NULL);
+    /* check if a dependency is needed at all */
+    mfd_install_plan_check_needed(iplan, store, set);
+    if (iplan->skip)
+        return TRUE;
 
-        if (!mfd_check_if_pending_item_wins(manifest, provider)) {
-            g_info("%s %s is not needed, %s is installed",
-                   component_id,
-                   version,
-                   mf_component_get_full_version(provider));
-            iplan->skip = TRUE;
-            iplan->add_image = FALSE;
-            return TRUE;
-        }
-    }
-
-    if (base_ref != NULL) {
-        g_autoptr(MfManifest) base = NULL;
-        MfComponentKind base_kind;
-        gboolean base_sdk;
-
-        iplan->base = mfd_plan_base_link(store, set, component_id, base_ref, &base, ret_detail, error);
-        if (iplan->base == NULL)
-            return FALSE;
-
-        /* a component can only build on the kinds of layer that are allowed below it */
-        base_kind = mf_manifest_get_kind(base);
-        base_sdk = mf_manifest_is_sdk(base);
-        if (!mf_component_kind_can_build_on(kind, sdk, base_kind, base_sdk)) {
-            g_set_error(error,
-                        MF_ERROR,
-                        MF_ERROR_INVALID_BUNDLE,
-                        "%s: %s%s %s can not build on %s%s %s",
-                        item->name,
-                        mf_component_kind_to_string(kind),
-                        sdk ? " SDK" : "",
-                        component_id,
-                        mf_component_kind_to_string(base_kind),
-                        base_sdk ? " SDK" : "",
-                        iplan->base->component_id);
-            return FALSE;
-        }
-
-        /* a component with a base SDK is always an SDK, so its exact base was found above */
-        if (mf_manifest_get_base_sdk(manifest) != NULL &&
-            !mfd_install_plan_init_base_sdk(iplan, store, set, item, base, ret_detail, error))
-            return FALSE;
-    }
-
-    return TRUE;
+    /* find the base and the base SDK */
+    return mfd_install_plan_init_base(iplan, store, set, ret_detail, error);
 }
 
 /**
