@@ -1086,7 +1086,9 @@ mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
 
     for (;;) {
         if (request->install_set == NULL) {
-            request->install_set = mfd_manager_resolve(service->manager, request->repo_request, &error);
+            request->install_set = mfd_manager_resolve_request(service->manager,
+                                                               request->repo_request,
+                                                               &error);
             if (request->install_set == NULL) {
                 mfd_service_reply_error(request->link, error, NULL);
                 return 0;

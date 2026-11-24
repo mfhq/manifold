@@ -38,8 +38,8 @@ MfdFetchRequest *mfd_fetch_request_new(const char *url,
                                        int         fd,
                                        uint64_t    max_size);
 void             mfd_fetch_request_free(MfdFetchRequest *request);
-void             mfd_fetch_request_to_error(MfdFetchRequest *request,
-                                            GError         **error);
+void             mfd_fetch_request_set_error(MfdFetchRequest *request,
+                                             GError         **error);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdFetchRequest, mfd_fetch_request_free)
 

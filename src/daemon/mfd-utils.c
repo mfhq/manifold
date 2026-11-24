@@ -38,6 +38,70 @@ mfd_emit_warning(MfResult *result, const char *format, ...)
         mf_result_add_warning(result, message);
 }
 
+/**
+ * mfd_component_matches_version:
+ * @version: a version, or a full version if @full is set
+ *
+ * Check whether @version matches the version of an installed component.
+ */
+gboolean
+mfd_component_matches_version(MfComponent *component, const char *version, gboolean full)
+{
+    return g_str_equal(full ? mf_component_get_full_version(component) : mf_component_get_version(component),
+                       version);
+}
+
+/**
+ * mfd_store_check_version_is_full:
+ * @version: (nullable): a version, which selects all of its revisions, or
+ *   a full version (`<version>-<rev>`), which selects one revision
+ * @ret_full: (out): whether @version is a full version
+ *
+ * Find out whether @version is a version or a full version, by comparing it
+ * with the installed versions of the component.
+ *
+ * A version may itself end in a dash and a number, like a full version does.
+ * We therefore refuse a @version that matches the version of one installed
+ * component, and the full version of a different one.
+ */
+gboolean
+mfd_store_check_version_is_full(MfStore *store,
+                                const char *component_id,
+                                const char *version,
+                                gboolean *ret_full,
+                                GError **error)
+{
+    g_autoptr(GPtrArray) components = NULL;
+    gboolean as_version = FALSE;
+    gboolean as_full = FALSE;
+
+    *ret_full = FALSE;
+    if (version == NULL)
+        return TRUE;
+    components = mf_store_list_components(store, component_id, MF_COMPONENT_KIND_UNKNOWN, error);
+    if (components == NULL)
+        return FALSE;
+    for (guint i = 0; i < components->len; i++) {
+        auto component = MF_COMPONENT(g_ptr_array_index(components, i));
+
+        as_version |= mfd_component_matches_version(component, version, FALSE);
+        as_full |= mfd_component_matches_version(component, version, TRUE);
+    }
+    if (as_version && as_full) {
+        g_set_error(
+            error,
+            MF_ERROR,
+            MF_ERROR_FAILED,
+            "%s %s is ambiguous: It matches both the version of an installed component, as well as its version and revision",
+            component_id,
+            version);
+        return FALSE;
+    }
+
+    *ret_full = as_full;
+    return TRUE;
+}
+
 gboolean
 mfd_is_directory(const char *path)
 {

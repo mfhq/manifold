@@ -472,7 +472,7 @@ mfd_find_host_file(const char *path)
 }
 
 /**
- * mfd_owners_check_path:
+ * mfd_owners_may_install_at:
  * @owners: (element-type utf8 utf8): a table of path -> ID of the owning component
  * @path: the path that a component wants to install a file at
  * @component_id: the component that wants to install the file
@@ -484,7 +484,7 @@ mfd_find_host_file(const char *path)
  * Returns: %TRUE if the component may install the file
  */
 static gboolean
-mfd_owners_check_path(GHashTable *owners, const char *path, const char *component_id, GError **error)
+mfd_owners_may_install_at(GHashTable *owners, const char *path, const char *component_id, GError **error)
 {
     const char *owner = g_hash_table_lookup(owners, path);
     g_autofree char *host_file = NULL;
@@ -527,7 +527,7 @@ mfd_owners_check_path(GHashTable *owners, const char *path, const char *componen
 }
 
 /**
- * mfd_integrator_find_current:
+ * mfd_integrator_find_exported_version:
  * @ret_component: (out) (transfer full) (nullable): the version whose integration
  *   files have to be installed on the host, or %NULL if the component must not
  *   have any exports
@@ -539,10 +539,10 @@ mfd_owners_check_path(GHashTable *owners, const char *path, const char *componen
  * Returns: %TRUE on success, even if there is no such version
  */
 static gboolean
-mfd_integrator_find_current(MfdIntegrator *integrator,
-                            const char *component_id,
-                            MfComponent **ret_component,
-                            GError **error)
+mfd_integrator_find_exported_version(MfdIntegrator *integrator,
+                                     const char *component_id,
+                                     MfComponent **ret_component,
+                                     GError **error)
 {
     g_autoptr(GError) local_error = NULL;
 
@@ -560,7 +560,7 @@ mfd_integrator_find_current(MfdIntegrator *integrator,
 }
 
 /**
- * mfd_integrator_read_exports:
+ * mfd_integrator_ensure_exports:
  *
  * Read the integration files of a version from the `exports` directory of its
  * version directory. If a file is missing or damaged, we extract all files
@@ -570,10 +570,10 @@ mfd_integrator_find_current(MfdIntegrator *integrator,
  *   files by their export path, or %NULL on error
  */
 static GHashTable *
-mfd_integrator_read_exports(MfdIntegrator *integrator,
-                            MfComponent *component,
-                            MfManifest *manifest,
-                            GError **error)
+mfd_integrator_ensure_exports(MfdIntegrator *integrator,
+                              MfComponent *component,
+                              MfManifest *manifest,
+                              GError **error)
 {
     GPtrArray *files = mf_integration_get_files(mf_manifest_get_integration(manifest));
     g_autoptr(GHashTable) exports = NULL;
@@ -813,7 +813,7 @@ mfd_integrator_collect_exports(MfdIntegrator *integrator,
         return g_steal_pointer(&wanted);
     }
 
-    contents = mfd_integrator_read_exports(integrator, component, manifest, error);
+    contents = mfd_integrator_ensure_exports(integrator, component, manifest, error);
     if (contents == NULL)
         return NULL;
 
@@ -847,12 +847,12 @@ mfd_integrator_collect_exports(MfdIntegrator *integrator,
 }
 
 /**
- * mfd_export_copy:
+ * mfd_export_copy_for_registry:
  *
  * Returns: (transfer full): a copy with only the fields that a registry records
  */
 static MfdExport *
-mfd_export_copy(const MfdExport *export)
+mfd_export_copy_for_registry(const MfdExport *export)
 {
     MfdExport *copy = g_new0(MfdExport, 1);
 
@@ -898,7 +898,7 @@ mfd_integrator_check_conflicts(MfdIntegrator *integrator, GPtrArray *manifests, 
         for (guint j = 0; j < paths->len; j++) {
             const char *path = g_ptr_array_index(paths, j);
 
-            if (!mfd_owners_check_path(owners, path, component_id, error))
+            if (!mfd_owners_may_install_at(owners, path, component_id, error))
                 return FALSE;
 
             /* the manifests that follow must not install a file at this path either */
@@ -942,7 +942,7 @@ mfd_integrator_drop_conflicts(MfdIntegrator *integrator,
     while (g_hash_table_iter_next(&iter, &path, NULL)) {
         g_autoptr(GError) conflict = NULL;
 
-        if (mfd_owners_check_path(owners, path, component_id, &conflict))
+        if (mfd_owners_may_install_at(owners, path, component_id, &conflict))
             continue;
         mfd_emit_warning(result, "Skipping a file: %s", conflict->message);
         g_hash_table_iter_remove(&iter);
@@ -1191,7 +1191,7 @@ mfd_integrator_reconcile(MfdIntegrator *integrator,
     registry = mfd_integrator_read_registry(integrator, component_id, error);
     if (registry == NULL)
         return FALSE;
-    if (!mfd_integrator_find_current(integrator, component_id, &current, error))
+    if (!mfd_integrator_find_exported_version(integrator, component_id, &current, error))
         return FALSE;
 
     /* the files on the host already belong to the current version */
@@ -1226,7 +1226,7 @@ mfd_integrator_reconcile(MfdIntegrator *integrator,
     }
     g_hash_table_iter_init(&iter, wanted);
     while (g_hash_table_iter_next(&iter, NULL, &value))
-        mfd_exports_add(registry->exports, mfd_export_copy(value));
+        mfd_exports_add(registry->exports, mfd_export_copy_for_registry(value));
     if (!mfd_registry_save(registry, error))
         return FALSE;
 

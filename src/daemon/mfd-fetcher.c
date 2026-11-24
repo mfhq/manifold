@@ -77,12 +77,12 @@ mfd_fetch_request_free(MfdFetchRequest *request)
 }
 
 /**
- * mfd_fetch_request_to_error:
+ * mfd_fetch_request_set_error:
  *
  * Set an error that describes why a request failed.
  */
 void
-mfd_fetch_request_to_error(MfdFetchRequest *request, GError **error)
+mfd_fetch_request_set_error(MfdFetchRequest *request, GError **error)
 {
     if (request->http_status > 0)
         g_set_error(error,
@@ -553,7 +553,7 @@ mfd_fetcher_download_to_memory(MfdFetcher *fetcher,
         MfdFetchRequest *request = g_ptr_array_index(requests, i);
 
         if (request->failure != NULL) {
-            mfd_fetch_request_to_error(request, error);
+            mfd_fetch_request_set_error(request, error);
             goto out;
         }
         g_clear_pointer(&downloads[i]->data, g_bytes_unref);

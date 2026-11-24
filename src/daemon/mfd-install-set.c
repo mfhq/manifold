@@ -68,12 +68,12 @@ mfd_install_item_free(MfdInstallItem *item)
 }
 
 /**
- * mfd_install_set_has_app_on:
+ * mfd_install_set_has_app_on_kit:
  *
  * Returns: %TRUE if the set has an application that runs on the kit of @manifest
  */
 static gboolean
-mfd_install_set_has_app_on(MfdInstallSet *set, MfManifest *manifest)
+mfd_install_set_has_app_on_kit(MfdInstallSet *set, MfManifest *manifest)
 {
     if (mf_manifest_get_kind(manifest) != MF_COMPONENT_KIND_KIT || mf_manifest_is_sdk(manifest))
         return FALSE;
@@ -141,7 +141,7 @@ mfd_install_set_new_for_bundle(MfBundle *bundle)
     for (guint i = 0; i < set->items->len; i++) {
         MfdInstallItem *item = g_ptr_array_index(set->items, i);
 
-        item->is_dependency = mfd_install_set_has_app_on(set, item->manifest);
+        item->is_dependency = mfd_install_set_has_app_on_kit(set, item->manifest);
     }
 
     return set;

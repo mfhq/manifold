@@ -91,13 +91,13 @@ mfd_make_staging_dir(const char *live, GError **error)
 }
 
 /**
- * mfd_swap_into_place:
+ * mfd_replace_dir:
  *
  * Replace the directory @live with @staging atomically, and delete the old
  * contents of @live.
  */
 static gboolean
-mfd_swap_into_place(const char *staging, const char *live, GError **error)
+mfd_replace_dir(const char *staging, const char *live, GError **error)
 {
     if (glnx_renameat2_exchange(AT_FDCWD, staging, AT_FDCWD, live) == 0)
         return glnx_shutil_rm_rf_at(AT_FDCWD, staging, NULL, error);
@@ -386,7 +386,7 @@ mfd_swap_in_channel(const char *root, MfdPreparedChannel *prepared, GError **err
     g_autofree char *catalog_dir = g_build_filename(root, MF_STORE_CATALOG_XML_SUBDIR, NULL);
     g_autofree char *catalog = g_build_filename(catalog_dir, file_name, NULL);
 
-    if (!mfd_swap_into_place(prepared->icons_staging, prepared->icons_live, error))
+    if (!mfd_replace_dir(prepared->icons_staging, prepared->icons_live, error))
         return FALSE;
     g_clear_pointer(&prepared->icons_staging, g_free);
     /* AppStream notices the new catalog because renaming the file into place changes the directory */
@@ -690,7 +690,7 @@ mfd_refresh_remote(const char *root,
         if (!mfd_remove_origin(root, g_ptr_array_index(gone, i), error))
             goto out;
     }
-    if (!mfd_swap_into_place(staging_dir, remote_dir, error))
+    if (!mfd_replace_dir(staging_dir, remote_dir, error))
         goto out;
     g_clear_pointer(&staging_dir, g_free);
 

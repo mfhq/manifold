@@ -16,6 +16,7 @@
 #include "mft-utils.h"
 #include "mfd-install-set.h"
 #include "mfd-manager.h"
+#include "mfd-modify-plan.h"
 #include "mfd-store-writer.h"
 #include "mfd-utils.h"
 
@@ -519,7 +520,7 @@ test_plan_removal(Fixture *f, gconstpointer user_data)
 
     /* removing the app also removes the kit that was installed as its dependency, their images,
      * and the stray image that no component uses */
-    app_removal = mfd_manager_plan_removal(manager, TEST_APP_ID, NULL, NULL, &error);
+    app_removal = mfd_removal_plan_new_for_removal(store, TEST_APP_ID, NULL, NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(app_removal->items->len, ==, 2);
     g_assert_cmpstr(mf_component_get_dir(mft_removal_item(app_removal, 0)->component),
@@ -536,30 +537,30 @@ test_plan_removal(Fixture *f, gconstpointer user_data)
     g_assert_cmpuint(app_removal->image_bytes, ==, 1024 + 2048 + 8192);
 
     /* the core can not be removed, as the kit needs it and no other version of the core is installed */
-    g_assert_null(mfd_manager_plan_removal(manager, TEST_CORE_ID, "13.4", &detail, &error));
+    g_assert_null(mfd_removal_plan_new_for_removal(store, TEST_CORE_ID, "13.4", &detail, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_COMPONENT_IN_USE);
     g_assert_cmpstr(detail.component_id, ==, TEST_CORE_ID);
     g_assert_cmpstr(detail.used_by, ==, TEST_KIT_ID);
     g_clear_error(&error);
 
     /* a cleanup that finds no unneeded component only removes the images that no component uses */
-    cleanup = mfd_manager_plan_removal(manager, NULL, NULL, NULL, &error);
+    cleanup = mfd_removal_plan_new_for_removal(store, NULL, NULL, NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(cleanup->items->len, ==, 0);
     g_assert_cmpuint(cleanup->images->len, ==, 1);
     g_assert_cmpstr(g_ptr_array_index(cleanup->images, 0), ==, stray_hash);
     g_assert_cmpuint(cleanup->image_bytes, ==, 8192);
 
-    g_assert_null(mfd_manager_plan_removal(manager, "org.example.nothing", NULL, &detail, &error));
+    g_assert_null(mfd_removal_plan_new_for_removal(store, "org.example.nothing", NULL, &detail, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
     g_assert_cmpstr(detail.component_id, ==, "org.example.nothing");
     g_assert_null(detail.used_by);
     g_clear_error(&error);
-    g_assert_null(mfd_manager_plan_removal(manager, TEST_APP_ID, "9.9.9", NULL, &error));
+    g_assert_null(mfd_removal_plan_new_for_removal(store, TEST_APP_ID, "9.9.9", NULL, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
     g_clear_error(&error);
     /* a version that is not installed is reported as not found, not as in use */
-    g_assert_null(mfd_manager_plan_removal(manager, TEST_CORE_ID, "9.9", NULL, &error));
+    g_assert_null(mfd_removal_plan_new_for_removal(store, TEST_CORE_ID, "9.9", NULL, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
 }
 
@@ -594,14 +595,14 @@ test_exact_base_stays(Fixture *f, gconstpointer user_data)
                 MF_INSTALL_MODE_MANUAL);
 
     /* core 13.4 can not be removed, as the SDK is pinned to it, even though 13.6 is installed too */
-    g_assert_null(mfd_manager_plan_removal(manager, TEST_CORE_ID, "13.4", &detail, &error));
+    g_assert_null(mfd_removal_plan_new_for_removal(store, TEST_CORE_ID, "13.4", &detail, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_COMPONENT_IN_USE);
     g_assert_cmpstr(detail.used_by, ==, TEST_SDK_ID);
     g_clear_error(&error);
 
     /* core 13.6 can not be removed either: the kit follows the current version of the core,
      * and removing 13.6 would downgrade the core under the kit */
-    g_assert_null(mfd_manager_plan_removal(manager, TEST_CORE_ID, "13.6", &detail, &error));
+    g_assert_null(mfd_removal_plan_new_for_removal(store, TEST_CORE_ID, "13.6", &detail, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_COMPONENT_IN_USE);
     g_assert_cmpstr(detail.used_by, ==, TEST_KIT_ID);
 }
@@ -627,7 +628,7 @@ test_shared_dependency_stays(Fixture *f, gconstpointer user_data)
                 NULL,
                 MF_INSTALL_MODE_AUTO);
 
-    removal = mfd_manager_plan_removal(manager, TEST_APP_ID, NULL, NULL, &error);
+    removal = mfd_removal_plan_new_for_removal(store, TEST_APP_ID, NULL, NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(removal->items->len, ==, 1);
     g_assert_cmpuint(removal->images->len, ==, 1);
@@ -657,7 +658,7 @@ test_old_dependency_is_removed(Fixture *f, gconstpointer user_data)
 
     /* the app follows the current version of the kit, so the old kit version is no longer
      * needed, and a cleanup removes it */
-    cleanup = mfd_manager_plan_removal(manager, NULL, NULL, NULL, &error);
+    cleanup = mfd_removal_plan_new_for_removal(store, NULL, NULL, NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(cleanup->items->len, ==, 1);
     g_assert_cmpstr(mf_component_get_dir(mft_removal_item(cleanup, 0)->component),
@@ -701,7 +702,7 @@ test_dependency_chain_removal(Fixture *f, gconstpointer user_data)
                 NULL,
                 MF_INSTALL_MODE_AUTO);
 
-    cleanup = mfd_manager_plan_removal(manager, NULL, NULL, NULL, &error);
+    cleanup = mfd_removal_plan_new_for_removal(store, NULL, NULL, NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(cleanup->items->len, ==, 2);
     g_assert_cmpstr(mf_component_get_dir(mft_removal_item(cleanup, 0)->component),
@@ -752,7 +753,7 @@ test_newest_app_stays(Fixture *f, gconstpointer user_data)
     g_assert_true(mf_store_load(store, &error));
     g_assert_no_error(error);
 
-    cleanup = mfd_manager_plan_removal(manager, NULL, NULL, NULL, &error);
+    cleanup = mfd_removal_plan_new_for_removal(store, NULL, NULL, NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(cleanup->items->len, ==, 1);
     g_assert_cmpstr(mf_component_get_dir(mft_removal_item(cleanup, 0)->component),
@@ -760,7 +761,7 @@ test_newest_app_stays(Fixture *f, gconstpointer user_data)
                     APPS "/" TEST_APP_ID "/0.2.0-1");
 
     /* if 0.3.0 is removed, 0.2.0 is the newest remaining version and is kept */
-    removal = mfd_manager_plan_removal(manager, TEST_APP_ID, "0.3.0", NULL, &error);
+    removal = mfd_removal_plan_new_for_removal(store, TEST_APP_ID, "0.3.0", NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(removal->items->len, ==, 1);
     g_assert_cmpstr(mf_component_get_dir(mft_removal_item(removal, 0)->component),

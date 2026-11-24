@@ -7,8 +7,6 @@
 #include "config.h"
 #include "mfd-manager.h"
 
-#include <inttypes.h>
-#include <sys/stat.h>
 #include <appstream.h>
 
 #include "mf-component-private.h"
@@ -22,6 +20,8 @@
 #include "mfd-image-reader.h"
 #include "mfd-install-set.h"
 #include "mfd-integrator.h"
+#include "mfd-modify-plan.h"
+#include "mfd-progress-tracker.h"
 #include "mfd-remote-channel.h"
 #include "mfd-refresh.h"
 #include "mfd-resolver.h"
@@ -112,175 +112,6 @@ mfd_manager_new(void)
     return mfd_manager_new_for_store(store);
 }
 
-/**
- * mfd_error_detail_clear:
- */
-void
-mfd_error_detail_clear(MfdErrorDetail *detail)
-{
-    g_clear_pointer(&detail->component_id, g_free);
-    g_clear_pointer(&detail->version, g_free);
-    g_clear_pointer(&detail->base_id, g_free);
-    g_clear_pointer(&detail->base_version, g_free);
-    g_clear_pointer(&detail->identity, g_free);
-    g_clear_pointer(&detail->used_by, g_free);
-    g_clear_pointer(&detail->architecture, g_free);
-    detail->kind = MF_COMPONENT_KIND_UNKNOWN;
-    detail->sdk = FALSE;
-}
-
-/**
- * MfdProgressTracker:
- *
- * Progress state of the current operation: the #MfProgress that is
- * reported, and the counters that it is calculated from.
- */
-typedef struct {
-    MfProgressFunc func;
-    gpointer user_data;
-    MfProgress *progress;
-    MfItemProgress *item; /* the item being worked on, owned by @progress */
-    guint total;          /* number of items of the operation */
-    guint done;           /* number of finished items */
-    uint64_t bytes_last_reported;
-    gboolean item_done;
-} MfdProgressTracker;
-
-/**
- * mfd_progress_tracker_clear:
- */
-static void
-mfd_progress_tracker_clear(MfdProgressTracker *tracker)
-{
-    g_clear_pointer(&tracker->progress, mf_progress_free);
-    tracker->item = NULL;
-}
-
-G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC(MfdProgressTracker, mfd_progress_tracker_clear)
-
-/* the number of bytes of an image that we copy between two progress reports */
-constexpr uint64_t PROGRESS_STEP_BYTES = 4 * 1024 * 1024;
-
-/**
- * mfd_progress_report:
- *
- * Report the current progress of the operation to the caller.
- */
-static void
-mfd_progress_report(MfdProgressTracker *tracker)
-{
-    double item_percent = 0;
-
-    if (tracker->func == NULL)
-        return;
-
-    if (tracker->item != NULL) {
-        uint64_t bytes_done = mf_item_progress_get_bytes_done(tracker->item);
-        uint64_t bytes_total = mf_item_progress_get_bytes_total(tracker->item);
-
-        if (bytes_total > 0)
-            item_percent = (double) bytes_done * 100 / (double) bytes_total;
-        else if (tracker->item_done)
-            item_percent = 100;
-        mf_item_progress_set_percent(tracker->item, item_percent);
-        tracker->bytes_last_reported = bytes_done;
-    }
-    double percent = tracker->total > 0
-                         ? ((double) tracker->done * 100 + item_percent) / (double) tracker->total
-                         : 100;
-    mf_progress_set_percent(tracker->progress, MIN(percent, 100));
-
-    tracker->func(tracker->progress, tracker->user_data);
-}
-
-/**
- * mfd_progress_begin_item:
- * @version: (nullable): the version of the component that the item is about
- * @bytes_total: the size of the image the item copies, or 0
- *
- * Report that work on an item begins.
- */
-static void
-mfd_progress_begin_item(MfdProgressTracker *tracker,
-                        MfAction action,
-                        const char *subject,
-                        const char *version,
-                        uint64_t bytes_total)
-{
-    tracker->item = mf_item_progress_new(action, subject, version);
-    mf_item_progress_set_bytes_total(tracker->item, bytes_total);
-    mf_progress_take_item(tracker->progress, tracker->item);
-    tracker->bytes_last_reported = 0;
-    tracker->item_done = FALSE;
-    mfd_progress_report(tracker);
-}
-
-/**
- * mfd_progress_end_item:
- *
- * Report that the item is done.
- */
-static void
-mfd_progress_end_item(MfdProgressTracker *tracker)
-{
-    mf_item_progress_set_bytes_done(tracker->item, mf_item_progress_get_bytes_total(tracker->item));
-    tracker->item_done = TRUE;
-    mfd_progress_report(tracker);
-    mf_progress_take_item(tracker->progress, NULL);
-    tracker->item = NULL;
-    tracker->done++;
-}
-
-/**
- * mfd_progress_skip_item:
- *
- * Count an item as done, without reporting it as an item of its own.
- */
-static void
-mfd_progress_skip_item(MfdProgressTracker *tracker)
-{
-    tracker->done++;
-    mfd_progress_report(tracker);
-}
-
-/**
- * mfd_progress_split_last_item:
- * @n_items: the number of items to split the last item into
- *
- * Split the last item of the operation into @n_items items, which together
- * take the share of the progress that the last item had. If @n_items is zero,
- * the last item is counted as done right away.
- */
-static void
-mfd_progress_split_last_item(MfdProgressTracker *tracker, guint n_items)
-{
-    if (n_items == 0) {
-        tracker->done = tracker->total;
-        mfd_progress_report(tracker);
-        return;
-    }
-    tracker->total *= n_items;
-    tracker->done *= n_items;
-}
-
-/**
- * mfd_on_copy_progress:
- *
- * Report the progress of writing an image into the store.
- */
-static void
-mfd_on_copy_progress(uint64_t bytes_copied, gpointer user_data)
-{
-    MfdProgressTracker *tracker = user_data;
-
-    mf_item_progress_set_bytes_done(tracker->item, bytes_copied);
-    /* the last bytes are reported when the item ends */
-    if (bytes_copied - tracker->bytes_last_reported < PROGRESS_STEP_BYTES ||
-        bytes_copied == mf_item_progress_get_bytes_total(tracker->item))
-        return;
-    mfd_progress_report(tracker);
-}
-
 /* the arguments of mfd_write_item_image() */
 typedef struct {
     MfdInstallItem *item;
@@ -297,1045 +128,7 @@ mfd_write_item_image(int fd, gpointer user_data, GError **error)
 {
     MfdItemImageWrite *write = user_data;
 
-    return write->item->write_image(write->item, fd, mfd_on_copy_progress, write->tracker, error);
-}
-
-/**
- * MfdInstallPlan:
- *
- * The result of checking one item of an install set, which says how the item will be installed.
- */
-typedef struct {
-    MfdInstallItem *item; /* the item of the set, which outlives the plan */
-    MfInstallMode mode;
-    gboolean skip;      /* the item is installed already or is not needed, so there is nothing to do */
-    gboolean add_image; /* the image has to be added to the store */
-    MfBaseLink *base;   /* link to the base of the component, NULL for a core */
-    /* link to the SDK of the layer below, NULL if the component has no base SDK */
-    MfBaseLink *base_sdk;
-    /* the version of the same component that is installed now, if the item is newer than it.
-     * NULL if the component is new, or if a newer version of it is installed already.*/
-    MfComponent *previous;
-} MfdInstallPlan;
-
-/**
- * mfd_install_plan_clear:
- */
-static void
-mfd_install_plan_clear(MfdInstallPlan *iplan)
-{
-    g_clear_pointer(&iplan->base, mf_base_link_free);
-    g_clear_pointer(&iplan->base_sdk, mf_base_link_free);
-    g_clear_object(&iplan->previous);
-}
-
-/**
- * mfd_install_plan_compare_layer:
- *
- * Order plans by the layer of their component, from the bottom to the top,
- * so every component comes after the components that it builds on.
- */
-static int
-mfd_install_plan_compare_layer(gconstpointer a, gconstpointer b)
-{
-    MfManifest *manifest_a = ((const MfdInstallPlan *) a)->item->manifest;
-    MfManifest *manifest_b = ((const MfdInstallPlan *) b)->item->manifest;
-    MfComponentKind kind_a = mf_manifest_get_kind(manifest_a);
-    MfComponentKind kind_b = mf_manifest_get_kind(manifest_b);
-
-    if (kind_a != kind_b)
-        return kind_a < kind_b ? -1 : 1;
-    /* an SDK builds on a component of its own kind */
-    return (int) mf_manifest_is_sdk(manifest_a) - (int) mf_manifest_is_sdk(manifest_b);
-}
-
-/**
- * mfd_set_error_already_installed:
- */
-static void
-mfd_set_error_already_installed(GError **error,
-                                MfdErrorDetail *ret_detail,
-                                const char *component_id,
-                                const char *version)
-{
-    if (ret_detail != NULL) {
-        mfd_error_detail_clear(ret_detail);
-        ret_detail->component_id = g_strdup(component_id);
-        ret_detail->version = g_strdup(version);
-    }
-    g_set_error(error,
-                MF_ERROR,
-                MF_ERROR_ALREADY_INSTALLED,
-                "%s %s is installed already",
-                component_id,
-                version);
-}
-
-/**
- * mfd_set_error_not_installed:
- * @version: (nullable): the version, or %NULL for any version of the component
- */
-static void
-mfd_set_error_not_installed(GError **error,
-                            MfdErrorDetail *ret_detail,
-                            const char *component_id,
-                            const char *version)
-{
-    if (ret_detail != NULL) {
-        mfd_error_detail_clear(ret_detail);
-        ret_detail->component_id = g_strdup(component_id);
-        ret_detail->version = g_strdup(version);
-    }
-    g_set_error(error,
-                MF_ERROR,
-                MF_ERROR_NOT_FOUND,
-                "%s%s%s is not installed",
-                component_id,
-                version != NULL ? " " : "",
-                version != NULL ? version : "");
-}
-
-/**
- * mfd_set_error_in_use:
- * @used_by: the ID of a component that is kept, and that builds on @component_id
- */
-static void
-mfd_set_error_in_use(GError **error,
-                     MfdErrorDetail *ret_detail,
-                     const char *component_id,
-                     const char *used_by)
-{
-    if (ret_detail != NULL) {
-        mfd_error_detail_clear(ret_detail);
-        ret_detail->component_id = g_strdup(component_id);
-        ret_detail->used_by = g_strdup(used_by);
-    }
-    g_set_error(error,
-                MF_ERROR,
-                MF_ERROR_COMPONENT_IN_USE,
-                "Component %s is used by %s",
-                component_id,
-                used_by);
-}
-
-/**
- * mfd_set_error_missing_base:
- * @component_id: the component whose base or base SDK is missing
- * @ref: the reference to the missing component
- */
-static void
-mfd_set_error_missing_base(GError **error,
-                           MfdErrorDetail *ret_detail,
-                           const char *component_id,
-                           const MfBaseReference *ref)
-{
-    g_autofree char *version = NULL;
-
-    /* the revision is only reported if the exact revision is required */
-    version = ref->exact ? mf_build_full_version(ref->version, ref->revision) : g_strdup(ref->version);
-    if (ret_detail != NULL) {
-        mfd_error_detail_clear(ret_detail);
-        ret_detail->component_id = g_strdup(component_id);
-        ret_detail->base_id = g_strdup(ref->id);
-        ret_detail->base_version = g_strdup(version);
-        ret_detail->identity = g_strdup(ref->identity);
-    }
-    g_set_error(error,
-                MF_ERROR,
-                MF_ERROR_MISSING_BASE,
-                "%s needs base %s %s (identity %s), which is not installed",
-                component_id,
-                ref->id,
-                version,
-                ref->identity);
-}
-
-/**
- * mfd_set_error_id_conflict:
- * @installed: the installed version that has the same ID, but is of a different kind
- */
-static void
-mfd_set_error_id_conflict(GError **error, MfdErrorDetail *ret_detail, MfComponent *installed)
-{
-    const char *component_id = mf_component_get_id(installed);
-    MfComponentKind kind = mf_component_get_kind(installed);
-    gboolean sdk = mf_component_is_sdk(installed);
-
-    if (ret_detail != NULL) {
-        mfd_error_detail_clear(ret_detail);
-        ret_detail->component_id = g_strdup(component_id);
-        ret_detail->kind = kind;
-        ret_detail->sdk = sdk;
-    }
-    g_set_error(error,
-                MF_ERROR,
-                MF_ERROR_ID_CONFLICT,
-                "%s is installed already as another kind of component (%s%s)",
-                component_id,
-                mf_component_kind_to_string(kind),
-                sdk ? " SDK" : "");
-}
-
-/**
- * mfd_set_error_wrong_architecture:
- */
-static void
-mfd_set_error_wrong_architecture(GError **error,
-                                 MfdErrorDetail *ret_detail,
-                                 const char *component_id,
-                                 const char *architecture)
-{
-    if (ret_detail != NULL) {
-        mfd_error_detail_clear(ret_detail);
-        ret_detail->component_id = g_strdup(component_id);
-        ret_detail->architecture = g_strdup(architecture);
-    }
-    g_set_error(error,
-                MF_ERROR,
-                MF_ERROR_WRONG_ARCHITECTURE,
-                "%s is built for %s, but this system is %s",
-                component_id,
-                architecture,
-                mf_get_host_architecture());
-}
-
-/**
- * mfd_manager_becomes_current:
- *
- * Returns: %TRUE unless a newer version of the component is already installed
- */
-static gboolean
-mfd_manager_becomes_current(MfdManager *manager, MfManifest *manifest)
-{
-    g_autoptr(MfComponent)
-        newest = mf_store_get_component(manager->store, mf_manifest_get_component_id(manifest), NULL, NULL);
-
-    return newest == NULL || mf_version_compare_with_rev(mf_manifest_get_version(manifest),
-                                                         mf_manifest_get_revision(manifest),
-                                                         mf_component_get_version(newest),
-                                                         mf_component_get_revision(newest)) >= 0;
-}
-
-/**
- * mfd_manager_find_other_kind:
- *
- * An ID names exactly one kind of component.
- * This method searches the installed components for ones that
- * have the same ID as @manifest, but have a different kind.
- *
- * Returns: (transfer full) (nullable): an installed version with the same ID as @manifest, but of a different kind
- */
-static MfComponent *
-mfd_manager_find_other_kind(MfdManager *manager, MfManifest *manifest)
-{
-    g_autoptr(GPtrArray) versions = NULL;
-
-    versions = mf_store_list_components(manager->store,
-                                        mf_manifest_get_component_id(manifest),
-                                        MF_COMPONENT_KIND_UNKNOWN,
-                                        NULL);
-    for (guint i = 0; versions != NULL && i < versions->len; i++) {
-        MfComponent *component = g_ptr_array_index(versions, i);
-
-        if (mf_component_get_kind(component) != mf_manifest_get_kind(manifest) ||
-            mf_component_is_sdk(component) != mf_manifest_is_sdk(manifest))
-            return g_object_ref(component);
-    }
-    return NULL;
-}
-
-/**
- * mfd_manager_plan_base_link:
- * @component_id: the component that needs the referenced component
- * @ref: a reference to a base or to a base SDK
- * @ret_manifest: (out) (transfer full): the manifest of the component that the link points to
- *
- * Find the component that is used for a base reference, in the set or in
- * the store, and create the link to it.
- *
- * The link for an exact reference names the version that was found. Any
- * other link follows the `current` version of the component if the version
- * we found will be the current one once the set is installed, and names the
- * version we found otherwise.
- *
- * Returns: (transfer full) (nullable): the link, or %NULL with @error set if
- *   no component for @ref is in the set or in the store
- */
-static MfBaseLink *
-mfd_manager_plan_base_link(MfdManager *manager,
-                           MfdInstallSet *set,
-                           const char *component_id,
-                           const MfBaseReference *ref,
-                           MfManifest **ret_manifest,
-                           MfdErrorDetail *ret_detail,
-                           GError **error)
-{
-    g_auto(MfdBaseProvider) provider = {};
-    g_autoptr(MfManifest) manifest = NULL;
-    g_autofree char *version_name = NULL;
-    gboolean current;
-
-    if (!mfd_install_set_find_base(set, manager->store, ref, &provider)) {
-        mfd_set_error_missing_base(error, ret_detail, component_id, ref);
-        return NULL;
-    }
-
-    if (provider.item != NULL) {
-        manifest = g_object_ref(provider.item->manifest);
-        current = mfd_manager_becomes_current(manager, manifest);
-    } else {
-        manifest = mf_component_fetch_manifest(provider.installed, error);
-        if (manifest == NULL)
-            return NULL;
-        current = mf_component_is_current(provider.installed);
-    }
-
-    if (ref->exact || !current)
-        version_name = mf_build_full_version(mf_manifest_get_version(manifest),
-                                             mf_manifest_get_revision(manifest));
-    *ret_manifest = g_object_ref(manifest);
-    return mf_base_link_new(
-        mf_store_subdir_for_kind(mf_manifest_get_kind(manifest), mf_manifest_is_sdk(manifest)),
-        mf_manifest_get_component_id(manifest),
-        version_name);
-}
-
-/**
- * mfd_install_set_needs_exact_version:
- *
- * Returns: %TRUE if an item of the set requires the exact version of @manifest
- *   as its base or as its base SDK
- */
-static gboolean
-mfd_install_set_needs_exact_version(MfdInstallSet *set, MfManifest *manifest)
-{
-    for (guint i = 0; i < set->items->len; i++) {
-        MfManifest *other = ((MfdInstallItem *) g_ptr_array_index(set->items, i))->manifest;
-        const MfBaseReference *base = mf_manifest_get_base(other);
-
-        if (base != NULL && base->exact && mf_base_reference_matches_version(base, manifest))
-            return TRUE;
-        if (mf_base_reference_matches_version(mf_manifest_get_base_sdk(other), manifest))
-            return TRUE;
-    }
-
-    return FALSE;
-}
-
-/**
- * mfd_manifests_have_same_base:
- *
- * Returns: %TRUE if both manifests reference the same version and revision as their base
- */
-static gboolean
-mfd_manifests_have_same_base(MfManifest *a, MfManifest *b)
-{
-    const MfBaseReference *base_a = mf_manifest_get_base(a);
-    const MfBaseReference *base_b = mf_manifest_get_base(b);
-
-    return base_a != NULL && base_b != NULL && g_str_equal(base_a->id, base_b->id) &&
-           g_str_equal(base_a->version, base_b->version) && base_a->revision == base_b->revision;
-}
-
-/**
- * mfd_manager_plan_item_base_sdk:
- * @item: an item that has a base SDK
- * @iplan: the plan to set the base SDK link for
- * @base: the manifest of the base of @item
- *
- * Find the base SDK of an item in the set or in the store, and set the
- * base SDK link of @iplan.
- *
- * The versions of an SDK stack are locked together: the base SDK must extend
- * the exact version that the base of @item was built on. If the base of
- * @item was built on an SDK directly, that SDK must be the base SDK.
- *
- * Returns: %TRUE if the base SDK was found and is valid
- */
-static gboolean
-mfd_manager_plan_item_base_sdk(MfdManager *manager,
-                               MfdInstallSet *set,
-                               MfdInstallItem *item,
-                               MfdInstallPlan *iplan,
-                               MfManifest *base,
-                               MfdErrorDetail *ret_detail,
-                               GError **error)
-{
-    MfManifest *manifest = item->manifest;
-    const char *component_id = mf_manifest_get_component_id(manifest);
-    const MfBaseReference *ref = mf_manifest_get_base_sdk(manifest);
-    const MfBaseReference *base_ref = mf_manifest_get_base(base);
-    g_autoptr(MfManifest) base_sdk = NULL;
-
-    iplan->base_sdk = mfd_manager_plan_base_link(manager,
-                                                 set,
-                                                 component_id,
-                                                 ref,
-                                                 &base_sdk,
-                                                 ret_detail,
-                                                 error);
-    if (iplan->base_sdk == NULL)
-        return FALSE;
-
-    if (!mf_manifest_is_sdk(base_sdk)) {
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_INVALID_BUNDLE,
-                    "%s: %s has the base SDK %s, which is not an SDK",
-                    item->name,
-                    component_id,
-                    ref->id);
-        return FALSE;
-    }
-    /* the base SDK is the SDK of the layer below the base, and a core has no layer below it */
-    if (base_ref == NULL) {
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_INVALID_BUNDLE,
-                    "%s: %s has the base SDK %s, but its base %s is a core",
-                    item->name,
-                    component_id,
-                    ref->id,
-                    mf_manifest_get_component_id(base));
-        return FALSE;
-    }
-    if (!mfd_manifests_have_same_base(base_sdk, base) &&
-        !mf_base_reference_matches_version(base_ref, base_sdk)) {
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_INVALID_BUNDLE,
-                    "%s: the base SDK %s %s-%" PRIu64 " is not the SDK of %s %s-%" PRIu64
-                    ", the base of %s %s-%" PRIu64,
-                    item->name,
-                    ref->id,
-                    ref->version,
-                    ref->revision,
-                    base_ref->id,
-                    base_ref->version,
-                    base_ref->revision,
-                    mf_manifest_get_component_id(base),
-                    mf_manifest_get_version(base),
-                    mf_manifest_get_revision(base));
-        return FALSE;
-    }
-
-    return TRUE;
-}
-
-/**
- * mfd_manager_plan_item_install:
- *
- * Plan the installation of an item of the set.
- *
- * The plan says whether the image is added to the store, whether the item is
- * skipped because the component is installed already or is not needed, which
- * install mode the component gets, and which base and base SDK it links to.
- * Every check that can refuse the item is done here, before anything is written.
- *
- * Returns: %TRUE if the item can be installed
- */
-static gboolean
-mfd_manager_plan_item_install(MfdManager *manager,
-                              MfdInstallSet *set,
-                              MfdInstallItem *item,
-                              MfdInstallPlan *iplan,
-                              MfdErrorDetail *ret_detail,
-                              GError **error)
-{
-    MfManifest *manifest = item->manifest;
-    const char *component_id = mf_manifest_get_component_id(manifest);
-    const char *version = mf_manifest_get_version(manifest);
-    const char *verity_hash = mf_manifest_get_verity_hash(manifest);
-    const MfBaseReference *base_ref = mf_manifest_get_base(manifest);
-    MfComponentKind kind = mf_manifest_get_kind(manifest);
-    gboolean sdk = mf_manifest_is_sdk(manifest);
-    gboolean dependency = item->is_dependency;
-    g_autoptr(MfComponent) other_kind = NULL;
-    g_autoptr(MfComponent) existing = NULL;
-    g_autoptr(MfComponent) newest = NULL;
-
-    if (!g_str_equal(mf_manifest_get_architecture(manifest), mf_get_host_architecture())) {
-        mfd_set_error_wrong_architecture(error,
-                                         ret_detail,
-                                         component_id,
-                                         mf_manifest_get_architecture(manifest));
-        return FALSE;
-    }
-    other_kind = mfd_manager_find_other_kind(manager, manifest);
-    if (other_kind != NULL) {
-        mfd_set_error_id_conflict(error, ret_detail, other_kind);
-        return FALSE;
-    }
-    if (!mf_manifest_check_integration(manifest, error))
-        return FALSE;
-    if (!mf_manifest_check_permissions(manifest, error))
-        return FALSE;
-
-    iplan->item = item;
-    iplan->add_image = !mf_store_has_image(manager->store, verity_hash);
-    iplan->mode = dependency || mf_component_kind_is_always_auto(kind, sdk) ? MF_INSTALL_MODE_AUTO
-                                                                            : MF_INSTALL_MODE_MANUAL;
-
-    existing = mf_store_find_version(manager->store,
-                                     component_id,
-                                     version,
-                                     mf_manifest_get_revision(manifest),
-                                     NULL);
-    if (existing != NULL) {
-        if (g_strcmp0(mf_component_get_verity_hash(existing), verity_hash) != 0) {
-            g_warning("%s %s is installed already, with another image: %s instead of %s",
-                      component_id,
-                      version,
-                      mf_component_get_verity_hash(existing),
-                      verity_hash);
-            mfd_set_error_already_installed(error, ret_detail, component_id, version);
-            return FALSE;
-        }
-        if (dependency) {
-            /* already installed (how it got there doesn't matter) */
-            iplan->skip = TRUE;
-            return TRUE;
-        }
-        /* only a runtime with the install mode auto can be installed again, which makes it manual */
-        if (mf_component_kind_is_always_auto(kind, sdk) ||
-            mf_component_get_install_mode(existing) != MF_INSTALL_MODE_AUTO) {
-            mfd_set_error_already_installed(error, ret_detail, component_id, version);
-            return FALSE;
-        }
-        g_info("%s %s was a dependency, and is installed on purpose now", component_id, version);
-    }
-
-    newest = mf_store_get_component(manager->store, component_id, NULL, NULL);
-    if (newest != NULL && mf_version_compare_with_rev(mf_component_get_version(newest),
-                                                      mf_component_get_revision(newest),
-                                                      version,
-                                                      mf_manifest_get_revision(manifest)) < 0)
-        iplan->previous = g_steal_pointer(&newest);
-
-    /* a dependency is not needed if the same or a newer version of the component is installed
-     * and provides the same identity. A dependency that another item requires in its exact
-     * version is always installed, as a different version can not replace it. */
-    if (dependency && !mfd_install_set_needs_exact_version(set, manifest)) {
-        g_autoptr(MfComponent)
-            provider = mf_store_find_identity(manager->store, mf_manifest_get_identity(manifest), NULL);
-
-        if (!mfd_check_if_pending_item_wins(manifest, provider)) {
-            g_info("%s %s is not needed, %s is installed",
-                   component_id,
-                   version,
-                   mf_component_get_full_version(provider));
-            iplan->skip = TRUE;
-            iplan->add_image = FALSE;
-            return TRUE;
-        }
-    }
-
-    if (base_ref != NULL) {
-        g_autoptr(MfManifest) base = NULL;
-        MfComponentKind base_kind;
-        gboolean base_sdk;
-
-        iplan->base = mfd_manager_plan_base_link(manager,
-                                                 set,
-                                                 component_id,
-                                                 base_ref,
-                                                 &base,
-                                                 ret_detail,
-                                                 error);
-        if (iplan->base == NULL)
-            return FALSE;
-
-        /* a component can only build on the kinds of layer that are allowed below it */
-        base_kind = mf_manifest_get_kind(base);
-        base_sdk = mf_manifest_is_sdk(base);
-        if (!mf_component_kind_can_build_on(kind, sdk, base_kind, base_sdk)) {
-            g_set_error(error,
-                        MF_ERROR,
-                        MF_ERROR_INVALID_BUNDLE,
-                        "%s: %s%s %s can not build on %s%s %s",
-                        item->name,
-                        mf_component_kind_to_string(kind),
-                        sdk ? " SDK" : "",
-                        component_id,
-                        mf_component_kind_to_string(base_kind),
-                        base_sdk ? " SDK" : "",
-                        iplan->base->component_id);
-            return FALSE;
-        }
-
-        /* a component with a base SDK is always an SDK, so its exact base was found above */
-        if (mf_manifest_get_base_sdk(manifest) != NULL &&
-            !mfd_manager_plan_item_base_sdk(manager, set, item, iplan, base, ret_detail, error))
-            return FALSE;
-    }
-
-    return TRUE;
-}
-
-/**
- * mfd_removal_item_free:
- */
-static void
-mfd_removal_item_free(MfdRemovalItem *item)
-{
-    g_object_unref(item->component);
-    g_free(item);
-}
-
-/**
- * mfd_removal_plan_free:
- */
-void
-mfd_removal_plan_free(MfdRemovalPlan *rmplan)
-{
-    if (rmplan == NULL)
-        return;
-
-    g_hash_table_unref(rmplan->cpts_set);
-    g_ptr_array_unref(rmplan->items);
-    g_ptr_array_unref(rmplan->images);
-    g_free(rmplan);
-}
-
-/**
- * mfd_removal_plan_new:
- *
- * Returns: (transfer full): an empty removal plan
- */
-static MfdRemovalPlan *
-mfd_removal_plan_new(void)
-{
-    MfdRemovalPlan *rmplan = g_new0(MfdRemovalPlan, 1);
-
-    rmplan->items = g_ptr_array_new_with_free_func((GDestroyNotify) mfd_removal_item_free);
-    /* the set borrows the components, which are owned by the items */
-    rmplan->cpts_set = g_hash_table_new(g_direct_hash, g_direct_equal);
-    rmplan->images = g_ptr_array_new_with_free_func(g_free);
-    return rmplan;
-}
-
-/**
- * mfd_removal_plan_add_item:
- * @rmplan: the #MfdRemovalPlan
- * @component: the version that will be removed
- * @action: the reason for the removal, see #MfdRemovalItem
- *
- * Add a component to a removal plan.
- *
- * Returns: (transfer none): the new item of the plan
- */
-static MfdRemovalItem *
-mfd_removal_plan_add_item(MfdRemovalPlan *rmplan, MfComponent *component, MfAction action)
-{
-    MfdRemovalItem *item = g_new0(MfdRemovalItem, 1);
-
-    item->component = g_object_ref(component);
-    item->action = action;
-    g_ptr_array_add(rmplan->items, item);
-    g_hash_table_add(rmplan->cpts_set, item->component);
-
-    return item;
-}
-
-/**
- * mfd_manager_find_used:
- * @installed: (element-type MfComponent): every installed version
- * @rm_pending: (element-type MfComponent): versions that should be ignored because they will be removed
- *
- * Find the versions that are used as a base or as a base SDK by an installed
- * version which is not in @rm_pending.
- *
- * A link to `current` counts as a link to the version that is current now.
- * If we removed that version, `current` would move to an older version, and
- * the components that link to `current` would build on the older version.
- * A base is not counted as used if its link can not be read, or if it is not
- * installed.
- *
- * Returns: a table that maps every used version to one of the versions that link to it
- */
-static GHashTable *
-mfd_manager_find_used(MfdManager *manager, GPtrArray *installed, GHashTable *rm_pending)
-{
-    GHashTable *used = g_hash_table_new_full(g_direct_hash, g_direct_equal, g_object_unref, NULL);
-
-    for (guint i = 0; i < installed->len; i++) {
-        MfComponent *component = g_ptr_array_index(installed, i);
-        MfComponent *base;
-        MfComponent *base_sdk;
-
-        if (g_hash_table_contains(rm_pending, component))
-            continue;
-        base = mf_store_get_base(manager->store, component, NULL);
-        if (base != NULL)
-            g_hash_table_insert(used, base, component);
-        base_sdk = mf_store_get_base_sdk(manager->store, component, NULL);
-        if (base_sdk != NULL)
-            g_hash_table_insert(used, base_sdk, component);
-    }
-
-    return used;
-}
-
-/**
- * mfd_find_used_images:
- * @installed: (element-type MfComponent): every installed version
- * @rm_pending: (element-type MfComponent): versions that are planned for removal
- *
- * Returns: a set with the verity hash of every image that a version outside of @rm_pending uses
- */
-static GHashTable *
-mfd_find_used_images(GPtrArray *installed, GHashTable *rm_pending)
-{
-    GHashTable *used = g_hash_table_new(g_str_hash, g_str_equal);
-
-    for (guint i = 0; i < installed->len; i++) {
-        MfComponent *component = g_ptr_array_index(installed, i);
-
-        if (!g_hash_table_contains(rm_pending, component))
-            g_hash_table_add(used, (gpointer) mf_component_get_verity_hash(component));
-    }
-
-    return used;
-}
-
-/**
- * mfd_find_newest_apps:
- * @installed: (element-type MfComponent): every installed version
- * @rm_pending: (element-type MfComponent): versions that are planned for removal
- *
- * Find the newest version of every application and plugin that is not
- * planned for removal. The newest version is kept regardless of its install mode.
- *
- * Returns: a set of the newest versions
- */
-static GHashTable *
-mfd_find_newest_apps(GPtrArray *installed, GHashTable *rm_pending)
-{
-    /* maps a component ID to its newest version */
-    g_autoptr(GHashTable) newest = g_hash_table_new(g_str_hash, g_str_equal);
-    GHashTable *kept = g_hash_table_new(g_direct_hash, g_direct_equal);
-    GHashTableIter iter;
-    gpointer value;
-
-    for (guint i = 0; i < installed->len; i++) {
-        MfComponent *component = g_ptr_array_index(installed, i);
-        MfComponent *other;
-
-        if (!mf_component_kind_is_always_auto(mf_component_get_kind(component),
-                                              mf_component_is_sdk(component)) ||
-            g_hash_table_contains(rm_pending, component))
-            continue;
-        other = g_hash_table_lookup(newest, mf_component_get_id(component));
-        if (other == NULL || mf_version_compare_with_rev(mf_component_get_version(component),
-                                                         mf_component_get_revision(component),
-                                                         mf_component_get_version(other),
-                                                         mf_component_get_revision(other)) > 0)
-            g_hash_table_insert(newest, (gpointer) mf_component_get_id(component), component);
-    }
-
-    g_hash_table_iter_init(&iter, newest);
-    while (g_hash_table_iter_next(&iter, NULL, &value))
-        g_hash_table_add(kept, value);
-
-    return kept;
-}
-
-/**
- * mfd_manager_complete_removal_plan:
- * @rmplan: the removal plan, which may already list versions planned for removal
- * @installed: (element-type MfComponent): every installed version
- * @requested: (element-type MfComponent): the versions that were requested to be removed
- *
- * Work out everything a removal will delete, in the order it has to go.
- *
- * A version is planned for removal if deletion was requested explicitly, or if it is
- * marked as auto and is not the newest version of an application or plugin. In both cases,
- * the version is only planned for removal once no kept version links to it anymore.
- * Removing a version can leave its base unused, e.g. the kit of an
- * application, so the search is repeated until no more versions are found.
- * A version is therefore always removed after every version that links to it.
- * A requested version that a kept version still links to is not planned for
- * removal.
- *
- * Then every image that no kept version uses is planned for removal, too.
- */
-static gboolean
-mfd_manager_complete_removal_plan(MfdManager *manager,
-                                  MfdRemovalPlan *rmplan,
-                                  GPtrArray *installed,
-                                  GHashTable *requested,
-                                  GError **error)
-{
-    g_autoptr(GHashTable) newest_apps = NULL;
-    g_autoptr(GHashTable) images_used = NULL;
-    g_autoptr(GPtrArray) images = NULL;
-    gboolean added;
-
-    newest_apps = mfd_find_newest_apps(installed, requested);
-    do {
-        /* the versions that are still used by a version which is not planned for removal */
-        g_autoptr(GHashTable) used = mfd_manager_find_used(manager, installed, rmplan->cpts_set);
-
-        added = FALSE;
-        for (guint i = 0; i < installed->len; i++) {
-            MfComponent *component = g_ptr_array_index(installed, i);
-
-            if (g_hash_table_contains(rmplan->cpts_set, component) || g_hash_table_contains(used, component))
-                continue;
-            if (g_hash_table_contains(requested, component)) {
-                mfd_removal_plan_add_item(rmplan, component, MF_ACTION_REMOVE);
-            } else if (mf_component_get_install_mode(component) == MF_INSTALL_MODE_AUTO &&
-                       !g_hash_table_contains(newest_apps, component)) {
-                g_info("%s is not needed anymore", mf_component_get_dir(component));
-                mfd_removal_plan_add_item(rmplan, component, MF_ACTION_CLEANUP);
-            } else {
-                /* kept: marked manual, or the newest version of an application or plugin */
-                continue;
-            }
-            added = TRUE;
-        }
-    } while (added);
-
-    /* plan to remove the images that no kept version uses */
-    images_used = mfd_find_used_images(installed, rmplan->cpts_set);
-    images = mf_store_list_images(manager->store, error);
-    if (images == NULL)
-        return FALSE;
-    for (guint i = 0; i < images->len; i++) {
-        const char *hash = g_ptr_array_index(images, i);
-        g_autofree char *path = NULL;
-        struct stat st;
-
-        if (g_hash_table_contains(images_used, hash))
-            continue;
-        path = mf_store_image_path_at(mf_store_get_path(manager->store), hash);
-        if (stat(path, &st) == 0)
-            rmplan->image_bytes += (uint64_t) st.st_size;
-        g_ptr_array_add(rmplan->images, g_strdup(hash));
-    }
-
-    return TRUE;
-}
-
-/**
- * mfd_version_selects:
- * @version: a version, or a full version if @full is set
- *
- * Check whether @version matches the version of an installed component.
- */
-static gboolean
-mfd_version_selects(MfComponent *component, const char *version, gboolean full)
-{
-    return g_str_equal(full ? mf_component_get_full_version(component) : mf_component_get_version(component),
-                       version);
-}
-
-/**
- * mfd_manager_resolve_version:
- * @version: (nullable): a version, which selects all of its revisions, or
- *   a full version (`<version>-<rev>`), which selects one revision
- * @ret_full: (out): whether @version is a full version
- *
- * Find out whether @version is a version or a full version, by comparing it
- * with the installed versions of the component.
- *
- * A version may itself end in a dash and a number, like a full version does.
- * We therefore refuse a @version that matches the version of one installed
- * component, and the full version of a different one.
- */
-static gboolean
-mfd_manager_resolve_version(MfdManager *manager,
-                            const char *component_id,
-                            const char *version,
-                            gboolean *ret_full,
-                            GError **error)
-{
-    g_autoptr(GPtrArray) components = NULL;
-    gboolean as_version = FALSE;
-    gboolean as_full = FALSE;
-
-    *ret_full = FALSE;
-    if (version == NULL)
-        return TRUE;
-    components = mf_store_list_components(manager->store, component_id, MF_COMPONENT_KIND_UNKNOWN, error);
-    if (components == NULL)
-        return FALSE;
-    for (guint i = 0; i < components->len; i++) {
-        auto component = MF_COMPONENT(g_ptr_array_index(components, i));
-
-        as_version |= mfd_version_selects(component, version, FALSE);
-        as_full |= mfd_version_selects(component, version, TRUE);
-    }
-    if (as_version && as_full) {
-        g_set_error(
-            error,
-            MF_ERROR,
-            MF_ERROR_FAILED,
-            "%s %s is ambiguous: It matches both the version of an installed component, as well as its version and revision",
-            component_id,
-            version);
-        return FALSE;
-    }
-
-    *ret_full = as_full;
-    return TRUE;
-}
-
-/**
- * mfd_manager_plan_removal:
- * @manager: an #MfdManager
- * @component_id: (nullable): a component to remove, or %NULL to only plan a cleanup
- * @version: (nullable): the version to remove with all of its revisions, the
- *   full version (`<version>-<rev>`) to remove one revision, or %NULL for all versions
- * @ret_detail: (out caller-allocates) (optional): details about the failure
- * @error: a #GError
- *
- * Create the removal plan for a component. The plan contains the requested
- * versions of the component, every dependency that no kept component builds
- * on after their removal, and every image that no kept component uses.
- * The store is not changed.
- *
- * Returns: (transfer full): the plan, or %NULL on error
- */
-MfdRemovalPlan *
-mfd_manager_plan_removal(MfdManager *manager,
-                         const char *component_id,
-                         const char *version,
-                         MfdErrorDetail *ret_detail,
-                         GError **error)
-{
-    g_autoptr(MfdRemovalPlan) rmplan = mfd_removal_plan_new();
-    g_autoptr(GPtrArray) installed = NULL;
-    g_autoptr(GHashTable) requested = g_hash_table_new(g_direct_hash, g_direct_equal);
-    gboolean full = FALSE;
-
-    g_return_val_if_fail(MFD_IS_MANAGER(manager), NULL);
-
-    installed = mf_store_list_components(manager->store, NULL, MF_COMPONENT_KIND_UNKNOWN, error);
-    if (installed == NULL)
-        return NULL;
-
-    if (component_id != NULL) {
-        if (!mfd_manager_resolve_version(manager, component_id, version, &full, error))
-            return NULL;
-        for (guint i = 0; i < installed->len; i++) {
-            MfComponent *candidate = g_ptr_array_index(installed, i);
-
-            if (g_str_equal(mf_component_get_id(candidate), component_id) &&
-                (version == NULL || mfd_version_selects(candidate, version, full)))
-                g_hash_table_add(requested, candidate);
-        }
-        if (g_hash_table_size(requested) == 0) {
-            mfd_set_error_not_installed(error, ret_detail, component_id, version);
-            return NULL;
-        }
-    }
-
-    if (!mfd_manager_complete_removal_plan(manager, rmplan, installed, requested, error))
-        return NULL;
-
-    /* a requested version that is not planned for removal is still linked to by a kept version */
-    for (guint i = 0; i < installed->len; i++) {
-        MfComponent *candidate = g_ptr_array_index(installed, i);
-        g_autoptr(GHashTable) used = NULL;
-
-        if (!g_hash_table_contains(requested, candidate) ||
-            g_hash_table_contains(rmplan->cpts_set, candidate))
-            continue;
-        used = mfd_manager_find_used(manager, installed, rmplan->cpts_set);
-        mfd_set_error_in_use(error,
-                             ret_detail,
-                             component_id,
-                             mf_component_get_id(g_hash_table_lookup(used, candidate)));
-        return NULL;
-    }
-
-    return g_steal_pointer(&rmplan);
-}
-
-/**
- * mfd_manager_plan_supersede:
- * @plans: (element-type MfdInstallPlan): the plans of the installation
- *
- * Create the removal plan for the versions that an installation supersedes.
- *
- * A superseded version is an older version or revision of a component that
- * was installed, which is marked as auto and which no kept version links to.
- * As with any removal, the plan then also contains every dependency that no
- * kept component builds on anymore, and every image that no kept component
- * uses. The store is not changed.
- *
- * Returns: (transfer full): the plan, or %NULL on error
- */
-static MfdRemovalPlan *
-mfd_manager_plan_supersede(MfdManager *manager, GArray *plans, GError **error)
-{
-    g_autoptr(MfdRemovalPlan) rmplan = mfd_removal_plan_new();
-    g_autoptr(GPtrArray) installed = NULL;
-    g_autoptr(GHashTable) superseded = g_hash_table_new(g_direct_hash, g_direct_equal);
-    g_autoptr(GHashTable) used = NULL;
-    gboolean kept;
-
-    installed = mf_store_list_components(manager->store, NULL, MF_COMPONENT_KIND_UNKNOWN, error);
-    if (installed == NULL)
-        return NULL;
-
-    for (guint i = 0; i < installed->len; i++) {
-        MfComponent *component = g_ptr_array_index(installed, i);
-
-        if (mf_component_get_install_mode(component) != MF_INSTALL_MODE_AUTO)
-            continue;
-        for (guint j = 0; j < plans->len; j++) {
-            MfdInstallPlan *plan = &g_array_index(plans, MfdInstallPlan, j);
-            MfManifest *manifest = plan->item->manifest;
-
-            if (!plan->skip &&
-                g_str_equal(mf_component_get_id(component), mf_manifest_get_component_id(manifest)) &&
-                mf_version_compare_with_rev(mf_component_get_version(component),
-                                            mf_component_get_revision(component),
-                                            mf_manifest_get_version(manifest),
-                                            mf_manifest_get_revision(manifest)) < 0) {
-                g_hash_table_add(superseded, component);
-                break;
-            }
-        }
-    }
-
-    /* a superseded version is kept if a kept version links to it. We repeat the check until
-     * nothing changes, as a version that is kept now may itself link to a superseded version. */
-    do {
-        GHashTableIter iter;
-        gpointer component;
-
-        g_clear_pointer(&used, g_hash_table_unref);
-        used = mfd_manager_find_used(manager, installed, superseded);
-        kept = FALSE;
-        g_hash_table_iter_init(&iter, superseded);
-        while (g_hash_table_iter_next(&iter, &component, NULL)) {
-            MfComponent *used_by = g_hash_table_lookup(used, component);
-
-            if (used_by == NULL)
-                continue;
-            g_info("%s is superseded, but %s still builds on it",
-                   mf_component_get_dir(component),
-                   mf_component_get_id(used_by));
-            g_hash_table_iter_remove(&iter);
-            kept = TRUE;
-        }
-    } while (kept);
-
-    for (guint i = 0; i < installed->len; i++) {
-        MfComponent *component = g_ptr_array_index(installed, i);
-
-        if (g_hash_table_contains(superseded, component))
-            mfd_removal_plan_add_item(rmplan, component, MF_ACTION_CLEANUP)->superseded = TRUE;
-    }
-
-    /* if no version is superseded, we do not clean up anything else either */
-    if (rmplan->items->len > 0 &&
-        !mfd_manager_complete_removal_plan(manager, rmplan, installed, superseded, error))
-        return NULL;
-    return g_steal_pointer(&rmplan);
+    return write->item->write_image(write->item, fd, mfd_progress_on_copy, write->tracker, error);
 }
 
 /**
@@ -1440,7 +233,7 @@ mfd_make_local_appstream_catalog(GBytes *catalog, GError **error)
 }
 
 /**
- * mfd_manager_read_exports:
+ * mfd_manager_read_checked_exports:
  * @manifest: the manifest of an image in the store
  *
  * Read the integration files of an image, and check that they can be
@@ -1450,7 +243,7 @@ mfd_make_local_appstream_catalog(GBytes *catalog, GError **error)
  *   files by their export path, or %NULL on error
  */
 static GHashTable *
-mfd_manager_read_exports(MfdManager *manager, MfManifest *manifest, GError **error)
+mfd_manager_read_checked_exports(MfdManager *manager, MfManifest *manifest, GError **error)
 {
     MfIntegration *integration = mf_manifest_get_integration(manifest);
     g_autoptr(GHashTable) exports = mfd_image_read_integration(manager->store, manifest, error);
@@ -1540,7 +333,7 @@ mfd_manager_execute_install_plan(MfdManager *manager,
     }
 
     /* we can only read files from an image once it is in the store, as it is not verified before */
-    exports = mfd_manager_read_exports(manager, manifest, &local_error);
+    exports = mfd_manager_read_checked_exports(manager, manifest, &local_error);
     if (exports == NULL || !mfd_store_writer_install_component(manager->writer,
                                                                manifest,
                                                                iplan->base,
@@ -1579,68 +372,6 @@ mfd_manager_execute_install_plan(MfdManager *manager,
     if (added)
         *ret_bytes_added = image_size;
     return TRUE;
-}
-
-/**
- * mfd_manager_check_file_conflicts:
- * @plans: (element-type MfdInstallPlan): the plans of the installation
- *
- * Check that the integration files of the installation do not conflict with
- * files that exist on the host. Only the integration files of the current
- * version of a component are installed on the host, so we only check the
- * versions that become current.
- *
- * Returns: %TRUE if there is no conflict
- */
-static gboolean
-mfd_manager_check_file_conflicts(MfdManager *manager, GArray *plans, GError **error)
-{
-    g_autoptr(GPtrArray) manifests = g_ptr_array_sized_new(plans->len);
-
-    for (guint i = 0; i < plans->len; i++) {
-        MfdInstallPlan *plan = &g_array_index(plans, MfdInstallPlan, i);
-        MfManifest *manifest = plan->item->manifest;
-
-        if (!plan->skip && mfd_manager_becomes_current(manager, manifest))
-            g_ptr_array_add(manifests, manifest);
-    }
-
-    return mfd_integrator_check_conflicts(manager->integrator, manifests, error);
-}
-
-/**
- * mfd_manager_plan_install:
- * @ret_detail: (out caller-allocates) (optional): details about the failure
- *
- * Plan the installation of every item of a set.
- *
- * Returns: (transfer full) (element-type MfdInstallPlan): the plans, or %NULL
- *   if the set can not be installed
- */
-static GArray *
-mfd_manager_plan_install(MfdManager *manager, MfdInstallSet *set, MfdErrorDetail *ret_detail, GError **error)
-{
-    GPtrArray *items = set->items;
-    g_autoptr(GArray) plans = g_array_sized_new(FALSE, TRUE, sizeof(MfdInstallPlan), items->len);
-
-    g_array_set_size(plans, items->len);
-    g_array_set_clear_func(plans, (GDestroyNotify) mfd_install_plan_clear);
-    for (guint i = 0; i < items->len; i++) {
-        if (!mfd_manager_plan_item_install(manager,
-                                           set,
-                                           g_ptr_array_index(items, i),
-                                           &g_array_index(plans, MfdInstallPlan, i),
-                                           ret_detail,
-                                           error))
-            return NULL;
-    }
-    if (!mfd_manager_check_file_conflicts(manager, plans, error))
-        return NULL;
-
-    /* install every component after the components that it builds on */
-    g_array_sort(plans, mfd_install_plan_compare_layer);
-
-    return g_steal_pointer(&plans);
 }
 
 /**
@@ -1782,7 +513,7 @@ mfd_manager_install_set(MfdManager *manager,
     mfd_integrator_reconcile_all(manager->integrator);
 
     /* plan installation */
-    plans = mfd_manager_plan_install(manager, set, ret_detail, error);
+    plans = mfd_install_plans_new_for_set(manager->store, manager->integrator, set, ret_detail, error);
     if (plans == NULL)
         return NULL;
 
@@ -1814,7 +545,8 @@ mfd_manager_install_set(MfdManager *manager,
     }
 
     /* remove the superseded versions. The installation is still successful if their removal fails. */
-    rmplan = mfd_manager_plan_supersede(manager, plans, &supersede_error);
+    rmplan = mfd_removal_plan_new_for_superseded(manager->store, plans, &supersede_error);
+    /* the number of versions to remove is only known now */
     mfd_progress_split_last_item(&tracker, rmplan != NULL ? rmplan->items->len : 0);
     if (rmplan == NULL || !mfd_manager_execute_removal(manager, rmplan, &tracker, result, &supersede_error))
         mfd_emit_warning(result, "Unable to remove the superseded versions: %s", supersede_error->message);
@@ -1867,7 +599,7 @@ mfd_manager_remove(MfdManager *manager,
     if (!mf_store_load(manager->store, error))
         return NULL;
     mfd_integrator_reconcile_all(manager->integrator);
-    rmplan = mfd_manager_plan_removal(manager, component_id, version, ret_detail, error);
+    rmplan = mfd_removal_plan_new_for_removal(manager->store, component_id, version, ret_detail, error);
     if (rmplan == NULL)
         return NULL;
 
@@ -1883,17 +615,17 @@ mfd_manager_remove(MfdManager *manager,
 }
 
 /**
- * mfd_manager_mark_selects:
+ * mfd_component_is_mark_target:
  *
  * Check whether @component is one of the versions to mark. If @version is
  * %NULL, only the current version is marked.
  */
 static gboolean
-mfd_manager_mark_selects(MfComponent *component, const char *version, gboolean full)
+mfd_component_is_mark_target(MfComponent *component, const char *version, gboolean full)
 {
     if (version == NULL)
         return mf_component_is_current(component);
-    return mfd_version_selects(component, version, full);
+    return mfd_component_matches_version(component, version, full);
 }
 
 /**
@@ -1931,7 +663,7 @@ mfd_manager_mark(MfdManager *manager,
 
     if (!mf_store_load(manager->store, error))
         return NULL;
-    if (!mfd_manager_resolve_version(manager, component_id, version, &full, error))
+    if (!mfd_store_check_version_is_full(manager->store, component_id, version, &full, error))
         return NULL;
     components = mf_store_list_components(manager->store, component_id, MF_COMPONENT_KIND_UNKNOWN, error);
     if (components == NULL)
@@ -1940,7 +672,7 @@ mfd_manager_mark(MfdManager *manager,
     for (guint i = 0; i < components->len; i++) {
         MfComponent *component = g_ptr_array_index(components, i);
 
-        if (!mfd_manager_mark_selects(component, version, full))
+        if (!mfd_component_is_mark_target(component, version, full))
             continue;
         if (!mfd_store_writer_set_mode(manager->writer, component, mode, error))
             return NULL;
@@ -1960,7 +692,7 @@ mfd_manager_mark(MfdManager *manager,
     for (guint i = 0; i < components->len; i++) {
         MfComponent *component = g_ptr_array_index(components, i);
 
-        if (mfd_manager_mark_selects(component, version, full))
+        if (mfd_component_is_mark_target(component, version, full))
             g_ptr_array_add(marked, g_object_ref(component));
     }
 
@@ -2056,7 +788,7 @@ mfd_manager_refresh_for_retry(MfdManager *manager,
 }
 
 /**
- * mfd_manager_resolve:
+ * mfd_manager_resolve_request:
  * @manager: an #MfdManager
  * @request: the request to resolve
  * @error: a #GError
@@ -2071,7 +803,7 @@ mfd_manager_refresh_for_retry(MfdManager *manager,
  *   request, or %NULL on error
  */
 MfdInstallSet *
-mfd_manager_resolve(MfdManager *manager, MfdRepoRequest *request, GError **error)
+mfd_manager_resolve_request(MfdManager *manager, MfdRepoRequest *request, GError **error)
 {
     g_autoptr(MfdFetcher) fetcher = NULL;
     const char *root;

@@ -108,7 +108,7 @@ mfd_resolver_fetch_manifest(MfdResolver *resolver,
 }
 
 /**
- * mfd_resolver_add:
+ * mfd_resolver_add_version:
  * @dependency: whether the version is only installed because another component needs it
  *
  * Add a version of a component to the set.
@@ -116,11 +116,11 @@ mfd_resolver_fetch_manifest(MfdResolver *resolver,
  * Returns: (transfer none): the new item
  */
 static MfdInstallItem *
-mfd_resolver_add(MfdResolver *resolver,
-                 MfdRemoteChannel *channel,
-                 MfRepoVersion *version,
-                 MfManifest *manifest,
-                 gboolean dependency)
+mfd_resolver_add_version(MfdResolver *resolver,
+                         MfdRemoteChannel *channel,
+                         MfRepoVersion *version,
+                         MfManifest *manifest,
+                         gboolean dependency)
 {
     MfdInstallItem *item = mfd_install_set_add(resolver->set, manifest, version->bundle, channel->origin);
 
@@ -180,7 +180,11 @@ mfd_resolver_find_base(MfdResolver *resolver,
                 if (candidate == NULL)
                     return FALSE;
                 if (g_str_equal(mf_manifest_get_identity(candidate), ref->identity)) {
-                    *ret_item = mfd_resolver_add(resolver, candidate_channel, version, candidate, TRUE);
+                    *ret_item = mfd_resolver_add_version(resolver,
+                                                         candidate_channel,
+                                                         version,
+                                                         candidate,
+                                                         TRUE);
                     return TRUE;
                 }
             }
@@ -297,7 +301,7 @@ mfd_resolver_add_with_bases(MfdResolver *resolver,
     manifest = mfd_resolver_fetch_manifest(resolver, channel, component_id, version, error);
     if (manifest == NULL)
         return FALSE;
-    item = mfd_resolver_add(resolver, channel, version, manifest, dependency);
+    item = mfd_resolver_add_version(resolver, channel, version, manifest, dependency);
 
     return mfd_resolver_add_bases(resolver, item, 0, need_bases, error);
 }
@@ -489,12 +493,12 @@ mfd_find_followed_bases(GPtrArray *installed)
 }
 
 /**
- * mfd_find_current:
+ * mfd_find_current_version:
  *
  * Returns: (transfer none) (nullable): the current version of a component
  */
 static MfComponent *
-mfd_find_current(GPtrArray *installed, const char *component_id)
+mfd_find_current_version(GPtrArray *installed, const char *component_id)
 {
     for (guint i = 0; i < installed->len; i++) {
         MfComponent *component = g_ptr_array_index(installed, i);
@@ -506,7 +510,7 @@ mfd_find_current(GPtrArray *installed, const char *component_id)
 }
 
 /**
- * mfd_check_update:
+ * mfd_find_update:
  * @warnings: (element-type utf8): the list to add a warning to if @component can not be updated
  *
  * Check whether the channel that a component came from has a newer version
@@ -515,7 +519,7 @@ mfd_find_current(GPtrArray *installed, const char *component_id)
  * Returns: (transfer full) (nullable): the update, or %NULL if there is none
  */
 static MfdUpdate *
-mfd_check_update(MfdRemoteChannelSet *channel_set, MfComponent *component, GPtrArray *warnings)
+mfd_find_update(MfdRemoteChannelSet *channel_set, MfComponent *component, GPtrArray *warnings)
 {
     const char *component_id = mf_component_get_id(component);
     const char *origin = mf_component_get_origin(component);
@@ -591,7 +595,7 @@ mfd_resolver_find_updates(MfdResolver *resolver,
 
     if (component_ids != NULL) {
         for (guint i = 0; component_ids[i] != NULL; i++) {
-            MfComponent *component = mfd_find_current(installed, component_ids[i]);
+            MfComponent *component = mfd_find_current_version(installed, component_ids[i]);
 
             if (component == NULL) {
                 g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s is not installed"), component_ids[i]);
@@ -625,9 +629,9 @@ mfd_resolver_find_updates(MfdResolver *resolver,
 
     updates = g_ptr_array_new_with_free_func((GDestroyNotify) mfd_update_free);
     for (guint i = 0; i < candidates->len; i++) {
-        MfdUpdate *update = mfd_check_update(resolver->channel_set,
-                                             g_ptr_array_index(candidates, i),
-                                             warnings);
+        MfdUpdate *update = mfd_find_update(resolver->channel_set,
+                                            g_ptr_array_index(candidates, i),
+                                            warnings);
 
         if (update != NULL)
             g_ptr_array_add(updates, update);

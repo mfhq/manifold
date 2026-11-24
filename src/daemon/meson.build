@@ -3,6 +3,8 @@
 #
 
 manifoldd_src = [
+    'mfd-errors.c',
+    'mfd-errors.h',
     'mfd-image-reader.c',
     'mfd-image-reader.h',
     'mfd-fetcher.c',
@@ -13,8 +15,12 @@ manifoldd_src = [
     'mfd-integrator.h',
     'mfd-manager.c',
     'mfd-manager.h',
+    'mfd-modify-plan.c',
+    'mfd-modify-plan.h',
     'mfd-policy.c',
     'mfd-policy.h',
+    'mfd-progress-tracker.c',
+    'mfd-progress-tracker.h',
     'mfd-refresh.c',
     'mfd-refresh.h',
     'mfd-remote-channel.c',

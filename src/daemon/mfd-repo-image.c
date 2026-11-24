@@ -112,7 +112,7 @@ mfd_fetch_ranges(MfdFetcher *fetcher,
     if (!mfd_fetcher_fetch(fetcher, requests, progress_func, user_data, error))
         return FALSE;
     if (request->failure != NULL) {
-        mfd_fetch_request_to_error(request, error);
+        mfd_fetch_request_set_error(request, error);
         return FALSE;
     }
     return TRUE;

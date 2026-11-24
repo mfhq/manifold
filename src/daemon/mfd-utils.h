@@ -18,6 +18,15 @@ void     mfd_emit_warning(MfResult   *result,
                           const char *format,
                           ...) G_GNUC_PRINTF(2, 3);
 
+gboolean mfd_component_matches_version(MfComponent *component,
+                                       const char  *version,
+                                       gboolean     full);
+gboolean mfd_store_check_version_is_full(MfStore    *store,
+                                         const char *component_id,
+                                         const char *version,
+                                         gboolean   *ret_full,
+                                         GError    **error);
+
 gboolean mfd_is_directory(const char *path);
 gboolean mfd_unlink_if_exists(const char *path,
                               GError    **error);
