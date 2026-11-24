@@ -654,7 +654,7 @@ class InstallTest(InstallerTestCase):
         self.install_core()
         self.install(core, other_sdk)
         self.assertIn(
-            f'the SDK {other_sdk.component} 13.4-{other_sdk.revision} is not the SDK of the base of',
+            f'the base SDK {other_sdk.component} 13.4-{other_sdk.revision} is not the SDK of',
             self.install(self.kit, self.kit_sdk_on(other_sdk), expect=1),
         )
 

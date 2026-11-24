@@ -10,6 +10,7 @@
 #include <manifold.h>
 
 #include "mf-component-private.h"
+#include "mf-manifest-private.h"
 #include "mf-store-private.h"
 #include "mft-utils.h"
 
@@ -156,7 +157,7 @@ test_get_version(Fixture *f, gconstpointer user_data)
     g_assert_cmpint(mf_component_get_install_mode(platform), ==, MF_INSTALL_MODE_AUTO);
     manifest = mf_component_fetch_manifest(platform, &error);
     g_assert_no_error(error);
-    g_assert_cmpstr(mf_manifest_get_base_id(manifest), ==, TEST_CORE_ID);
+    g_assert_cmpstr(mf_manifest_get_base(manifest)->id, ==, TEST_CORE_ID);
     g_assert_cmpuint(mf_manifest_get_data_offset(manifest), ==, 20480);
 
     g_assert_null(mf_store_get_component(f->store, TEST_CORE_ID, "14", &error));

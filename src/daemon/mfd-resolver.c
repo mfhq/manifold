@@ -129,55 +129,13 @@ mfd_resolver_add(MfdResolver *resolver,
     return item;
 }
 
-/* reference to a base or a base SDK, as read from a manifest */
-typedef struct {
-    const char *id;
-    const char *version;
-    uint64_t revision;
-    const char *identity;
-    gboolean exact; /* the component is required in exactly this version and revision */
-} MfdBaseRef;
-
-/**
- * mfd_manifest_get_base_refs:
- * @refs: (out caller-allocates) (array fixed-size=2): the references of @manifest
- *
- * Get the references to the base and to the base SDK of a manifest.
- * A base SDK is always required in its exact version and revision.
- *
- * Returns: the number of references that were set
- */
-static guint
-mfd_manifest_get_base_refs(MfManifest *manifest, MfdBaseRef refs[static 2])
-{
-    guint n_refs = 0;
-
-    if (mf_manifest_get_base_id(manifest) != NULL)
-        refs[n_refs++] = (MfdBaseRef){
-            .id = mf_manifest_get_base_id(manifest),
-            .version = mf_manifest_get_base_version(manifest),
-            .revision = mf_manifest_get_base_revision(manifest),
-            .identity = mf_manifest_get_base_identity(manifest),
-            .exact = mf_manifest_needs_exact_base(manifest),
-        };
-    if (mf_manifest_get_base_sdk_id(manifest) != NULL)
-        refs[n_refs++] = (MfdBaseRef){
-            .id = mf_manifest_get_base_sdk_id(manifest),
-            .version = mf_manifest_get_base_sdk_version(manifest),
-            .revision = mf_manifest_get_base_sdk_revision(manifest),
-            .identity = mf_manifest_get_base_sdk_identity(manifest),
-            .exact = TRUE,
-        };
-    return n_refs;
-}
-
 /**
  * mfd_resolver_has_base:
  *
  * Returns: %TRUE if the referenced component is installed, or is in the set
  */
 static gboolean
-mfd_resolver_has_base(MfdResolver *resolver, const MfdBaseRef *ref)
+mfd_resolver_has_base(MfdResolver *resolver, const MfBaseReference *ref)
 {
     g_autoptr(MfComponent) provider = NULL;
     g_autoptr(GPtrArray) versions = NULL;
@@ -222,7 +180,7 @@ mfd_resolver_has_base(MfdResolver *resolver, const MfdBaseRef *ref)
 static gboolean
 mfd_resolver_find_base(MfdResolver *resolver,
                        MfdRemoteChannel *channel,
-                       const MfdBaseRef *ref,
+                       const MfBaseReference *ref,
                        MfdInstallItem **ret_item,
                        GError **error)
 {
@@ -285,13 +243,16 @@ mfd_resolver_add_bases(MfdResolver *resolver,
                        gboolean need_bases,
                        GError **error)
 {
-    MfdBaseRef refs[2];
-    guint n_refs = mfd_manifest_get_base_refs(item->manifest, refs);
+    const MfBaseReference *refs[] = {
+        mf_manifest_get_base(item->manifest),
+        mf_manifest_get_base_sdk(item->manifest),
+    };
 
-    for (guint i = 0; i < n_refs; i++) {
+    for (guint i = 0; i < G_N_ELEMENTS(refs); i++) {
+        const MfBaseReference *ref = refs[i];
         MfdInstallItem *base = NULL;
 
-        if (mfd_resolver_has_base(resolver, &refs[i]))
+        if (ref == NULL || mfd_resolver_has_base(resolver, ref))
             continue;
         if (depth == BASE_DEPTH_MAX) {
             g_set_error(error,
@@ -304,7 +265,7 @@ mfd_resolver_add_bases(MfdResolver *resolver,
         }
         if (!mfd_resolver_find_base(resolver,
                                     mfd_remote_channel_set_find(resolver->channel_set, item->origin),
-                                    &refs[i],
+                                    ref,
                                     &base,
                                     error))
             return FALSE;
@@ -323,8 +284,8 @@ mfd_resolver_add_bases(MfdResolver *resolver,
                     _("%s %s needs the base %s %s, which is not available in any remote"),
                     mf_manifest_get_component_id(item->manifest),
                     mf_manifest_get_version(item->manifest),
-                    refs[i].id,
-                    refs[i].version);
+                    ref->id,
+                    ref->version);
         return FALSE;
     }
 

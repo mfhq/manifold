@@ -150,7 +150,11 @@ mfd_is_other_kit_on_base(MfComponent *component, MfManifest *manifest)
         mf_component_is_sdk(component) != mf_manifest_is_sdk(manifest))
         return FALSE;
     other = mf_component_fetch_manifest(component, NULL);
-    return other != NULL && g_strcmp0(mf_manifest_get_base_id(other), mf_manifest_get_base_id(manifest)) == 0;
+    if (other == NULL)
+        return FALSE;
+
+    /* a kit always has a base */
+    return g_str_equal(mf_manifest_get_base(other)->id, mf_manifest_get_base(manifest)->id);
 }
 
 /**

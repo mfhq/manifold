@@ -8,6 +8,7 @@
 #include "mfd-install-set.h"
 
 #include "mf-bundle-private.h"
+#include "mf-manifest-private.h"
 
 /**
  * MfdBundleSource:
@@ -77,9 +78,10 @@ mfd_install_set_has_app_on(MfdInstallSet *set, MfManifest *manifest)
 
     for (guint i = 0; i < set->items->len; i++) {
         MfManifest *app = ((MfdInstallItem *) g_ptr_array_index(set->items, i))->manifest;
+        const MfBaseReference *base = mf_manifest_get_base(app);
 
         if (mf_manifest_get_kind(app) == MF_COMPONENT_KIND_APP && !mf_manifest_is_sdk(app) &&
-            g_strcmp0(mf_manifest_get_base_identity(app), mf_manifest_get_identity(manifest)) == 0)
+            g_str_equal(base->identity, mf_manifest_get_identity(manifest)))
             return TRUE;
     }
 

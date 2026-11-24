@@ -14,6 +14,8 @@
 #include <zip.h>
 #include <manifold.h>
 
+#include "mf-manifest-private.h"
+
 #include "mft-utils.h"
 
 /* a made-up image for a bundle */
@@ -380,6 +382,7 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
     g_autofree char *expected_blake3 = mft_blake3_of_bytes(f->app.data);
     g_autofree char *expected_verity = mft_fake_hash(expected_sha256);
     g_autofree char *kit_identity = mft_fake_hash(TEST_KIT_ID);
+    const MfBaseReference *base;
     g_autofree char *media_copy = g_build_filename(f->dir, "screenshot.jxl", NULL);
     g_autofree char *media_data = NULL;
     g_auto(GStrv) media = NULL;
@@ -407,14 +410,17 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
     g_assert_cmpstr(mf_manifest_get_verity_hash(manifest), ==, expected_verity);
     g_assert_cmpuint(mf_manifest_get_data_offset(manifest), ==, 20480);
     g_assert_cmpuint(mf_manifest_get_hash_offset(manifest), ==, 24576);
-    g_assert_cmpstr(mf_manifest_get_base_id(manifest), ==, TEST_KIT_ID);
-    g_assert_cmpint(mf_manifest_get_base_kind(manifest), ==, MF_COMPONENT_KIND_KIT);
-    g_assert_cmpstr(mf_manifest_get_base_version(manifest), ==, "20260112T0238");
-    g_assert_cmpuint(mf_manifest_get_base_revision(manifest), ==, 22910051);
-    g_assert_cmpstr(mf_manifest_get_base_identity(manifest), ==, kit_identity);
-    g_assert_cmpstr(mf_manifest_get_base_content_hash(manifest), ==, kit_identity);
+    base = mf_manifest_get_base(manifest);
+    g_assert_cmpstr(base->id, ==, TEST_KIT_ID);
+    g_assert_cmpint(base->kind, ==, MF_COMPONENT_KIND_KIT);
+    g_assert_cmpstr(base->version, ==, "20260112T0238");
+    g_assert_cmpuint(base->revision, ==, 22910051);
+    g_assert_cmpstr(base->identity, ==, kit_identity);
+    g_assert_cmpstr(base->content_hash, ==, kit_identity);
+    g_assert_false(base->exact);
+    g_assert_null(mf_manifest_get_base_sdk(manifest));
     g_assert_false(mf_manifest_is_sdk(manifest));
-    g_assert_cmpstr(mf_manifest_get_base_id(mft_find_manifest(bundle, TEST_KIT_ID)), ==, TEST_CORE_ID);
+    g_assert_cmpstr(mf_manifest_get_base(mft_find_manifest(bundle, TEST_KIT_ID))->id, ==, TEST_CORE_ID);
 
     /* the app's base is found in the bundle by its identity */
     g_assert_true(mf_bundle_find_image_for_identity(bundle, kit_identity) ==
@@ -472,9 +478,7 @@ test_core_has_no_base(Fixture *f, gconstpointer user_data)
     g_assert_false(mf_bundle_is_signed(bundle));
     core = mft_find_manifest(bundle, TEST_CORE_ID);
     g_assert_cmpint(mf_manifest_get_kind(core), ==, MF_COMPONENT_KIND_CORE);
-    g_assert_null(mf_manifest_get_base_id(core));
-    g_assert_cmpint(mf_manifest_get_base_kind(core), ==, MF_COMPONENT_KIND_UNKNOWN);
-    g_assert_null(mf_manifest_get_base_identity(core));
+    g_assert_null(mf_manifest_get_base(core));
 }
 
 /**
