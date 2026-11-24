@@ -17,6 +17,7 @@
 #include <systemd/sd-varlink.h>
 
 #include "mf-component-private.h"
+#include "mf-error-private.h"
 #include "mf-manager-interface.h"
 #include "mf-progress-private.h"
 #include "mf-remote-info-private.h"
@@ -248,92 +249,195 @@ mf_parameter_string(sd_json_variant *parameters, const char *key, const char *fa
 }
 
 /**
- * mf_set_error_from_service_details:
- * @code: the #MfError the service replied with
- * @component_id: the component the error is about
+ * mf_describe_error_fields:
+ * @error: an error of the service, with the fields that the service sent
  *
- * Set a translated error message for an error reply of the service that
- * includes details about the affected component.
+ * Create a translated message for an error from its fields.
  *
- * Returns: %TRUE if @error was set, %FALSE if @code has no message that uses component details
+ * Returns: (transfer full) (nullable): the message, or %NULL if the kind of
+ *   error has no such message, or if a field that the message needs is missing
  */
-static gboolean
-mf_set_error_from_service_details(GError **error,
-                                  MfError code,
-                                  const char *component_id,
-                                  sd_json_variant *parameters)
+static char *
+mf_describe_error_fields(const GError *error)
 {
-    switch (code) {
-    case MF_ERROR_MISSING_BASE:
-        g_set_error(error,
-                    MF_ERROR,
-                    code,
-                    /* TRANSLATORS: the component, and the identifier and version of its base */
-                    _("Component %s needs base %s %s, which is not installed"),
-                    component_id,
-                    mf_parameter_string(parameters, "baseId", "?"),
-                    mf_parameter_string(parameters, "baseVersion", "?"));
-        return TRUE;
-    case MF_ERROR_ALREADY_INSTALLED:
-        g_set_error(error,
-                    MF_ERROR,
-                    code,
-                    /* TRANSLATORS: a component and its version */
-                    _("Component %s %s is installed already"),
-                    component_id,
-                    mf_parameter_string(parameters, "version", "?"));
-        return TRUE;
-    case MF_ERROR_NOT_FOUND: {
-        const char *version = mf_parameter_string(parameters, "version", NULL);
+    const char *component_id = mf_error_get_field(error, MF_ERROR_FIELD_COMPONENT_ID);
+    const char *version = mf_error_get_field(error, MF_ERROR_FIELD_VERSION);
 
-        if (version != NULL)
-            g_set_error(error, MF_ERROR, code, _("Component %s %s is not installed"), component_id, version);
-        else
-            g_set_error(error, MF_ERROR, code, _("Component %s is not installed"), component_id);
-        return TRUE;
+    if (component_id == NULL)
+        return NULL;
+
+    switch (error->code) {
+    case MF_ERROR_MISSING_BASE: {
+        const char *base_id = mf_error_get_field(error, MF_ERROR_FIELD_BASE_ID);
+        const char *base_version = mf_error_get_field(error, MF_ERROR_FIELD_BASE_VERSION);
+
+        if (base_id == NULL || base_version == NULL)
+            return NULL;
+        /* TRANSLATORS: the component, and the identifier and version of its base */
+        return g_strdup_printf(_("Component %s needs base %s %s, which is not installed"),
+                               component_id,
+                               base_id,
+                               base_version);
     }
-    case MF_ERROR_COMPONENT_IN_USE:
-        g_set_error(error,
-                    MF_ERROR,
-                    code,
-                    _("Component %s is used by the installed component %s"),
-                    component_id,
-                    mf_parameter_string(parameters, "usedBy", "?"));
-        return TRUE;
-    case MF_ERROR_WRONG_ARCHITECTURE:
-        g_set_error(error,
-                    MF_ERROR,
-                    code,
-                    /* TRANSLATORS: the component, its architecture, and that of this system */
-                    _("Component %s is built for %s, but this system is %s"),
-                    component_id,
-                    mf_parameter_string(parameters, "architecture", "?"),
-                    mf_parameter_string(parameters, "hostArchitecture", "?"));
-        return TRUE;
-    case MF_ERROR_ID_CONFLICT: {
-        const char *kind = mf_parameter_string(parameters, "kind", "?");
+    case MF_ERROR_BASE_NOT_AVAILABLE: {
+        const char *base_id = mf_error_get_field(error, MF_ERROR_FIELD_BASE_ID);
+        const char *base_version = mf_error_get_field(error, MF_ERROR_FIELD_BASE_VERSION);
 
-        if (sd_json_variant_boolean(sd_json_variant_by_key(parameters, "sdk")))
-            g_set_error(error,
-                        MF_ERROR,
-                        code,
-                        /* TRANSLATORS: the component, and the kind it is installed as, like "app" */
-                        _("Component %s is installed already as another kind of component (%s SDK)"),
-                        component_id,
-                        kind);
-        else
-            g_set_error(error,
-                        MF_ERROR,
-                        code,
-                        /* TRANSLATORS: the component, and the kind it is installed as, like "app" */
-                        _("Component %s is installed already as another kind of component (%s)"),
-                        component_id,
-                        kind);
-        return TRUE;
+        if (base_id == NULL || base_version == NULL)
+            return NULL;
+        /* TRANSLATORS: the component, and the identifier and version of its base */
+        return g_strdup_printf(_("Component %s needs base %s %s, which is not available in any remote"),
+                               component_id,
+                               base_id,
+                               base_version);
+    }
+    case MF_ERROR_NOT_AVAILABLE: {
+        const char *origin = mf_error_get_field(error, MF_ERROR_FIELD_ORIGIN);
+
+        if (origin != NULL)
+            /* TRANSLATORS: an origin like "example-main", then the component */
+            return g_strdup_printf(_("The origin %s does not have the component %s"), origin, component_id);
+        return g_strdup_printf(_("No remote has the component %s"), component_id);
+    }
+    case MF_ERROR_ALREADY_INSTALLED:
+        if (version == NULL)
+            return NULL;
+        /* TRANSLATORS: a component and its version */
+        return g_strdup_printf(_("Component %s %s is installed already"), component_id, version);
+    case MF_ERROR_NOT_FOUND:
+        if (version != NULL)
+            return g_strdup_printf(_("Component %s %s is not installed"), component_id, version);
+        return g_strdup_printf(_("Component %s is not installed"), component_id);
+    case MF_ERROR_COMPONENT_IN_USE: {
+        const char *used_by = mf_error_get_field(error, MF_ERROR_FIELD_USED_BY);
+
+        if (used_by == NULL)
+            return NULL;
+        return g_strdup_printf(_("Component %s is used by the installed component %s"),
+                               component_id,
+                               used_by);
+    }
+    case MF_ERROR_WRONG_ARCHITECTURE: {
+        const char *architecture = mf_error_get_field(error, MF_ERROR_FIELD_ARCHITECTURE);
+        const char *host_architecture = mf_error_get_field(error, MF_ERROR_FIELD_HOST_ARCHITECTURE);
+
+        if (architecture == NULL || host_architecture == NULL)
+            return NULL;
+        /* TRANSLATORS: the component, its architecture, and that of this system */
+        return g_strdup_printf(_("Component %s is built for %s, but this system is %s"),
+                               component_id,
+                               architecture,
+                               host_architecture);
+    }
+    case MF_ERROR_ID_CONFLICT: {
+        const char *kind = mf_error_get_field(error, MF_ERROR_FIELD_KIND);
+
+        if (kind == NULL)
+            return NULL;
+        if (mf_error_get_field_boolean(error, MF_ERROR_FIELD_SDK))
+            /* TRANSLATORS: the component, and the kind it is installed as, like "app" */
+            return g_strdup_printf(
+                _("Component %s is installed already as another kind of component (%s SDK)"),
+                component_id,
+                kind);
+        /* TRANSLATORS: the component, and the kind it is installed as, like "app" */
+        return g_strdup_printf(_("Component %s is installed already as another kind of component (%s)"),
+                               component_id,
+                               kind);
     }
     default:
-        return FALSE;
+        return NULL;
     }
+}
+
+/**
+ * mf_error_code_get_summary:
+ *
+ * Returns: (nullable): a translated sentence that describes the kind of error,
+ *   or %NULL for a kind of error that only its details describe
+ */
+static const char *
+mf_error_code_get_summary(MfError code)
+{
+    switch (code) {
+    case MF_ERROR_NOT_FOUND:
+        return _("Not found");
+    case MF_ERROR_NOT_AVAILABLE:
+        return _("The component is not available in any remote");
+    case MF_ERROR_PERMISSION_DENIED:
+        return _("Not authorized to do this");
+    case MF_ERROR_INVALID_BUNDLE:
+        return _("Not a valid bundle");
+    case MF_ERROR_WRONG_ARCHITECTURE:
+        return _("The component is built for a different architecture");
+    case MF_ERROR_VERIFICATION_FAILED:
+        return _("Verification failed");
+    case MF_ERROR_MISSING_BASE:
+        return _("The base of a component is missing");
+    case MF_ERROR_BASE_NOT_AVAILABLE:
+        return _("The base of a component is not available in any remote");
+    case MF_ERROR_ALREADY_INSTALLED:
+        return _("The component is installed already");
+    case MF_ERROR_COMPONENT_IN_USE:
+        return _("The component is in use");
+    case MF_ERROR_INVALID_MANIFEST:
+        return _("Not a valid manifest");
+    case MF_ERROR_REVOKED:
+        return _("The component was revoked");
+    case MF_ERROR_ID_CONFLICT:
+        return _("A component of a different kind is installed with the same ID");
+    case MF_ERROR_FILE_CONFLICT:
+        return _("File conflict");
+    case MF_ERROR_INVALID_REPOSITORY:
+        return _("Not a valid repository");
+    case MF_ERROR_EXPIRED:
+        return _("The metadata of the repository has expired");
+    case MF_ERROR_DOWNLOAD_FAILED:
+        return _("Download failed");
+    case MF_ERROR_AMBIGUOUS:
+        return _("The request is ambiguous");
+    case MF_ERROR_REMOTE_EXISTS:
+        return _("The remote is configured already");
+    default:
+        return NULL;
+    }
+}
+
+/**
+ * mf_set_error_from_service_reply:
+ * @code: the #MfError that the service replied with
+ * @parameters: (nullable): the parameters of the error reply
+ *
+ * Set an error with a translated message for an error reply of the service.
+ *
+ * The service describes an error in English, and may send the values that
+ * the description contains as fields. If the reply has the fields for it, we
+ * create a translated message from them. Otherwise the message is a translated
+ * summary of the kind of error, followed by the description of the service.
+ */
+static void
+mf_set_error_from_service_reply(GError **error, MfError code, sd_json_variant *parameters)
+{
+    const char *summary = mf_error_code_get_summary(code);
+    const char *detail = mf_parameter_string(parameters, "message", NULL);
+    g_autoptr(GError) service_error = NULL;
+    g_autofree char *message = NULL;
+
+    service_error = g_error_new_literal(MF_ERROR, code, detail != NULL ? detail : "");
+    mf_error_set_fields_from_varlink(&service_error, parameters);
+
+    message = mf_describe_error_fields(service_error);
+    if (message == NULL && summary != NULL && detail != NULL)
+        /* TRANSLATORS: a summary of an error, then a detailed description that is not translated */
+        message = g_strdup_printf(_("%s: %s"), summary, detail);
+    else if (message == NULL && summary != NULL)
+        message = g_strdup(summary);
+    else if (message == NULL)
+        message = g_strdup(detail != NULL ? detail : _("unknown error"));
+
+    g_free(service_error->message);
+    service_error->message = g_steal_pointer(&message);
+    g_propagate_error(error, g_steal_pointer(&service_error));
 }
 
 /**
@@ -365,45 +469,15 @@ mf_describe_invalid_parameter(const char *parameter)
  * mf_set_error_from_service:
  *
  * Convert an error reply of the service into a #GError with a translated message.
- *
- * Errors of the service keep their #MfError code. We use our own translated message
- * if the reply includes details about the affected component, and the message of the
- * service otherwise.
+ * Errors of the service keep their #MfError code.
  */
 static void
 mf_set_error_from_service(GError **error, const char *error_id, sd_json_variant *parameters)
 {
-    const char *message = mf_parameter_string(parameters, "message", _("unknown error"));
-    const char *component_id = mf_parameter_string(parameters, "componentId", NULL);
     MfError code;
 
     if (mf_error_from_varlink_id(error_id, &code)) {
-        if (component_id != NULL && mf_set_error_from_service_details(error, code, component_id, parameters))
-            return;
-
-        switch (code) {
-        case MF_ERROR_PERMISSION_DENIED:
-            g_set_error_literal(error, MF_ERROR, code, _("Not authorized to do this"));
-            break;
-        case MF_ERROR_INVALID_BUNDLE:
-            g_set_error(error, MF_ERROR, code, _("Not a valid bundle: %s"), message);
-            break;
-        case MF_ERROR_INVALID_MANIFEST:
-            g_set_error(error, MF_ERROR, code, _("Not a valid manifest: %s"), message);
-            break;
-        case MF_ERROR_VERIFICATION_FAILED:
-            g_set_error(error, MF_ERROR, code, _("Verification failed: %s"), message);
-            break;
-        case MF_ERROR_FILE_CONFLICT:
-            g_set_error(error, MF_ERROR, code, _("File conflict: %s"), message);
-            break;
-        case MF_ERROR_INVALID_REPOSITORY:
-            g_set_error(error, MF_ERROR, code, _("Not a valid repository: %s"), message);
-            break;
-        default:
-            g_set_error_literal(error, MF_ERROR, code, message);
-            break;
-        }
+        mf_set_error_from_service_reply(error, code, parameters);
     } else if (g_strcmp0(error_id, SD_VARLINK_ERROR_DISCONNECTED) == 0) {
         /* sd-varlink reports a connection closed during the call as a reply */
         g_set_error_literal(error,
@@ -420,7 +494,7 @@ mf_set_error_from_service(GError **error, const char *error_id, sd_json_variant 
                g_strcmp0(error_id, SD_VARLINK_ERROR_METHOD_NOT_FOUND) == 0) {
         g_set_error_literal(error,
                             MF_ERROR,
-                            MF_ERROR_NOT_IMPLEMENTED,
+                            MF_ERROR_FAILED,
                             _("The Manifold service does not implement this operation"));
     } else if (g_strcmp0(error_id, SD_VARLINK_ERROR_INVALID_PARAMETER) == 0) {
         const char *parameter = mf_parameter_string(parameters, "parameter", "?");

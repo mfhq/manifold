@@ -243,11 +243,13 @@ mfd_error_is_about_request(const GError *error)
 
     switch (error->code) {
     case MF_ERROR_NOT_FOUND:
+    case MF_ERROR_NOT_AVAILABLE:
     case MF_ERROR_PERMISSION_DENIED:
     case MF_ERROR_INVALID_BUNDLE:
     case MF_ERROR_WRONG_ARCHITECTURE:
     case MF_ERROR_VERIFICATION_FAILED:
     case MF_ERROR_MISSING_BASE:
+    case MF_ERROR_BASE_NOT_AVAILABLE:
     case MF_ERROR_ALREADY_INSTALLED:
     case MF_ERROR_COMPONENT_IN_USE:
     case MF_ERROR_INVALID_MANIFEST:
@@ -267,20 +269,19 @@ mfd_error_is_about_request(const GError *error)
 
 /**
  * mfd_service_reply_error:
- * @detail: (nullable): the details that the manager returned about the error
  *
  * Reply with the error of the interface that corresponds to a #GError.
- * The reply always has the message of @error, and the details of the
- * component it is about if @detail has them.
+ * The reply has the message of @error, and every field that @error carries.
  *
  * Returns: The result of sd_varlink_error(), which is a negative errno
  *   even if the reply was sent.
  */
 static int
-mfd_service_reply_error(sd_varlink *link, const GError *error, const MfdErrorDetail *detail)
+mfd_service_reply_error(sd_varlink *link, const GError *error)
 {
     MfError code = error->domain == MF_ERROR ? error->code : MF_ERROR_FAILED;
-    const char *error_id = mf_error_to_varlink_id(code);
+    g_autoptr(sd_json_variant) parameters = NULL;
+    int r;
 
     /* we only warn about failures of our own, not about requests we can not fulfill */
     if (mfd_error_is_about_request(error))
@@ -290,60 +291,12 @@ mfd_service_reply_error(sd_varlink *link, const GError *error, const MfdErrorDet
 
     /* permission denied is a standard Varlink error, which has no parameters */
     if (code == MF_ERROR_PERMISSION_DENIED)
-        return sd_varlink_error(link, error_id, NULL);
+        return sd_varlink_error(link, mf_error_to_varlink_id(code), NULL);
 
-    if (detail != NULL && detail->component_id != NULL) {
-        switch (code) {
-        case MF_ERROR_MISSING_BASE:
-            return sd_varlink_errorbo(link,
-                                      error_id,
-                                      SD_JSON_BUILD_PAIR_STRING("message", error->message),
-                                      SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
-                                      SD_JSON_BUILD_PAIR_STRING("baseId", detail->base_id),
-                                      SD_JSON_BUILD_PAIR_STRING("baseVersion", detail->base_version),
-                                      SD_JSON_BUILD_PAIR_STRING("identity", detail->identity));
-        case MF_ERROR_ALREADY_INSTALLED:
-            return sd_varlink_errorbo(link,
-                                      error_id,
-                                      SD_JSON_BUILD_PAIR_STRING("message", error->message),
-                                      SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
-                                      SD_JSON_BUILD_PAIR_STRING("version", detail->version));
-        case MF_ERROR_COMPONENT_IN_USE:
-            return sd_varlink_errorbo(link,
-                                      error_id,
-                                      SD_JSON_BUILD_PAIR_STRING("message", error->message),
-                                      SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
-                                      SD_JSON_BUILD_PAIR_STRING("usedBy", detail->used_by));
-        case MF_ERROR_NOT_FOUND:
-            return sd_varlink_errorbo(link,
-                                      error_id,
-                                      SD_JSON_BUILD_PAIR_STRING("message", error->message),
-                                      SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
-                                      SD_JSON_BUILD_PAIR_CONDITION(detail->version != NULL,
-                                                                   "version",
-                                                                   SD_JSON_BUILD_STRING(detail->version)));
-        case MF_ERROR_WRONG_ARCHITECTURE:
-            return sd_varlink_errorbo(
-                link,
-                error_id,
-                SD_JSON_BUILD_PAIR_STRING("message", error->message),
-                SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
-                SD_JSON_BUILD_PAIR_STRING("architecture", detail->architecture),
-                SD_JSON_BUILD_PAIR_STRING("hostArchitecture", mf_get_host_architecture()));
-        case MF_ERROR_ID_CONFLICT:
-            return sd_varlink_errorbo(
-                link,
-                error_id,
-                SD_JSON_BUILD_PAIR_STRING("message", error->message),
-                SD_JSON_BUILD_PAIR_STRING("componentId", detail->component_id),
-                SD_JSON_BUILD_PAIR_STRING("kind", mf_component_kind_to_string(detail->kind)),
-                SD_JSON_BUILD_PAIR_BOOLEAN("sdk", detail->sdk));
-        default:
-            break;
-        }
-    }
-
-    return sd_varlink_errorbo(link, error_id, SD_JSON_BUILD_PAIR_STRING("message", error->message));
+    r = mf_error_build_varlink_parameters(error, &parameters);
+    if (r < 0)
+        return r;
+    return sd_varlink_error(link, mf_error_to_varlink_id(code), parameters);
 }
 
 /**
@@ -584,7 +537,6 @@ mfd_service_on_progress(const MfProgress *progress, gpointer user_data)
 static int
 mfd_service_remove(MfdService *service, MfdRequest *request)
 {
-    g_auto(MfdErrorDetail) detail = {};
     g_autoptr(MfResult) result = NULL;
     g_autoptr(GError) error = NULL;
 
@@ -601,10 +553,9 @@ mfd_service_remove(MfdService *service, MfdRequest *request)
                                 request->version,
                                 request->report_progress ? mfd_service_on_progress : NULL,
                                 request->link,
-                                &detail,
                                 &error);
     if (result == NULL) {
-        mfd_service_reply_error(request->link, error, &detail);
+        mfd_service_reply_error(request->link, error);
         return 0;
     }
 
@@ -632,7 +583,7 @@ mfd_service_refresh(MfdService *service, MfdRequest *request)
                                  request->link,
                                  &error);
     if (result == NULL) {
-        mfd_service_reply_error(request->link, error, NULL);
+        mfd_service_reply_error(request->link, error);
         return 0;
     }
 
@@ -658,7 +609,7 @@ mfd_service_inspect_remote(MfdService *service, MfdRequest *request)
 
     inspection = mfd_manager_inspect_remote(service->manager, request->url, request->public_key, &error);
     if (inspection == NULL) {
-        mfd_service_reply_error(request->link, error, NULL);
+        mfd_service_reply_error(request->link, error);
         return 0;
     }
     index = inspection->index;
@@ -708,7 +659,7 @@ mfd_service_add_remote(MfdService *service, MfdRequest *request)
                                     request->link,
                                     &error);
     if (result == NULL) {
-        mfd_service_reply_error(request->link, error, NULL);
+        mfd_service_reply_error(request->link, error);
         return 0;
     }
 
@@ -728,7 +679,7 @@ mfd_service_remove_remote(MfdService *service, MfdRequest *request)
     g_message("User %u requested to remove the remote %s", (guint) request->uid, request->remote_id);
 
     if (!mfd_manager_remove_remote(service->manager, request->remote_id, &error)) {
-        mfd_service_reply_error(request->link, error, NULL);
+        mfd_service_reply_error(request->link, error);
         return 0;
     }
 
@@ -743,7 +694,6 @@ mfd_service_remove_remote(MfdService *service, MfdRequest *request)
 static int
 mfd_service_mark(MfdService *service, MfdRequest *request)
 {
-    g_auto(MfdErrorDetail) detail = {};
     g_autoptr(GPtrArray) marked = NULL;
     g_autoptr(sd_json_variant) components = NULL;
     g_autoptr(GError) error = NULL;
@@ -759,10 +709,9 @@ mfd_service_mark(MfdService *service, MfdRequest *request)
                               request->component_id,
                               request->version,
                               request->mode,
-                              &detail,
                               &error);
     if (marked == NULL) {
-        mfd_service_reply_error(request->link, error, &detail);
+        mfd_service_reply_error(request->link, error);
         return 0;
     }
     if ((r = mfd_varlink_build_components_array(marked, &components)) < 0)
@@ -996,7 +945,6 @@ mfd_service_authorize(MfdService *service, MfdRequest *request, MfTransactionFla
 static int
 mfd_service_install_bundle(MfdService *service, MfdRequest *request)
 {
-    g_auto(MfdErrorDetail) detail = {};
     g_autoptr(MfResult) result = NULL;
     g_autoptr(GError) error = NULL;
 
@@ -1007,7 +955,7 @@ mfd_service_install_bundle(MfdService *service, MfdRequest *request)
 
         bundle = mf_bundle_new_from_fd(request->bundle_fd, &error);
         if (bundle == NULL) {
-            mfd_service_reply_error(request->link, error, NULL);
+            mfd_service_reply_error(request->link, error);
             return 0;
         }
 
@@ -1030,10 +978,9 @@ mfd_service_install_bundle(MfdService *service, MfdRequest *request)
                                      request->install_set,
                                      request->report_progress ? mfd_service_on_progress : NULL,
                                      request->link,
-                                     &detail,
                                      &error);
     if (result == NULL) {
-        mfd_service_reply_error(request->link, error, &detail);
+        mfd_service_reply_error(request->link, error);
         return 0;
     }
 
@@ -1080,7 +1027,6 @@ mfd_service_needs_privileged(MfdService *service, MfdRequest *request)
 static int
 mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
 {
-    g_auto(MfdErrorDetail) detail = {};
     g_autoptr(MfResult) result = NULL;
     g_autoptr(GError) error = NULL;
 
@@ -1090,7 +1036,7 @@ mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
                                                                request->repo_request,
                                                                &error);
             if (request->install_set == NULL) {
-                mfd_service_reply_error(request->link, error, NULL);
+                mfd_service_reply_error(request->link, error);
                 return 0;
             }
             if (mfd_service_needs_privileged(service, request)) {
@@ -1104,7 +1050,6 @@ mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
                                          request->install_set,
                                          request->report_progress ? mfd_service_on_progress : NULL,
                                          request->link,
-                                         &detail,
                                          &error);
         if (result != NULL)
             return mfd_service_reply_result(request->link, result);
@@ -1112,13 +1057,12 @@ mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
                                            request->repo_request,
                                            request->install_set,
                                            error)) {
-            mfd_service_reply_error(request->link, error, &detail);
+            mfd_service_reply_error(request->link, error);
             return 0;
         }
 
         g_clear_pointer(&request->install_set, mfd_install_set_free);
         g_clear_error(&error);
-        mfd_error_detail_clear(&detail);
     }
 }
 

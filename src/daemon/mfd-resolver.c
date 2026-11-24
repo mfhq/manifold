@@ -8,13 +8,14 @@
 #include "mfd-resolver.h"
 
 #include <string.h>
-#include <glib/gi18n-lib.h>
 
 #include "mf-component-private.h"
 #include "mf-manifest-private.h"
 #include "mf-remote-private.h"
 #include "mf-repo-private.h"
 #include "mf-store-private.h"
+
+#include "mfd-errors.h"
 #include "mfd-repo-image.h"
 
 /*
@@ -232,7 +233,7 @@ mfd_resolver_add_bases(MfdResolver *resolver,
             g_set_error(error,
                         MF_ERROR,
                         MF_ERROR_INVALID_REPOSITORY,
-                        _("%s is more than %u layers below the component that needs it"),
+                        "%s is more than %u layers below the component that needs it",
                         mf_manifest_get_component_id(item->manifest),
                         BASE_DEPTH_MAX);
             return FALSE;
@@ -251,15 +252,7 @@ mfd_resolver_add_bases(MfdResolver *resolver,
 
         if (!need_bases)
             continue;
-        g_set_error(error,
-                    MF_ERROR,
-                    MF_ERROR_MISSING_BASE,
-                    /* TRANSLATORS: a component and its version, then its base and the version of the base */
-                    _("%s %s needs the base %s %s, which is not available in any remote"),
-                    mf_manifest_get_component_id(item->manifest),
-                    mf_manifest_get_version(item->manifest),
-                    ref->id,
-                    ref->version);
+        mfd_set_error_base_not_available(error, mf_manifest_get_component_id(item->manifest), ref);
         return FALSE;
     }
 
@@ -321,7 +314,7 @@ mfd_set_error_not_found(GError **error, GPtrArray *problems, const char *compone
     g_autofree char *joined = NULL;
 
     if (problems->len == 0) {
-        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("No remote has %s"), component_id);
+        mfd_set_error_not_available(error, component_id, NULL);
         return;
     }
 
@@ -332,9 +325,8 @@ mfd_set_error_not_found(GError **error, GPtrArray *problems, const char *compone
     joined = g_strjoinv("; ", (char **) messages->pdata);
     g_set_error(error,
                 MF_ERROR,
-                MF_ERROR_NOT_FOUND,
-                /* TRANSLATORS: a component, then why some remotes could not be used */
-                _("No remote has %s, but some remotes could not be checked: %s"),
+                MF_ERROR_NOT_AVAILABLE,
+                "No remote has %s, but some remotes could not be checked: %s",
                 component_id,
                 joined);
 }
@@ -373,7 +365,7 @@ mfd_resolver_choose_channel(MfdResolver *resolver,
             continue;
         if (has_component)
             return channel;
-        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s has no component %s"), origin, component_id);
+        mfd_set_error_not_available(error, component_id, origin);
         return NULL;
     }
 
@@ -384,7 +376,7 @@ mfd_resolver_choose_channel(MfdResolver *resolver,
         if (problem != NULL)
             g_propagate_error(error, g_error_copy(problem));
         else
-            g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("There is no origin %s"), origin);
+            g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, "There is no origin %s", origin);
         return NULL;
     }
 
@@ -404,8 +396,7 @@ mfd_resolver_choose_channel(MfdResolver *resolver,
     g_set_error(error,
                 MF_ERROR,
                 MF_ERROR_AMBIGUOUS,
-                /* TRANSLATORS: a component, then the origins that have it */
-                _("Several origins have %s, choose one of them: %s"),
+                "Several origins have %s, choose one of them: %s",
                 component_id,
                 names->str);
     return NULL;
@@ -533,17 +524,17 @@ mfd_find_update(MfdRemoteChannelSet *channel_set, MfComponent *component, GPtrAr
 
         if (problem != NULL)
             g_ptr_array_add(warnings,
-                            g_strdup_printf(_("Unable to update %s: %s"), component_id, problem->message));
+                            g_strdup_printf("Unable to update %s: %s", component_id, problem->message));
         else
             g_ptr_array_add(warnings,
-                            g_strdup_printf(_("%s was installed from %s, which is no longer configured"),
+                            g_strdup_printf("%s was installed from %s, which is no longer configured",
                                             component_id,
                                             origin));
         return NULL;
     }
     versions = mf_repo_component_index_get_versions(channel->components, component_id);
     if (versions == NULL) {
-        g_ptr_array_add(warnings, g_strdup_printf(_("%s no longer has %s"), origin, component_id));
+        g_ptr_array_add(warnings, g_strdup_printf("%s no longer has %s", origin, component_id));
         return NULL;
     }
     newest = g_ptr_array_index(versions, 0);
@@ -598,14 +589,14 @@ mfd_resolver_find_updates(MfdResolver *resolver,
             MfComponent *component = mfd_find_current_version(installed, component_ids[i]);
 
             if (component == NULL) {
-                g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("%s is not installed"), component_ids[i]);
+                mfd_set_error_not_installed(error, component_ids[i], NULL);
                 return NULL;
             }
             if (g_str_equal(mf_component_get_origin(component), MF_BUNDLE_CATALOG_ORIGIN)) {
                 g_set_error(error,
                             MF_ERROR,
-                            MF_ERROR_NOT_FOUND,
-                            _("%s was installed from a bundle, so no remote has updates for it"),
+                            MF_ERROR_NOT_AVAILABLE,
+                            "%s was installed from a bundle, so no remote has updates for it",
                             component_ids[i]);
                 return NULL;
             }
@@ -679,12 +670,9 @@ mfd_resolver_resolve_updates(MfdResolver *resolver, GPtrArray *updates, GPtrArra
 
         /* remove the items that the failed update added to the set */
         g_ptr_array_set_size(set->items, n_items);
-        g_ptr_array_add(failures,
-                        g_error_new(error->domain,
-                                    error->code,
-                                    _("Unable to update %s: %s"),
-                                    component_id,
-                                    error->message));
+        g_ptr_array_add(
+            failures,
+            g_error_new(error->domain, error->code, "Unable to update %s: %s", component_id, error->message));
     }
 }
 

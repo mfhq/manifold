@@ -365,7 +365,9 @@ main(int argc, char **argv)
         G_OPTION_ENTRY_NULL,
     };
 
+    /* we always write English messages, as manifoldd passes them on as details of its errors */
     setlocale(LC_ALL, "");
+    setlocale(LC_MESSAGES, "C");
 
     context = g_option_context_new("- Manifold download helper");
     g_option_context_add_main_entries(context, entries, NULL);

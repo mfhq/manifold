@@ -8,6 +8,7 @@
 
 #include "config.h"
 
+#include <systemd/sd-json.h>
 #include <systemd/sd-varlink-idl.h>
 
 #include "mf-error.h"
@@ -40,5 +41,9 @@ extern const sd_varlink_interface vl_interface_org_freedesktop_manifold;
 const char                       *mf_error_to_varlink_id(MfError code);
 gboolean                          mf_error_from_varlink_id(const char *error_id,
                                                            MfError    *ret_code);
+int                               mf_error_build_varlink_parameters(const GError     *error,
+                                                                    sd_json_variant **ret_parameters);
+void                              mf_error_set_fields_from_varlink(GError         **error,
+                                                                   sd_json_variant *parameters);
 
 MF_END_PRIVATE_DECLS

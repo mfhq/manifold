@@ -217,7 +217,7 @@ test_sdk_is_not_supported_yet(Fixture *fixture, gconstpointer user_data)
                      MF_STORE_APPS_DIR "/" TEST_APP_ID "/0.1.0-1/base");
     mft_assert_load_fails(TEST_APP_ID,
                           MF_ERROR,
-                          MF_ERROR_NOT_IMPLEMENTED,
+                          MF_ERROR_FAILED,
                           TEST_APP_ID " builds on the SDK " TEST_PLATFORM_KIT_ID
                                       ".sdk, but running an application on an SDK is not supported yet");
 }

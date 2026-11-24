@@ -57,6 +57,7 @@ mflib_priv_headers = [
     'mf-remote-private.h',
     'mf-remote-info-private.h',
     'mf-repo-private.h',
+    'mf-error-private.h',
     'mf-result-private.h',
     'mf-signer-private.h',
     'mf-store-private.h',

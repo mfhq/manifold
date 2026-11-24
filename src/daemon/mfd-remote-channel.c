@@ -7,7 +7,6 @@
 #include "config.h"
 #include "mfd-remote-channel.h"
 
-#include <glib/gi18n-lib.h>
 
 #include "mf-remote-private.h"
 #include "mf-store-private.h"
@@ -66,13 +65,13 @@ mfd_read_cached_file(const char *path, const char *remote_id, GError **error)
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_NOT_FOUND,
-                    _("The remote %s was not refreshed yet, run 'manifold refresh'"),
+                    "The remote %s was not refreshed yet, run 'manifold refresh'",
                     remote_id);
     else
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_FAILED,
-                    _("Unable to read cached repository metadata of %s: %s"),
+                    "Unable to read cached repository metadata of %s: %s",
                     remote_id,
                     local_error->message);
     return NULL;
@@ -150,7 +149,7 @@ mfd_remote_channel_load(const char *root,
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_NOT_FOUND,
-                    _("The repository %s has no channel %s for %s"),
+                    "The repository %s has no channel %s for %s",
                     remote_id,
                     channel_name,
                     architecture);
@@ -168,16 +167,15 @@ mfd_remote_channel_load(const char *root,
         return NULL;
     components = mf_repo_component_index_new(data, &arch->component_index, arch->name, &local_error);
     if (components == NULL) {
-        g_set_error(
-            error,
-            MF_ERROR,
-            g_error_matches(local_error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED)
-                ? MF_ERROR_VERIFICATION_FAILED
-                : MF_ERROR_INVALID_REPOSITORY,
-            _("The cached metadata of %s-%s does not match its root index, run 'manifold refresh': %s"),
-            remote_id,
-            channel_name,
-            local_error->message);
+        g_set_error(error,
+                    MF_ERROR,
+                    g_error_matches(local_error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED)
+                        ? MF_ERROR_VERIFICATION_FAILED
+                        : MF_ERROR_INVALID_REPOSITORY,
+                    "The cached metadata of %s-%s does not match its root index, run 'manifold refresh': %s",
+                    remote_id,
+                    channel_name,
+                    local_error->message);
         return NULL;
     }
 
@@ -245,7 +243,7 @@ mfd_remote_channel_set_load_remote(MfdRemoteChannelSet *set, const char *root, M
         index = mfd_remote_read_cached_root_index(root, remote, keys, NULL, &error);
     if (index != NULL && !mf_repo_root_index_check_expiry(index, &error)) {
         /* the root index has expired, and a refresh may download a valid one */
-        g_autofree char *message = g_strdup_printf(_("%s, run 'manifold refresh'"), error->message);
+        g_autofree char *message = g_strdup_printf("%s, run 'manifold refresh'", error->message);
 
         g_free(error->message);
         error->message = g_steal_pointer(&message);

@@ -37,11 +37,10 @@ typedef struct {
     MfComponent    *previous;
 } MfdInstallPlan;
 
-GArray *mfd_install_plans_new_for_set(MfStore        *store,
-                                      MfdIntegrator  *integrator,
-                                      MfdInstallSet  *set,
-                                      MfdErrorDetail *ret_detail,
-                                      GError        **error);
+GArray *mfd_install_plans_new_for_set(MfStore       *store,
+                                      MfdIntegrator *integrator,
+                                      MfdInstallSet *set,
+                                      GError       **error);
 
 /**
  * MfdRemovalItem:
@@ -78,11 +77,10 @@ void mfd_removal_plan_free(MfdRemovalPlan *rmplan);
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdRemovalPlan,
                               mfd_removal_plan_free)
 
-MfdRemovalPlan *mfd_removal_plan_new_for_removal(MfStore        *store,
-                                                 const char     *component_id,
-                                                 const char     *version,
-                                                 MfdErrorDetail *ret_detail,
-                                                 GError        **error);
+MfdRemovalPlan *mfd_removal_plan_new_for_removal(MfStore    *store,
+                                                 const char *component_id,
+                                                 const char *version,
+                                                 GError    **error);
 MfdRemovalPlan *mfd_removal_plan_new_for_superseded(MfStore *store,
                                                     GArray  *plans,
                                                     GError **error);

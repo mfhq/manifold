@@ -163,7 +163,7 @@ mfr_app_load_runtime_info(MfrApp *app, const char *root, MfComponent *app_compon
         if (mf_component_is_sdk(next)) {
             g_set_error(error,
                         MF_ERROR,
-                        MF_ERROR_NOT_IMPLEMENTED,
+                        MF_ERROR_FAILED,
                         "%s builds on the SDK %s, but running an application on an SDK is not supported yet",
                         mf_component_get_id(current),
                         mf_component_get_id(next));

@@ -9,6 +9,9 @@
 
 #include <systemd/sd-varlink.h>
 
+#include "mf-error-private.h"
+#include "mf-sdautoptr-private.h"
+
 /*
  * Definition of the org.freedesktop.manifold Varlink interface.
  */
@@ -278,16 +281,20 @@ static SD_VARLINK_DEFINE_ERROR(
     MF_ERROR_MESSAGE_FIELD);
 
 static SD_VARLINK_DEFINE_ERROR(
-    NotImplemented,
-    MF_ERROR_MESSAGE_FIELD);
-
-static SD_VARLINK_DEFINE_ERROR(
     NotFound,
     MF_ERROR_MESSAGE_FIELD,
     SD_VARLINK_FIELD_COMMENT("Identifier of the component that was not found."),
     SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
     SD_VARLINK_FIELD_COMMENT("The version that was not found, if a specific version was requested."),
     SD_VARLINK_DEFINE_FIELD(version, SD_VARLINK_STRING, SD_VARLINK_NULLABLE));
+
+static SD_VARLINK_DEFINE_ERROR(
+    NotAvailable,
+    MF_ERROR_MESSAGE_FIELD,
+    SD_VARLINK_FIELD_COMMENT("Identifier of the component that no remote has."),
+    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("The origin that was searched, if a specific origin was requested."),
+    SD_VARLINK_DEFINE_FIELD(origin, SD_VARLINK_STRING, SD_VARLINK_NULLABLE));
 
 static SD_VARLINK_DEFINE_ERROR(
     InvalidBundle,
@@ -317,6 +324,18 @@ static SD_VARLINK_DEFINE_ERROR(
     SD_VARLINK_FIELD_COMMENT("Version of the base that is missing."),
     SD_VARLINK_DEFINE_FIELD(baseVersion, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
     SD_VARLINK_FIELD_COMMENT("Identity hash of the base that is missing."),
+    SD_VARLINK_DEFINE_FIELD(identity, SD_VARLINK_STRING, SD_VARLINK_NULLABLE));
+
+static SD_VARLINK_DEFINE_ERROR(
+    BaseNotAvailable,
+    MF_ERROR_MESSAGE_FIELD,
+    SD_VARLINK_FIELD_COMMENT("Identifier of the component that is missing its base."),
+    SD_VARLINK_DEFINE_FIELD(componentId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("Identifier of the base that no remote has."),
+    SD_VARLINK_DEFINE_FIELD(baseId, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("Version of the base that no remote has."),
+    SD_VARLINK_DEFINE_FIELD(baseVersion, SD_VARLINK_STRING, SD_VARLINK_NULLABLE),
+    SD_VARLINK_FIELD_COMMENT("Identity hash of the base that no remote has."),
     SD_VARLINK_DEFINE_FIELD(identity, SD_VARLINK_STRING, SD_VARLINK_NULLABLE));
 
 static SD_VARLINK_DEFINE_ERROR(
@@ -443,10 +462,10 @@ SD_VARLINK_DEFINE_INTERFACE(
 
     SD_VARLINK_SYMBOL_COMMENT("The operation failed."),
     &vl_error_Failed,
-    SD_VARLINK_SYMBOL_COMMENT("The service does not implement the requested operation."),
-    &vl_error_NotImplemented,
     SD_VARLINK_SYMBOL_COMMENT("The component, or a different resource that the operation needs, was not found."),
     &vl_error_NotFound,
+    SD_VARLINK_SYMBOL_COMMENT("No remote has the component."),
+    &vl_error_NotAvailable,
     SD_VARLINK_SYMBOL_COMMENT("The file is not a Manifold bundle."),
     &vl_error_InvalidBundle,
     SD_VARLINK_SYMBOL_COMMENT("The component architecture and that of the current system are incompatible."),
@@ -455,6 +474,8 @@ SD_VARLINK_DEFINE_INTERFACE(
     &vl_error_VerificationFailed,
     SD_VARLINK_SYMBOL_COMMENT("The base a component builds on is not installed."),
     &vl_error_MissingBase,
+    SD_VARLINK_SYMBOL_COMMENT("The base a component builds on is not installed, and no remote has it."),
+    &vl_error_BaseNotAvailable,
     SD_VARLINK_SYMBOL_COMMENT("This version of the component is installed already."),
     &vl_error_AlreadyInstalled,
     SD_VARLINK_SYMBOL_COMMENT("An installed component builds on this component."),
@@ -487,13 +508,14 @@ static const struct {
     const char *error_id;
 } VARLINK_ERRORS[] = {
     {MF_ERROR_FAILED,              MF_INTERFACE ".Failed"            },
-    {MF_ERROR_NOT_IMPLEMENTED,     MF_INTERFACE ".NotImplemented"    },
     {MF_ERROR_NOT_FOUND,           MF_INTERFACE ".NotFound"          },
+    {MF_ERROR_NOT_AVAILABLE,       MF_INTERFACE ".NotAvailable"      },
     {MF_ERROR_PERMISSION_DENIED,   SD_VARLINK_ERROR_PERMISSION_DENIED},
     {MF_ERROR_INVALID_BUNDLE,      MF_INTERFACE ".InvalidBundle"     },
     {MF_ERROR_WRONG_ARCHITECTURE,  MF_INTERFACE ".WrongArchitecture" },
     {MF_ERROR_VERIFICATION_FAILED, MF_INTERFACE ".VerificationFailed"},
     {MF_ERROR_MISSING_BASE,        MF_INTERFACE ".MissingBase"       },
+    {MF_ERROR_BASE_NOT_AVAILABLE,  MF_INTERFACE ".BaseNotAvailable"  },
     {MF_ERROR_ALREADY_INSTALLED,   MF_INTERFACE ".AlreadyInstalled"  },
     {MF_ERROR_COMPONENT_IN_USE,    MF_INTERFACE ".ComponentInUse"    },
     {MF_ERROR_INVALID_MANIFEST,    MF_INTERFACE ".InvalidManifest"   },
@@ -546,4 +568,83 @@ mf_error_from_varlink_id(const char *error_id, MfError *ret_code)
     }
 
     return FALSE;
+}
+
+/* the name of the parameter of a Varlink error that each #MfErrorField is sent as */
+static const struct {
+    MfErrorField field;
+    const char *name;
+    gboolean boolean; /* the parameter is a boolean, and not a string */
+} VARLINK_ERROR_FIELDS[] = {
+    {MF_ERROR_FIELD_COMPONENT_ID,      "componentId",      FALSE},
+    {MF_ERROR_FIELD_VERSION,           "version",          FALSE},
+    {MF_ERROR_FIELD_BASE_ID,           "baseId",           FALSE},
+    {MF_ERROR_FIELD_BASE_VERSION,      "baseVersion",      FALSE},
+    {MF_ERROR_FIELD_IDENTITY,          "identity",         FALSE},
+    {MF_ERROR_FIELD_USED_BY,           "usedBy",           FALSE},
+    {MF_ERROR_FIELD_ARCHITECTURE,      "architecture",     FALSE},
+    {MF_ERROR_FIELD_HOST_ARCHITECTURE, "hostArchitecture", FALSE},
+    {MF_ERROR_FIELD_KIND,              "kind",             FALSE},
+    {MF_ERROR_FIELD_SDK,               "sdk",              TRUE },
+    {MF_ERROR_FIELD_ORIGIN,            "origin",           FALSE},
+};
+
+/**
+ * mf_error_build_varlink_parameters:
+ * @error: the error to send
+ * @ret_parameters: (out): the parameters of the Varlink error
+ *
+ * Build the parameters that an error is sent with: its message, and every
+ * field that is set.
+ *
+ * Returns: 0, or a negative errno
+ */
+int
+mf_error_build_varlink_parameters(const GError *error, sd_json_variant **ret_parameters)
+{
+    g_autoptr(sd_json_variant) parameters = NULL;
+    int r;
+
+    r = sd_json_variant_set_field_string(&parameters, "message", error->message);
+    if (r < 0)
+        return r;
+
+    for (size_t i = 0; i < G_N_ELEMENTS(VARLINK_ERROR_FIELDS); i++) {
+        MfErrorField field = VARLINK_ERROR_FIELDS[i].field;
+        const char *value = mf_error_get_field(error, field);
+
+        if (value == NULL)
+            continue;
+        if (VARLINK_ERROR_FIELDS[i].boolean)
+            r = sd_json_variant_set_field_boolean(&parameters,
+                                                  VARLINK_ERROR_FIELDS[i].name,
+                                                  mf_error_get_field_boolean(error, field));
+        else
+            r = sd_json_variant_set_field_string(&parameters, VARLINK_ERROR_FIELDS[i].name, value);
+        if (r < 0)
+            return r;
+    }
+
+    *ret_parameters = g_steal_pointer(&parameters);
+    return 0;
+}
+
+/**
+ * mf_error_set_fields_from_varlink:
+ * @error: the location of an #MfError that was created for a Varlink error
+ * @parameters: (nullable): the parameters of the Varlink error
+ *
+ * Set the fields of an error from the parameters that it was sent with.
+ */
+void
+mf_error_set_fields_from_varlink(GError **error, sd_json_variant *parameters)
+{
+    for (size_t i = 0; i < G_N_ELEMENTS(VARLINK_ERROR_FIELDS); i++) {
+        sd_json_variant *value = sd_json_variant_by_key(parameters, VARLINK_ERROR_FIELDS[i].name);
+
+        if (VARLINK_ERROR_FIELDS[i].boolean && sd_json_variant_is_boolean(value))
+            mf_error_set_field_boolean(error, VARLINK_ERROR_FIELDS[i].field, sd_json_variant_boolean(value));
+        else if (!VARLINK_ERROR_FIELDS[i].boolean && sd_json_variant_is_string(value))
+            mf_error_set_field(error, VARLINK_ERROR_FIELDS[i].field, sd_json_variant_string(value));
+    }
 }

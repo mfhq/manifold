@@ -8,7 +8,6 @@
 #include "mfd-remotes.h"
 
 #include <string.h>
-#include <glib/gi18n-lib.h>
 
 #include "mf-remote-private.h"
 #include "mf-signer-private.h"
@@ -102,7 +101,7 @@ mfd_fetch_public_key(MfdFetcher *fetcher, const char *url, const char *remote_id
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_INVALID_REPOSITORY,
-                    _("%s does not hold a valid SSH public key"),
+                    "%s does not hold a valid SSH public key",
                     key_url);
 
     return public_key;
@@ -141,7 +140,7 @@ mfd_remotes_inspect(MfdFetcher *fetcher,
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_FAILED,
-                    _("%s is not an https URL without a query or fragment"),
+                    "%s is not an https URL without a query or fragment",
                     url);
         return NULL;
     }
@@ -159,7 +158,7 @@ mfd_remotes_inspect(MfdFetcher *fetcher,
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,
-                    _("The repository at %s has the ID %s, not %s"),
+                    "The repository at %s has the ID %s, not %s",
                     inspection->url,
                     remote_id,
                     expected_id);
@@ -168,7 +167,10 @@ mfd_remotes_inspect(MfdFetcher *fetcher,
     if (public_key != NULL) {
         inspection->public_key = mf_public_key_normalize(public_key);
         if (inspection->public_key == NULL) {
-            g_set_error_literal(error, MF_ERROR, MF_ERROR_FAILED, _("The given key is not a valid SSH public key"));
+            g_set_error_literal(error,
+                                MF_ERROR,
+                                MF_ERROR_FAILED,
+                                "The given key is not a valid SSH public key");
             return NULL;
         }
     } else {
@@ -214,7 +216,7 @@ mfd_remotes_check_channels(MfdRemoteInspection *inspection, const char *const *c
             g_set_error(error,
                         MF_ERROR,
                         MF_ERROR_NOT_FOUND,
-                        _("The repository %s has no channels for %s"),
+                        "The repository %s has no channels for %s",
                         remote_id,
                         architecture);
             return FALSE;
@@ -223,8 +225,7 @@ mfd_remotes_check_channels(MfdRemoteInspection *inspection, const char *const *c
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_NOT_FOUND,
-                    /* TRANSLATORS: the repository, the channel, the architecture, and the channels it has */
-                    _("The repository %s has no channel %s for %s, only: %s"),
+                    "The repository %s has no channel %s for %s, only: %s",
                     remote_id,
                     channels[i],
                     architecture,
@@ -289,7 +290,7 @@ mfd_remotes_add(MfdRemoteInspection *inspection, const char *const *channels, GE
 
     existing = mf_remote_new_for_id(remote_id, &local_error);
     if (existing != NULL) {
-        g_set_error(error, MF_ERROR, MF_ERROR_REMOTE_EXISTS, _("There is a remote %s already"), remote_id);
+        g_set_error(error, MF_ERROR, MF_ERROR_REMOTE_EXISTS, "There is a remote %s already", remote_id);
         return NULL;
     }
     /* a remote that is masked, or not defined at all, can be added */

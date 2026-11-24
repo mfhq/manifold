@@ -12,7 +12,6 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <unistd.h>
-#include <glib/gi18n-lib.h>
 #include <libglnx.h>
 
 #include "mf-remote-private.h"
@@ -282,7 +281,7 @@ mfd_prepare_icons(MfdFetcher *fetcher,
             g_set_error(error,
                         MF_ERROR,
                         MF_ERROR_VERIFICATION_FAILED,
-                        _("The icon %s of %s does not match its size and hashes in the repository"),
+                        "The icon %s of %s does not match its size and hashes in the repository",
                         icon->path,
                         prepared->origin);
             return FALSE;
@@ -291,7 +290,7 @@ mfd_prepare_icons(MfdFetcher *fetcher,
             g_set_error(error,
                         MF_ERROR,
                         MF_ERROR_INVALID_REPOSITORY,
-                        _("The icon %s of %s is not a JPEG XL image"),
+                        "The icon %s of %s is not a JPEG XL image",
                         icon->path,
                         prepared->origin);
             return FALSE;
@@ -439,8 +438,8 @@ mfd_check_freshness(const char *root,
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,
-                    _("The repository %s serves an older root index (serial %" PRIu64
-                      ") than the one we have (serial %" PRIu64 ")"),
+                    "The repository %s serves an older root index (serial %" PRIu64
+                    ") than the one we have (serial %" PRIu64 ")",
                     remote_id,
                     index->serial,
                     cached->serial);
@@ -450,7 +449,7 @@ mfd_check_freshness(const char *root,
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,
-                    _("The repository %s serves another root index with the serial we have (%" PRIu64 ")"),
+                    "The repository %s serves a different root index with the same serial (%" PRIu64 ")",
                     remote_id,
                     index->serial);
         return FALSE;
@@ -533,7 +532,7 @@ mfd_warn_about_missing_channels(MfResult *result, MfRemote *remote, MfRepoRootIn
 
         if (channel == NULL || mf_repo_channel_find_architecture(channel, architecture) == NULL)
             mfd_emit_warning(result,
-                             _("The repository %s has no channel %s for %s"),
+                             "The repository %s has no channel %s for %s",
                              mf_remote_get_id(remote),
                              channels[i],
                              architecture);

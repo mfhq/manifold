@@ -272,7 +272,6 @@ mfd_manager_read_checked_exports(MfdManager *manager, MfManifest *manifest, GErr
  * @iplan: the plan of the component
  * @tracker: the progress of the installation
  * @ret_bytes_added: (out): the size of the image if we added it to the store, or 0
- * @ret_detail: (out caller-allocates) (optional): details about the failure
  * @error: a #GError
  *
  * Install one component of a set: write its image into the store, unless
@@ -288,7 +287,6 @@ mfd_manager_execute_install_plan(MfdManager *manager,
                                  MfdProgressTracker *tracker,
                                  MfResult *result,
                                  uint64_t *ret_bytes_added,
-                                 MfdErrorDetail *ret_detail,
                                  GError **error)
 {
     MfdInstallItem *item = iplan->item;
@@ -348,7 +346,7 @@ mfd_manager_execute_install_plan(MfdManager *manager,
 
         /* the same version was installed in the meantime, and it uses the image, so we keep it */
         if (g_error_matches(local_error, MF_ERROR, MF_ERROR_ALREADY_INSTALLED)) {
-            mfd_set_error_already_installed(error, ret_detail, component_id, version);
+            mfd_set_error_already_installed(error, component_id, version);
             return FALSE;
         }
         if (added && !mfd_store_writer_remove_image(manager->writer, verity_hash, &remove_error))
@@ -468,7 +466,6 @@ mfd_manager_install_set_gains_privileges(MfdManager *manager, MfdInstallSet *set
  * @set: the components to install
  * @progress_func: (nullable): called whenever the operation progresses
  * @user_data: passed to @progress_func
- * @ret_detail: (out caller-allocates) (optional): details about the failure
  * @error: a #GError
  *
  * Install the components of a set.
@@ -488,7 +485,6 @@ mfd_manager_install_set(MfdManager *manager,
                         MfdInstallSet *set,
                         MfProgressFunc progress_func,
                         gpointer user_data,
-                        MfdErrorDetail *ret_detail,
                         GError **error)
 {
     g_auto(MfdProgressTracker) tracker = {
@@ -513,7 +509,7 @@ mfd_manager_install_set(MfdManager *manager,
     mfd_integrator_reconcile_all(manager->integrator);
 
     /* plan installation */
-    plans = mfd_install_plans_new_for_set(manager->store, manager->integrator, set, ret_detail, error);
+    plans = mfd_install_plans_new_for_set(manager->store, manager->integrator, set, error);
     if (plans == NULL)
         return NULL;
 
@@ -533,13 +529,7 @@ mfd_manager_install_set(MfdManager *manager,
 
         if (plan->skip)
             continue;
-        if (!mfd_manager_execute_install_plan(manager,
-                                              plan,
-                                              &tracker,
-                                              result,
-                                              &image_bytes,
-                                              ret_detail,
-                                              error))
+        if (!mfd_manager_execute_install_plan(manager, plan, &tracker, result, &image_bytes, error))
             return NULL;
         bytes_added += image_bytes;
     }
@@ -565,7 +555,6 @@ mfd_manager_install_set(MfdManager *manager,
  *   full version (`<version>-<rev>`) to remove one revision, or %NULL for all versions
  * @progress_func: (nullable): called whenever the operation progresses
  * @user_data: passed to @progress_func
- * @ret_detail: (out caller-allocates) (optional): details about the failure
  * @error: a #GError
  *
  * Remove a component, or one version of it. The removal is refused if a kept
@@ -579,7 +568,6 @@ mfd_manager_remove(MfdManager *manager,
                    const char *version,
                    MfProgressFunc progress_func,
                    gpointer user_data,
-                   MfdErrorDetail *ret_detail,
                    GError **error)
 {
     g_auto(MfdProgressTracker) tracker = {
@@ -599,7 +587,7 @@ mfd_manager_remove(MfdManager *manager,
     if (!mf_store_load(manager->store, error))
         return NULL;
     mfd_integrator_reconcile_all(manager->integrator);
-    rmplan = mfd_removal_plan_new_for_removal(manager->store, component_id, version, ret_detail, error);
+    rmplan = mfd_removal_plan_new_for_removal(manager->store, component_id, version, error);
     if (rmplan == NULL)
         return NULL;
 
@@ -635,7 +623,6 @@ mfd_component_is_mark_target(MfComponent *component, const char *version, gboole
  * @version: (nullable): the version to mark with all of its revisions, the
  *   full version (`<version>-<rev>`) to mark one revision, or %NULL for the current version
  * @mode: the install mode to record
- * @ret_detail: (out caller-allocates) (optional): details about the failure
  * @error: a #GError
  *
  * Mark versions of a component as kept until they are removed explicitly
@@ -650,7 +637,6 @@ mfd_manager_mark(MfdManager *manager,
                  const char *component_id,
                  const char *version,
                  MfInstallMode mode,
-                 MfdErrorDetail *ret_detail,
                  GError **error)
 {
     g_autoptr(GPtrArray) components = NULL;
@@ -680,7 +666,7 @@ mfd_manager_mark(MfdManager *manager,
         n_marked++;
     }
     if (n_marked == 0) {
-        mfd_set_error_not_installed(error, ret_detail, component_id, version);
+        mfd_set_error_not_installed(error, component_id, version);
         return NULL;
     }
 

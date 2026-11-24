@@ -24,23 +24,21 @@ G_DECLARE_FINAL_TYPE(MfdManager, mfd_manager, MFD, MANAGER, GObject)
 MfdManager          *mfd_manager_new(void);
 MfdManager          *mfd_manager_new_for_store(MfStore *store);
 
-MfResult            *mfd_manager_install_set(MfdManager     *manager,
-                                             MfdInstallSet  *set,
-                                             MfProgressFunc  progress_func,
-                                             gpointer        user_data,
-                                             MfdErrorDetail *ret_detail,
-                                             GError        **error);
+MfResult            *mfd_manager_install_set(MfdManager    *manager,
+                                             MfdInstallSet *set,
+                                             MfProgressFunc progress_func,
+                                             gpointer       user_data,
+                                             GError       **error);
 
 gboolean             mfd_manager_install_set_gains_privileges(MfdManager    *manager,
                                                               MfdInstallSet *set);
 
-MfResult            *mfd_manager_remove(MfdManager     *manager,
-                                        const char     *component_id,
-                                        const char     *version,
-                                        MfProgressFunc  progress_func,
-                                        gpointer        user_data,
-                                        MfdErrorDetail *ret_detail,
-                                        GError        **error);
+MfResult            *mfd_manager_remove(MfdManager    *manager,
+                                        const char    *component_id,
+                                        const char    *version,
+                                        MfProgressFunc progress_func,
+                                        gpointer       user_data,
+                                        GError       **error);
 
 MfdInstallSet       *mfd_manager_resolve_request(MfdManager     *manager,
                                                  MfdRepoRequest *request,
@@ -75,11 +73,10 @@ gboolean             mfd_manager_remove_remote(MfdManager *manager,
                                                const char *remote_id,
                                                GError    **error);
 
-GPtrArray           *mfd_manager_mark(MfdManager     *manager,
-                                      const char     *component_id,
-                                      const char     *version,
-                                      MfInstallMode   mode,
-                                      MfdErrorDetail *ret_detail,
-                                      GError        **error);
+GPtrArray           *mfd_manager_mark(MfdManager   *manager,
+                                      const char   *component_id,
+                                      const char   *version,
+                                      MfInstallMode mode,
+                                      GError      **error);
 
 G_END_DECLS

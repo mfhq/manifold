@@ -762,7 +762,8 @@ class RemoteTest(unittest.TestCase):
         self.install('org.example.Missing', origin='example-main', expect=1)
         self.install(APP_ID, origin='other-main', expect=1)
         self.assertIn(
-            'No remote has org.example.Missing', self.install('org.example.Missing', expect=1)
+            'No remote has the component org.example.Missing',
+            self.install('org.example.Missing', expect=1),
         )
 
     def test_update_reuses_chunks(self):
@@ -877,7 +878,8 @@ class RemoteTest(unittest.TestCase):
             'Unable to open ./app.manifold', self.manifold('install', './app.manifold', expect=3)
         )
         self.assertIn(
-            'No remote has app.manifold', self.manifold('install', 'app.manifold', expect=1)
+            'No remote has the component app.manifold',
+            self.manifold('install', 'app.manifold', expect=1),
         )
 
         # we stop at the first component that fails, and name the ones that were not installed

@@ -8,7 +8,6 @@
 
 #include <locale.h>
 #include <glib.h>
-#include <glib/gi18n-lib.h>
 
 #include <sys/stat.h>
 #include <systemd/sd-event.h>
@@ -72,11 +71,10 @@ main(int argc, char **argv)
         G_OPTION_ENTRY_NULL,
     };
 
-    /* bind locale */
+    /* NOTE: We do not translate our messages or the messages of the libraries we use,
+     * as we do not know the language of the user. The client translates errors. */
     setlocale(LC_ALL, "");
-    bindtextdomain(GETTEXT_PACKAGE, LOCALEDIR);
-    bind_textdomain_codeset(GETTEXT_PACKAGE, "UTF-8");
-    textdomain(GETTEXT_PACKAGE);
+    setlocale(LC_MESSAGES, "C");
 
     context = g_option_context_new("- Manifold management daemon");
     g_option_context_set_description(context, "The default socket is " MF_SOCKET_PATH);

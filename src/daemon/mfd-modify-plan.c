@@ -124,7 +124,6 @@ mfd_plan_base_link(MfStore *store,
                    const char *component_id,
                    const MfBaseReference *ref,
                    MfManifest **ret_manifest,
-                   MfdErrorDetail *ret_detail,
                    GError **error)
 {
     g_auto(MfdBaseProvider) provider = {};
@@ -133,7 +132,7 @@ mfd_plan_base_link(MfStore *store,
     gboolean current;
 
     if (!mfd_install_set_find_base(set, store, ref, &provider)) {
-        mfd_set_error_missing_base(error, ret_detail, component_id, ref);
+        mfd_set_error_missing_base(error, component_id, ref);
         return NULL;
     }
 
@@ -215,7 +214,6 @@ mfd_install_plan_init_base_sdk(MfdInstallPlan *iplan,
                                MfdInstallSet *set,
                                MfdInstallItem *item,
                                MfManifest *base,
-                               MfdErrorDetail *ret_detail,
                                GError **error)
 {
     MfManifest *manifest = item->manifest;
@@ -224,7 +222,7 @@ mfd_install_plan_init_base_sdk(MfdInstallPlan *iplan,
     const MfBaseReference *base_ref = mf_manifest_get_base(base);
     g_autoptr(MfManifest) base_sdk = NULL;
 
-    iplan->base_sdk = mfd_plan_base_link(store, set, component_id, ref, &base_sdk, ret_detail, error);
+    iplan->base_sdk = mfd_plan_base_link(store, set, component_id, ref, &base_sdk, error);
     if (iplan->base_sdk == NULL)
         return FALSE;
 
@@ -284,24 +282,20 @@ mfd_install_plan_init_base_sdk(MfdInstallPlan *iplan,
  * Returns: %TRUE if the item can be installed
  */
 static gboolean
-mfd_install_item_check_installable(MfdInstallItem *item,
-                                   MfStore *store,
-                                   MfdErrorDetail *ret_detail,
-                                   GError **error)
+mfd_install_item_check_installable(MfdInstallItem *item, MfStore *store, GError **error)
 {
     MfManifest *manifest = item->manifest;
     g_autoptr(MfComponent) other_kind = NULL;
 
     if (!g_str_equal(mf_manifest_get_architecture(manifest), mf_get_host_architecture())) {
         mfd_set_error_wrong_architecture(error,
-                                         ret_detail,
                                          mf_manifest_get_component_id(manifest),
                                          mf_manifest_get_architecture(manifest));
         return FALSE;
     }
     other_kind = mfd_find_other_kind(store, manifest);
     if (other_kind != NULL) {
-        mfd_set_error_id_conflict(error, ret_detail, other_kind);
+        mfd_set_error_id_conflict(error, other_kind);
         return FALSE;
     }
     if (!mf_manifest_check_integration(manifest, error))
@@ -324,10 +318,7 @@ mfd_install_item_check_installable(MfdInstallItem *item,
  * Returns: %FALSE if the item is installed already and can not be installed again
  */
 static gboolean
-mfd_install_plan_check_installed(MfdInstallPlan *iplan,
-                                 MfStore *store,
-                                 MfdErrorDetail *ret_detail,
-                                 GError **error)
+mfd_install_plan_check_installed(MfdInstallPlan *iplan, MfStore *store, GError **error)
 {
     MfManifest *manifest = iplan->item->manifest;
     const char *component_id = mf_manifest_get_component_id(manifest);
@@ -345,7 +336,7 @@ mfd_install_plan_check_installed(MfdInstallPlan *iplan,
                   version,
                   mf_component_get_verity_hash(existing),
                   verity_hash);
-        mfd_set_error_already_installed(error, ret_detail, component_id, version);
+        mfd_set_error_already_installed(error, component_id, version);
         return FALSE;
     }
     if (iplan->item->is_dependency) {
@@ -355,7 +346,7 @@ mfd_install_plan_check_installed(MfdInstallPlan *iplan,
     }
     if (mf_component_kind_is_always_auto(mf_manifest_get_kind(manifest), mf_manifest_is_sdk(manifest)) ||
         mf_component_get_install_mode(existing) != MF_INSTALL_MODE_AUTO) {
-        mfd_set_error_already_installed(error, ret_detail, component_id, version);
+        mfd_set_error_already_installed(error, component_id, version);
         return FALSE;
     }
     g_info("%s %s was a dependency, and is installed on purpose now", component_id, version);
@@ -403,11 +394,7 @@ mfd_install_plan_check_needed(MfdInstallPlan *iplan, MfStore *store, MfdInstallS
  * Returns: %TRUE if the links were set, or if the item is a core
  */
 static gboolean
-mfd_install_plan_init_base(MfdInstallPlan *iplan,
-                           MfStore *store,
-                           MfdInstallSet *set,
-                           MfdErrorDetail *ret_detail,
-                           GError **error)
+mfd_install_plan_init_base(MfdInstallPlan *iplan, MfStore *store, MfdInstallSet *set, GError **error)
 {
     MfdInstallItem *item = iplan->item;
     MfManifest *manifest = item->manifest;
@@ -422,7 +409,7 @@ mfd_install_plan_init_base(MfdInstallPlan *iplan,
     if (base_ref == NULL)
         return TRUE;
 
-    iplan->base = mfd_plan_base_link(store, set, component_id, base_ref, &base, ret_detail, error);
+    iplan->base = mfd_plan_base_link(store, set, component_id, base_ref, &base, error);
     if (iplan->base == NULL)
         return FALSE;
 
@@ -445,7 +432,7 @@ mfd_install_plan_init_base(MfdInstallPlan *iplan,
 
     /* only an SDK has a base SDK */
     if (mf_manifest_get_base_sdk(manifest) != NULL &&
-        !mfd_install_plan_init_base_sdk(iplan, store, set, item, base, ret_detail, error))
+        !mfd_install_plan_init_base_sdk(iplan, store, set, item, base, error))
         return FALSE;
 
     return TRUE;
@@ -467,7 +454,6 @@ mfd_install_plan_init(MfdInstallPlan *iplan,
                       MfStore *store,
                       MfdInstallSet *set,
                       MfdInstallItem *item,
-                      MfdErrorDetail *ret_detail,
                       GError **error)
 {
     MfManifest *manifest = item->manifest;
@@ -475,7 +461,7 @@ mfd_install_plan_init(MfdInstallPlan *iplan,
     gboolean sdk = mf_manifest_is_sdk(manifest);
     g_autoptr(MfComponent) newest = NULL;
 
-    if (!mfd_install_item_check_installable(item, store, ret_detail, error))
+    if (!mfd_install_item_check_installable(item, store, error))
         return FALSE;
 
     iplan->item = item;
@@ -484,7 +470,7 @@ mfd_install_plan_init(MfdInstallPlan *iplan,
                                                                                      : MF_INSTALL_MODE_MANUAL;
 
     /* check if this version is installed already */
-    if (!mfd_install_plan_check_installed(iplan, store, ret_detail, error))
+    if (!mfd_install_plan_check_installed(iplan, store, error))
         return FALSE;
     if (iplan->skip)
         return TRUE;
@@ -503,7 +489,7 @@ mfd_install_plan_init(MfdInstallPlan *iplan,
         return TRUE;
 
     /* find the base and the base SDK */
-    return mfd_install_plan_init_base(iplan, store, set, ret_detail, error);
+    return mfd_install_plan_init_base(iplan, store, set, error);
 }
 
 /**
@@ -541,7 +527,6 @@ mfd_install_plans_check_file_conflicts(GArray *plans,
  * @store: the store that the set will be installed into
  * @integrator: the integrator of @store, to check for file conflicts on the host
  * @set: the components to install
- * @ret_detail: (out caller-allocates) (optional): details about the failure
  *
  * Plan the installation of every item of a set.
  *
@@ -549,11 +534,7 @@ mfd_install_plans_check_file_conflicts(GArray *plans,
  *   if the set can not be installed
  */
 GArray *
-mfd_install_plans_new_for_set(MfStore *store,
-                              MfdIntegrator *integrator,
-                              MfdInstallSet *set,
-                              MfdErrorDetail *ret_detail,
-                              GError **error)
+mfd_install_plans_new_for_set(MfStore *store, MfdIntegrator *integrator, MfdInstallSet *set, GError **error)
 {
     GPtrArray *items = set->items;
     g_autoptr(GArray) plans = g_array_sized_new(FALSE, TRUE, sizeof(MfdInstallPlan), items->len);
@@ -565,7 +546,6 @@ mfd_install_plans_new_for_set(MfStore *store,
                                    store,
                                    set,
                                    g_ptr_array_index(items, i),
-                                   ret_detail,
                                    error))
             return NULL;
     }
@@ -823,7 +803,6 @@ mfd_removal_plan_complete(MfdRemovalPlan *rmplan,
  * @component_id: (nullable): a component to remove, or %NULL to only plan a cleanup
  * @version: (nullable): the version to remove with all of its revisions, the
  *   full version (`<version>-<rev>`) to remove one revision, or %NULL for all versions
- * @ret_detail: (out caller-allocates) (optional): details about the failure
  * @error: a #GError
  *
  * Create the removal plan for a component. The plan contains the requested
@@ -836,7 +815,6 @@ MfdRemovalPlan *
 mfd_removal_plan_new_for_removal(MfStore *store,
                                  const char *component_id,
                                  const char *version,
-                                 MfdErrorDetail *ret_detail,
                                  GError **error)
 {
     g_autoptr(MfdRemovalPlan) rmplan = mfd_removal_plan_new();
@@ -861,7 +839,7 @@ mfd_removal_plan_new_for_removal(MfStore *store,
                 g_hash_table_add(requested, candidate);
         }
         if (g_hash_table_size(requested) == 0) {
-            mfd_set_error_not_installed(error, ret_detail, component_id, version);
+            mfd_set_error_not_installed(error, component_id, version);
             return NULL;
         }
     }
@@ -878,10 +856,7 @@ mfd_removal_plan_new_for_removal(MfStore *store,
             g_hash_table_contains(rmplan->cpts_set, candidate))
             continue;
         used = mfd_find_used_bases(store, installed, rmplan->cpts_set);
-        mfd_set_error_in_use(error,
-                             ret_detail,
-                             component_id,
-                             mf_component_get_id(g_hash_table_lookup(used, candidate)));
+        mfd_set_error_in_use(error, component_id, mf_component_get_id(g_hash_table_lookup(used, candidate)));
         return NULL;
     }
 

@@ -15,7 +15,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <glib/gi18n-lib.h>
 #include <libglnx.h>
 #include <systemd/sd-json.h>
 #include <systemd/sd-varlink.h>
@@ -88,16 +87,14 @@ mfd_fetch_request_set_error(MfdFetchRequest *request, GError **error)
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_DOWNLOAD_FAILED,
-                    /* TRANSLATORS: the URL of a file, and the HTTP status the server replied with */
-                    _("Unable to download %s: the server replied with %" PRId64),
+                    "Unable to download %s: the server replied with %" PRId64,
                     request->url,
                     request->http_status);
     else
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_DOWNLOAD_FAILED,
-                    /* TRANSLATORS: the URL of a file, and the error message */
-                    _("Unable to download %s: %s"),
+                    "Unable to download %s: %s",
                     request->url,
                     request->message != NULL ? request->message : request->failure);
 }
@@ -243,7 +240,7 @@ mfd_fetcher_connect(MfdFetcher *fetcher, GError **error)
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_FAILED,
-                    _("Unable to reach the download helper: %s"),
+                    "Unable to reach the download helper: %s",
                     g_strerror(-r));
         return FALSE;
     }
@@ -330,7 +327,7 @@ mfd_on_fetch_reply(sd_varlink *link,
     sd_json_variant *received = sd_json_variant_by_key(parameters, "received");
 
     if (error_id != NULL) {
-        g_set_error(&call->error, MF_ERROR, MF_ERROR_FAILED, _("The download helper failed: %s"), error_id);
+        g_set_error(&call->error, MF_ERROR, MF_ERROR_FAILED, "The download helper failed: %s", error_id);
         call->done = TRUE;
         return 0;
     }
@@ -343,7 +340,7 @@ mfd_on_fetch_reply(sd_varlink *link,
         g_set_error_literal(&call->error,
                             MF_ERROR,
                             MF_ERROR_FAILED,
-                            _("The reply of the download helper does not match the request"));
+                            "The reply of the download helper does not match the request");
     call->done = TRUE;
     return 0;
 }
@@ -423,7 +420,7 @@ fail:
     g_set_error(error,
                 MF_ERROR,
                 MF_ERROR_FAILED,
-                _("Unable to talk to the download helper: %s"),
+                "Unable to talk to the download helper: %s",
                 g_strerror(-r));
     return FALSE;
 }
@@ -492,7 +489,7 @@ mfd_read_fd(int fd, uint64_t max_size, GError **error)
         g_set_error_literal(error,
                             MF_ERROR,
                             MF_ERROR_DOWNLOAD_FAILED,
-                            _("The download helper wrote more data than it was allowed to"));
+                            "The download helper wrote more data than it was allowed to");
         return NULL;
     }
     data = g_malloc(st.st_size > 0 ? (size_t) st.st_size : 1);

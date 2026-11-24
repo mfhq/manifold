@@ -18,13 +18,14 @@ G_BEGIN_DECLS
  * MfError:
  * @MF_ERROR_FAILED: Generic failure.
  * @MF_ERROR_NO_SERVICE: The Manifold service could not be reached.
- * @MF_ERROR_NOT_IMPLEMENTED: The requested operation is not implemented.
  * @MF_ERROR_NOT_FOUND: The entity was not found.
+ * @MF_ERROR_NOT_AVAILABLE: No remote has the component.
  * @MF_ERROR_PERMISSION_DENIED: The caller is not allowed to do this.
  * @MF_ERROR_INVALID_BUNDLE: The file is not a Manifold bundle.
  * @MF_ERROR_WRONG_ARCHITECTURE: The component was built for another architecture than this system's.
  * @MF_ERROR_VERIFICATION_FAILED: Data does not match its signature, or the hashes recorded for it.
  * @MF_ERROR_MISSING_BASE: The base of a component is not installed.
+ * @MF_ERROR_BASE_NOT_AVAILABLE: The base of a component is not installed, and no remote has it.
  * @MF_ERROR_ALREADY_INSTALLED: This version of the component is installed already.
  * @MF_ERROR_COMPONENT_IN_USE: An installed component builds on this component.
  * @MF_ERROR_INVALID_MANIFEST: The data is not a manifest, or not one that could be installed.
@@ -42,13 +43,14 @@ G_BEGIN_DECLS
 typedef enum {
     MF_ERROR_FAILED,
     MF_ERROR_NO_SERVICE,
-    MF_ERROR_NOT_IMPLEMENTED,
     MF_ERROR_NOT_FOUND,
+    MF_ERROR_NOT_AVAILABLE,
     MF_ERROR_PERMISSION_DENIED,
     MF_ERROR_INVALID_BUNDLE,
     MF_ERROR_WRONG_ARCHITECTURE,
     MF_ERROR_VERIFICATION_FAILED,
     MF_ERROR_MISSING_BASE,
+    MF_ERROR_BASE_NOT_AVAILABLE,
     MF_ERROR_ALREADY_INSTALLED,
     MF_ERROR_COMPONENT_IN_USE,
     MF_ERROR_INVALID_MANIFEST,

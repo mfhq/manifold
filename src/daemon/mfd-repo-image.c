@@ -12,7 +12,6 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <unistd.h>
-#include <glib/gi18n-lib.h>
 #include <libglnx.h>
 
 #include "mf-component-private.h"
