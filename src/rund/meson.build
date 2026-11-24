@@ -4,6 +4,8 @@
 
 mf_rund_src = [
     'mfr-capture.c',
+    'mfr-capture-build.c',
+    'mfr-capture-build.h',
     'mfr-capture.h',
     'mfr-composer.c',
     'mfr-composer.h',
