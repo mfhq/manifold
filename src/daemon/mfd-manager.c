@@ -720,7 +720,6 @@ mfd_manager_new_fetcher(MfdManager *manager)
  * mfd_manager_refresh_for_retry:
  * @manager: an #MfdManager
  * @request: the request that failed
- * @set: the set that was resolved or installed for @request
  * @failure: the error that @request failed with
  *
  * Refresh the remotes that a failed request downloaded from, if that may fix
@@ -735,25 +734,22 @@ mfd_manager_new_fetcher(MfdManager *manager)
  *   root index now
  */
 gboolean
-mfd_manager_refresh_for_retry(MfdManager *manager,
-                              MfdRepoRequest *request,
-                              MfdInstallSet *set,
-                              const GError *failure)
+mfd_manager_refresh_for_retry(MfdManager *manager, MfdRepoRequest *request, const GError *failure)
 {
     g_autoptr(MfdFetcher) fetcher = NULL;
     gboolean changed = FALSE;
 
     g_return_val_if_fail(MFD_IS_MANAGER(manager), FALSE);
 
-    if (request->refreshed || set->remotes->len == 0 ||
+    if (request->refreshed || request->remotes_used->len == 0 ||
         !(g_error_matches(failure, MF_ERROR, MF_ERROR_VERIFICATION_FAILED) ||
           g_error_matches(failure, MF_ERROR, MF_ERROR_DOWNLOAD_FAILED)))
         return FALSE;
     request->refreshed = TRUE;
 
     fetcher = mfd_manager_new_fetcher(manager);
-    for (guint i = 0; i < set->remotes->len; i++) {
-        MfRemote *remote = g_ptr_array_index(set->remotes, i);
+    for (guint i = 0; i < request->remotes_used->len; i++) {
+        MfRemote *remote = g_ptr_array_index(request->remotes_used, i);
         g_autoptr(GError) local_error = NULL;
         gboolean remote_changed = FALSE;
 
@@ -813,15 +809,9 @@ mfd_manager_resolve_request(MfdManager *manager, MfdRepoRequest *request, GError
         if (channel_set == NULL)
             return NULL;
 
-        set = mfd_install_set_new();
-        if (!mfd_resolver_resolve(request,
-                                  set,
-                                  manager->store,
-                                  fetcher,
-                                  channel_set,
-                                  failures,
-                                  &local_error)) {
-            if (mfd_manager_refresh_for_retry(manager, request, set, local_error))
+        set = mfd_resolver_resolve(request, manager->store, fetcher, channel_set, failures, &local_error);
+        if (set == NULL) {
+            if (mfd_manager_refresh_for_retry(manager, request, local_error))
                 continue;
             g_propagate_error(error, g_steal_pointer(&local_error));
             return NULL;
@@ -829,7 +819,7 @@ mfd_manager_resolve_request(MfdManager *manager, MfdRepoRequest *request, GError
 
         /* a refresh may fix an update that could not be resolved */
         for (guint i = 0; i < failures->len && !retry; i++)
-            retry = mfd_manager_refresh_for_retry(manager, request, set, g_ptr_array_index(failures, i));
+            retry = mfd_manager_refresh_for_retry(manager, request, g_ptr_array_index(failures, i));
         if (retry)
             continue;
 

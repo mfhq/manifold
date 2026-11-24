@@ -38,7 +38,10 @@ typedef struct {
     char              *component_id; /* the component to install, for an install request */
     char              *origin;       /* the origin to install the component from, or NULL */
     GStrv              update_ids;   /* the components to update, or NULL for all, for an update request */
-    gboolean           refreshed; /* whether remotes were refreshed for the request, which we do only once */
+
+    /* state for the retry after a refresh, see mfd_manager_refresh_for_retry() */
+    GPtrArray         *remotes_used; /* (element-type MfRemote): the remotes used to resolve the request */
+    gboolean           refreshed;    /* the remotes were refreshed for the request already */
 } MfdRepoRequest;
 
 MfdRepoRequest *mfd_repo_request_new_install(const char *component_id,
@@ -48,12 +51,11 @@ void            mfd_repo_request_free(MfdRepoRequest *request);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdRepoRequest, mfd_repo_request_free)
 
-gboolean mfd_resolver_resolve(MfdRepoRequest      *request,
-                              MfdInstallSet       *set,
-                              MfStore             *store,
-                              MfdFetcher          *fetcher,
-                              MfdRemoteChannelSet *channel_set,
-                              GPtrArray           *failures,
-                              GError             **error);
+MfdInstallSet *mfd_resolver_resolve(MfdRepoRequest      *request,
+                                    MfStore             *store,
+                                    MfdFetcher          *fetcher,
+                                    MfdRemoteChannelSet *channel_set,
+                                    GPtrArray           *failures,
+                                    GError             **error);
 
 G_END_DECLS

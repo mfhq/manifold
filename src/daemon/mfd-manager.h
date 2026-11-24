@@ -45,7 +45,6 @@ MfdInstallSet       *mfd_manager_resolve_request(MfdManager     *manager,
                                                  GError        **error);
 gboolean             mfd_manager_refresh_for_retry(MfdManager     *manager,
                                                    MfdRepoRequest *request,
-                                                   MfdInstallSet  *set,
                                                    const GError   *failure);
 
 void                 mfd_manager_set_fetch_helper(MfdManager *manager,

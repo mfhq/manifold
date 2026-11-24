@@ -59,7 +59,6 @@ struct _MfdInstallItem {
  */
 typedef struct {
     GPtrArray *items;    /* (element-type MfdInstallItem) */
-    GPtrArray *remotes;  /* (element-type MfRemote): the remotes that manifests were downloaded from */
     GPtrArray *warnings; /* (element-type utf8): warnings about components that were left out */
 } MfdInstallSet;
 
@@ -84,8 +83,6 @@ MfdInstallItem *mfd_install_set_add(MfdInstallSet *set,
                                     MfManifest    *manifest,
                                     const char    *name,
                                     const char    *origin);
-void            mfd_install_set_add_remote(MfdInstallSet *set,
-                                           MfRemote      *remote);
 
 MfdInstallItem *mfd_install_set_find_identity(MfdInstallSet *set,
                                               const char    *identity);

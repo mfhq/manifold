@@ -42,6 +42,7 @@ mfd_repo_request_new_install(const char *component_id, const char *origin)
     MfdRepoRequest *request = g_new0(MfdRepoRequest, 1);
 
     request->kind = MFD_REPO_REQUEST_INSTALL;
+    request->remotes_used = g_ptr_array_new_with_free_func(g_object_unref);
     request->component_id = g_strdup(component_id);
     request->origin = g_strdup(origin);
     return request;
@@ -60,6 +61,7 @@ mfd_repo_request_new_update(const char *const *component_ids)
     MfdRepoRequest *request = g_new0(MfdRepoRequest, 1);
 
     request->kind = MFD_REPO_REQUEST_UPDATE;
+    request->remotes_used = g_ptr_array_new_with_free_func(g_object_unref);
     request->update_ids = g_strdupv((GStrv) component_ids);
     return request;
 }
@@ -75,11 +77,30 @@ mfd_repo_request_free(MfdRepoRequest *request)
     g_free(request->component_id);
     g_free(request->origin);
     g_strfreev(request->update_ids);
+    g_ptr_array_unref(request->remotes_used);
     g_free(request);
+}
+
+/**
+ * mfd_repo_request_add_used_remote:
+ *
+ * Record that a manifest for the request was downloaded from @remote.
+ */
+static void
+mfd_repo_request_add_used_remote(MfdRepoRequest *request, MfRemote *remote)
+{
+    for (guint i = 0; i < request->remotes_used->len; i++) {
+        MfRemote *used = g_ptr_array_index(request->remotes_used, i);
+
+        if (g_str_equal(mf_remote_get_id(used), mf_remote_get_id(remote)))
+            return;
+    }
+    g_ptr_array_add(request->remotes_used, g_object_ref(remote));
 }
 
 /* the state of resolving one request */
 typedef struct {
+    MfdRepoRequest *request;
     MfdInstallSet *set;
     MfStore *store;
     MfdFetcher *fetcher;
@@ -103,7 +124,7 @@ mfd_resolver_fetch_manifest(MfdResolver *resolver,
     g_autofree char *url = mf_remote_build_url(channel->remote, version->manifest_location);
     g_autoptr(GBytes) data = NULL;
 
-    mfd_install_set_add_remote(resolver->set, channel->remote);
+    mfd_repo_request_add_used_remote(resolver->request, channel->remote);
     data = mfd_fetcher_download_file(resolver->fetcher, url, version->manifest.size, error);
     if (data == NULL)
         return NULL;
@@ -413,8 +434,9 @@ mfd_resolver_choose_channel(MfdResolver *resolver,
  * Returns: %TRUE if the component is in the set
  */
 static gboolean
-mfd_resolver_resolve_component(MfdResolver *resolver, MfdRepoRequest *request, GError **error)
+mfd_resolver_resolve_component(MfdResolver *resolver, GError **error)
 {
+    MfdRepoRequest *request = resolver->request;
     MfRepoVersion *version;
     MfdRemoteChannel *channel;
 
@@ -555,29 +577,25 @@ mfd_find_update(MfdRemoteChannelSet *channel_set, MfComponent *component, GPtrAr
 
 /**
  * mfd_resolver_find_updates:
- * @component_ids: (nullable) (array zero-terminated=1): the components to
- *   update, or %NULL for every component from a remote
- * @warnings: (element-type utf8): the list to add warnings to about components
- *   that can not be updated
  * @error: a #GError
  *
- * Find the components that have a newer version in the channel they came from.
+ * Find the components of an update request which have a newer version in the
+ * channel that they came from. A warning is added to the set for every
+ * component that can not be updated.
  *
- * Without @component_ids we check every component that was installed from a
- * remote. We skip runtimes that were installed as a dependency, unless an
- * installed component uses them through their `current` link. A newer version
- * of such a runtime would not be used by anything, and the next cleanup would
- * remove it again.
+ * If the request lists no components, we check every component that was
+ * installed from a remote. We skip runtimes that were installed as a
+ * dependency, unless an installed component uses them through their
+ * `current` link. A newer version of such a runtime would not be used by
+ * anything, and the next cleanup would remove it again.
  *
  * Returns: (transfer full) (element-type MfdUpdate): the updates, or %NULL if
- *   one of @component_ids is not installed, or not from a remote
+ *   a requested component is not installed, or not from a remote
  */
 static GPtrArray *
-mfd_resolver_find_updates(MfdResolver *resolver,
-                          const char *const *component_ids,
-                          GPtrArray *warnings,
-                          GError **error)
+mfd_resolver_find_updates(MfdResolver *resolver, GError **error)
 {
+    const char *const *component_ids = (const char *const *) resolver->request->update_ids;
     g_autoptr(GPtrArray)
         installed = mf_store_list_components(resolver->store, NULL, MF_COMPONENT_KIND_UNKNOWN, error);
     g_autoptr(GPtrArray) candidates = g_ptr_array_new();
@@ -624,7 +642,7 @@ mfd_resolver_find_updates(MfdResolver *resolver,
     for (guint i = 0; i < candidates->len; i++) {
         MfdUpdate *update = mfd_find_update(resolver->channel_set,
                                             g_ptr_array_index(candidates, i),
-                                            warnings);
+                                            resolver->set->warnings);
 
         if (update != NULL)
             g_ptr_array_add(updates, update);
@@ -681,7 +699,6 @@ mfd_resolver_resolve_updates(MfdResolver *resolver, GPtrArray *updates, GPtrArra
 /**
  * mfd_resolver_resolve:
  * @request: the request to resolve
- * @set: an empty set, to which the versions to install are added
  * @store: the store, which has to be loaded
  * @fetcher: the fetcher to download manifests with
  * @channel_set: the channels of the remotes
@@ -689,39 +706,43 @@ mfd_resolver_resolve_updates(MfdResolver *resolver, GPtrArray *updates, GPtrArra
  *   update that could not be resolved
  * @error: a #GError
  *
- * Find the versions that a request installs, and add them to @set with the
- * bases they need. We download and verify their manifests, but not their
- * images. A component that an update request can not update is left out,
- * and @set has a warning about it.
+ * Find the versions that a request installs, and create an install set from
+ * them and the bases they need. We download and verify their manifests, but
+ * not their images. A component that an update request can not update is
+ * left out, and the set has a warning about it.
  *
- * NOTE: Even if this function fails, @set lists the remotes that manifests
- * were downloaded from, so the caller can refresh these remotes and try again.
+ * The remotes that manifests were downloaded from are recorded in @request,
+ * also if this function fails, so the caller can refresh these remotes and
+ * try again.
  *
- * Returns: %TRUE if the versions to install were added to @set. An update
- *   request adds no versions if no component has an update.
+ * Returns: (transfer full): the set, or %NULL on error. The set of an update
+ *   request has no items if no component has an update.
  */
-gboolean
+MfdInstallSet *
 mfd_resolver_resolve(MfdRepoRequest *request,
-                     MfdInstallSet *set,
                      MfStore *store,
                      MfdFetcher *fetcher,
                      MfdRemoteChannelSet *channel_set,
                      GPtrArray *failures,
                      GError **error)
 {
-    MfdResolver resolver = {set, store, fetcher, channel_set};
+    g_autoptr(MfdInstallSet) set = mfd_install_set_new();
+    MfdResolver resolver = {request, set, store, fetcher, channel_set};
     g_autoptr(GPtrArray) updates = NULL;
 
-    if (request->kind == MFD_REPO_REQUEST_INSTALL)
-        return mfd_resolver_resolve_component(&resolver, request, error);
+    /* we only record the remotes of this attempt */
+    g_ptr_array_set_size(request->remotes_used, 0);
 
-    updates = mfd_resolver_find_updates(&resolver,
-                                        (const char *const *) request->update_ids,
-                                        set->warnings,
-                                        error);
+    if (request->kind == MFD_REPO_REQUEST_INSTALL) {
+        if (!mfd_resolver_resolve_component(&resolver, error))
+            return NULL;
+        return g_steal_pointer(&set);
+    }
+
+    updates = mfd_resolver_find_updates(&resolver, error);
     if (updates == NULL)
-        return FALSE;
+        return NULL;
     mfd_resolver_resolve_updates(&resolver, updates, failures);
 
-    return TRUE;
+    return g_steal_pointer(&set);
 }

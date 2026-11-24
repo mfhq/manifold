@@ -844,10 +844,7 @@ mfd_service_install_request_set(MfdService *service, MfdRequest *request)
                                          &error);
         /* only a request to the remotes can be tried again, after a refresh */
         if (result != NULL || request->repo_request == NULL ||
-            !mfd_manager_refresh_for_retry(service->manager,
-                                           request->repo_request,
-                                           request->install_set,
-                                           error))
+            !mfd_manager_refresh_for_retry(service->manager, request->repo_request, error))
             return mfd_service_reply_result_or_error(request->link, result, error);
 
         g_clear_pointer(&request->install_set, mfd_install_set_free);

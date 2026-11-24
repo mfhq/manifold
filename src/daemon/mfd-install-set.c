@@ -101,7 +101,6 @@ mfd_install_set_new(void)
     MfdInstallSet *set = g_new0(MfdInstallSet, 1);
 
     set->items = g_ptr_array_new_with_free_func((GDestroyNotify) mfd_install_item_free);
-    set->remotes = g_ptr_array_new_with_free_func(g_object_unref);
     set->warnings = g_ptr_array_new_with_free_func(g_free);
     return set;
 }
@@ -156,7 +155,6 @@ mfd_install_set_free(MfdInstallSet *set)
     if (set == NULL)
         return;
     g_ptr_array_unref(set->items);
-    g_ptr_array_unref(set->remotes);
     g_ptr_array_unref(set->warnings);
     g_free(set);
 }
@@ -181,21 +179,6 @@ mfd_install_set_add(MfdInstallSet *set, MfManifest *manifest, const char *name, 
     item->origin = g_strdup(origin);
     g_ptr_array_add(set->items, item);
     return item;
-}
-
-/**
- * mfd_install_set_add_remote:
- *
- * Record that manifests for the set were downloaded from @remote.
- */
-void
-mfd_install_set_add_remote(MfdInstallSet *set, MfRemote *remote)
-{
-    for (guint i = 0; i < set->remotes->len; i++) {
-        if (g_str_equal(mf_remote_get_id(g_ptr_array_index(set->remotes, i)), mf_remote_get_id(remote)))
-            return;
-    }
-    g_ptr_array_add(set->remotes, g_object_ref(remote));
 }
 
 /**
