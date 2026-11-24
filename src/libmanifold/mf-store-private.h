@@ -78,6 +78,12 @@ MF_INTERNAL_VISIBLE
 GPtrArray *mf_store_list_images(MfStore *store,
                                 GError **error);
 MF_INTERNAL_VISIBLE
+MfComponent *mf_store_find_version(MfStore    *store,
+                                   const char *component_id,
+                                   const char *version,
+                                   uint64_t    revision,
+                                   GError    **error);
+MF_INTERNAL_VISIBLE
 MfComponent *mf_store_find_identity(MfStore    *store,
                                     const char *identity,
                                     GError    **error);

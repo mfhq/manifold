@@ -517,109 +517,6 @@ mfd_manager_becomes_current(MfdManager *manager, MfManifest *manifest)
 }
 
 /**
- * mfd_check_if_item_wins:
- * @manifest: the manifest of an item of the set that provides an identity
- * @installed: (nullable): the installed component that provides the same identity, or %NULL
- *
- * Check whether we use an item of the set to provide an identity, instead of
- * the installed component that provides the same identity. The item wins if
- * no installed component provides the identity, if the installed component
- * has a different ID, or if the installed component is an older version of
- * the item.
- *
- * Returns: %TRUE if the item of the set wins
- */
-static gboolean
-mfd_check_if_item_wins(MfManifest *manifest, MfComponent *installed)
-{
-    return installed == NULL ||
-           g_strcmp0(mf_component_get_id(installed), mf_manifest_get_component_id(manifest)) != 0 ||
-           mf_version_compare_with_rev(mf_component_get_version(installed),
-                                       mf_component_get_revision(installed),
-                                       mf_manifest_get_version(manifest),
-                                       mf_manifest_get_revision(manifest)) < 0;
-}
-
-/**
- * mfd_manager_resolve_dependency:
- * @iplan: the plan whose base to set
- * @ret_kind: (out): the kind of the component that provides the identity
- * @ret_sdk: (out): whether the component that provides the identity is an SDK
- *
- * Find the component that provides the identity a component needs as its
- * base, in the set or in the store, and make it the base of @iplan.
- *
- * The base link follows the `current` version of that component if the
- * version we found will be the current one once the set is installed.
- * Otherwise, it names the exact version we found.
- *
- * Returns: %TRUE if we found a component that provides the identity
- */
-static gboolean
-mfd_manager_resolve_dependency(MfdManager *manager,
-                               MfdInstallSet *set,
-                               const char *identity,
-                               MfdInstallPlan *iplan,
-                               MfComponentKind *ret_kind,
-                               gboolean *ret_sdk)
-{
-    MfdInstallItem *item = mfd_install_set_find_identity(set, identity);
-    g_autoptr(MfComponent) installed = mf_store_find_identity(manager->store, identity, NULL);
-    gboolean current;
-
-    if (item != NULL && mfd_check_if_item_wins(item->manifest, installed)) {
-        MfManifest *manifest = item->manifest;
-        const char *component_id = mf_manifest_get_component_id(manifest);
-        g_autofree char *version_name = NULL;
-
-        current = mfd_manager_becomes_current(manager, manifest);
-        version_name = current ? NULL
-                               : mf_build_full_version(mf_manifest_get_version(manifest),
-                                                       mf_manifest_get_revision(manifest));
-        *ret_kind = mf_manifest_get_kind(manifest);
-        *ret_sdk = mf_manifest_is_sdk(manifest);
-        iplan->base = mf_base_link_new(mf_store_subdir_for_kind(*ret_kind, *ret_sdk),
-                                       component_id,
-                                       version_name);
-        return TRUE;
-    }
-
-    if (installed == NULL)
-        return FALSE;
-    *ret_kind = mf_component_get_kind(installed);
-    *ret_sdk = mf_component_is_sdk(installed);
-    iplan->base = mf_base_link_new(
-        mf_store_subdir_for_kind(*ret_kind, *ret_sdk),
-        mf_component_get_id(installed),
-        mf_component_is_current(installed) ? NULL : mf_component_get_full_version(installed));
-    return TRUE;
-}
-
-/**
- * mfd_manager_get_installed:
- *
- * Returns: (transfer full) (nullable): the installed component with the given version and revision
- */
-static MfComponent *
-mfd_manager_get_installed(MfdManager *manager,
-                          const char *component_id,
-                          const char *version,
-                          uint64_t revision)
-{
-    g_autoptr(GPtrArray) versions = NULL;
-
-    versions = mf_store_list_components(manager->store, component_id, MF_COMPONENT_KIND_UNKNOWN, NULL);
-    for (guint i = 0; versions != NULL && i < versions->len; i++) {
-        MfComponent *component = g_ptr_array_index(versions, i);
-
-        if (g_str_equal(mf_component_get_version(component), version) &&
-            mf_component_get_revision(component) == revision)
-            return g_object_ref(component);
-    }
-    return NULL;
-}
-
-/**
  * mfd_manager_find_other_kind:
  *
  * An ID names exactly one kind of component.
@@ -648,55 +545,55 @@ mfd_manager_find_other_kind(MfdManager *manager, MfManifest *manifest)
 }
 
 /**
- * mfd_manager_find_exact_base:
+ * mfd_manager_plan_base_link:
  * @component_id: the component that needs the referenced component
- * @ref: a reference to an exact base or to a base SDK
+ * @ref: a reference to a base or to a base SDK
+ * @ret_manifest: (out) (transfer full): the manifest of the component that the link points to
  *
- * Find the exact version and revision of a referenced component in the set
- * or in the store. A different version is not accepted, even if it provides
- * the same identity.
+ * Find the component that is used for a base reference, in the set or in
+ * the store, and create the link to it.
  *
- * Returns: (transfer full) (nullable): the manifest of the version, or %NULL
- *   with @error set if it was not found or does not provide the identity of @ref
+ * The link for an exact reference names the version that was found. Any
+ * other link follows the `current` version of the component if the version
+ * we found will be the current one once the set is installed, and names the
+ * version we found otherwise.
+ *
+ * Returns: (transfer full) (nullable): the link, or %NULL with @error set if
+ *   no component for @ref is in the set or in the store
  */
-static MfManifest *
-mfd_manager_find_exact_base(MfdManager *manager,
-                            MfdInstallSet *set,
-                            const char *component_id,
-                            const MfBaseReference *ref,
-                            MfdErrorDetail *ret_detail,
-                            GError **error)
+static MfBaseLink *
+mfd_manager_plan_base_link(MfdManager *manager,
+                           MfdInstallSet *set,
+                           const char *component_id,
+                           const MfBaseReference *ref,
+                           MfManifest **ret_manifest,
+                           MfdErrorDetail *ret_detail,
+                           GError **error)
 {
-    MfdInstallItem *in_set = mfd_install_set_find_version(set, ref->id, ref->version, ref->revision);
-    g_autoptr(MfComponent) installed = NULL;
+    g_auto(MfdBaseProvider) provider = {};
     g_autoptr(MfManifest) manifest = NULL;
+    g_autofree char *version_name = NULL;
+    gboolean current;
 
-    if (in_set != NULL) {
-        manifest = g_object_ref(in_set->manifest);
-    } else {
-        installed = mfd_manager_get_installed(manager, ref->id, ref->version, ref->revision);
-        if (installed != NULL)
-            manifest = mf_component_fetch_manifest(installed, NULL);
-    }
-    if (manifest == NULL || !g_str_equal(mf_manifest_get_identity(manifest), ref->identity)) {
+    if (!mfd_install_set_find_base(set, manager->store, ref, &provider)) {
         mfd_set_error_missing_base(error, ret_detail, component_id, ref);
         return NULL;
     }
 
-    return g_steal_pointer(&manifest);
-}
+    if (provider.item != NULL) {
+        manifest = g_object_ref(provider.item->manifest);
+        current = mfd_manager_becomes_current(manager, manifest);
+    } else {
+        manifest = mf_component_fetch_manifest(provider.installed, error);
+        if (manifest == NULL)
+            return NULL;
+        current = mf_component_is_current(provider.installed);
+    }
 
-/**
- * mfd_base_link_new_exact:
- *
- * Returns: (transfer full): a link to the exact version of the component that @manifest describes
- */
-static MfBaseLink *
-mfd_base_link_new_exact(MfManifest *manifest)
-{
-    g_autofree char *version_name = mf_build_full_version(mf_manifest_get_version(manifest),
-                                                          mf_manifest_get_revision(manifest));
-
+    if (ref->exact || !current)
+        version_name = mf_build_full_version(mf_manifest_get_version(manifest),
+                                             mf_manifest_get_revision(manifest));
+    *ret_manifest = g_object_ref(manifest);
     return mf_base_link_new(
         mf_store_subdir_for_kind(mf_manifest_get_kind(manifest), mf_manifest_is_sdk(manifest)),
         mf_manifest_get_component_id(manifest),
@@ -770,8 +667,14 @@ mfd_manager_plan_item_base_sdk(MfdManager *manager,
     const MfBaseReference *base_ref = mf_manifest_get_base(base);
     g_autoptr(MfManifest) base_sdk = NULL;
 
-    base_sdk = mfd_manager_find_exact_base(manager, set, component_id, ref, ret_detail, error);
-    if (base_sdk == NULL)
+    iplan->base_sdk = mfd_manager_plan_base_link(manager,
+                                                 set,
+                                                 component_id,
+                                                 ref,
+                                                 &base_sdk,
+                                                 ret_detail,
+                                                 error);
+    if (iplan->base_sdk == NULL)
         return FALSE;
 
     if (!mf_manifest_is_sdk(base_sdk)) {
@@ -816,7 +719,6 @@ mfd_manager_plan_item_base_sdk(MfdManager *manager,
         return FALSE;
     }
 
-    iplan->base_sdk = mfd_base_link_new_exact(base_sdk);
     return TRUE;
 }
 
@@ -874,7 +776,11 @@ mfd_manager_plan_item_install(MfdManager *manager,
     iplan->mode = dependency || mf_component_kind_is_always_auto(kind, sdk) ? MF_INSTALL_MODE_AUTO
                                                                             : MF_INSTALL_MODE_MANUAL;
 
-    existing = mfd_manager_get_installed(manager, component_id, version, mf_manifest_get_revision(manifest));
+    existing = mf_store_find_version(manager->store,
+                                     component_id,
+                                     version,
+                                     mf_manifest_get_revision(manifest),
+                                     NULL);
     if (existing != NULL) {
         if (g_strcmp0(mf_component_get_verity_hash(existing), verity_hash) != 0) {
             g_warning("%s %s is installed already, with another image: %s instead of %s",
@@ -913,7 +819,7 @@ mfd_manager_plan_item_install(MfdManager *manager,
         g_autoptr(MfComponent)
             provider = mf_store_find_identity(manager->store, mf_manifest_get_identity(manifest), NULL);
 
-        if (!mfd_check_if_item_wins(manifest, provider)) {
+        if (!mfd_check_if_pending_item_wins(manifest, provider)) {
             g_info("%s %s is not needed, %s is installed",
                    component_id,
                    version,
@@ -929,24 +835,19 @@ mfd_manager_plan_item_install(MfdManager *manager,
         MfComponentKind base_kind;
         gboolean base_sdk;
 
-        if (base_ref->exact) {
-            base = mfd_manager_find_exact_base(manager, set, component_id, base_ref, ret_detail, error);
-            if (base == NULL)
-                return FALSE;
-            iplan->base = mfd_base_link_new_exact(base);
-            base_kind = mf_manifest_get_kind(base);
-            base_sdk = mf_manifest_is_sdk(base);
-        } else if (!mfd_manager_resolve_dependency(manager,
-                                                   set,
-                                                   base_ref->identity,
-                                                   iplan,
-                                                   &base_kind,
-                                                   &base_sdk)) {
-            mfd_set_error_missing_base(error, ret_detail, component_id, base_ref);
+        iplan->base = mfd_manager_plan_base_link(manager,
+                                                 set,
+                                                 component_id,
+                                                 base_ref,
+                                                 &base,
+                                                 ret_detail,
+                                                 error);
+        if (iplan->base == NULL)
             return FALSE;
-        }
 
         /* a component can only build on the kinds of layer that are allowed below it */
+        base_kind = mf_manifest_get_kind(base);
+        base_sdk = mf_manifest_is_sdk(base);
         if (!mf_component_kind_can_build_on(kind, sdk, base_kind, base_sdk)) {
             g_set_error(error,
                         MF_ERROR,
@@ -1761,10 +1662,11 @@ mfd_manager_results_add_installed(MfdManager *manager, MfResult *result, GArray 
 
         if (plan->skip)
             continue;
-        component = mfd_manager_get_installed(manager,
-                                              mf_manifest_get_component_id(manifest),
-                                              mf_manifest_get_version(manifest),
-                                              mf_manifest_get_revision(manifest));
+        component = mf_store_find_version(manager->store,
+                                          mf_manifest_get_component_id(manifest),
+                                          mf_manifest_get_version(manifest),
+                                          mf_manifest_get_revision(manifest),
+                                          NULL);
         if (component == NULL ||
             g_strcmp0(mf_component_get_verity_hash(component), mf_manifest_get_verity_hash(manifest)) != 0)
             continue;

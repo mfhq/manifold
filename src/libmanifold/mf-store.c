@@ -992,6 +992,44 @@ mf_store_get_component(MfStore *store, const char *component_id, const char *ver
 }
 
 /**
+ * mf_store_find_version:
+ * @store: an #MfStore
+ * @component_id: identifier of a component
+ * @version: the version wanted
+ * @revision: the revision of @version wanted
+ * @error: a #GError
+ *
+ * Find one installed version of a component by its version and revision.
+ *
+ * Returns: (transfer full) (nullable): the component, or %NULL with
+ *   %MF_ERROR_NOT_FOUND if that version and revision is not installed
+ */
+MfComponent *
+mf_store_find_version(MfStore *store,
+                      const char *component_id,
+                      const char *version,
+                      uint64_t revision,
+                      GError **error)
+{
+    GPtrArray *components = mf_store_ensure_loaded(store, error);
+
+    if (components == NULL)
+        return NULL;
+
+    for (guint i = 0; i < components->len; i++) {
+        MfComponent *component = g_ptr_array_index(components, i);
+
+        if (g_str_equal(mf_component_get_id(component), component_id) &&
+            g_str_equal(mf_component_get_version(component), version) &&
+            mf_component_get_revision(component) == revision)
+            return g_object_ref(component);
+    }
+
+    mf_set_error_not_installed(error, component_id, version);
+    return NULL;
+}
+
+/**
  * mf_store_follow_link:
  * @link_name: the link to follow, `base` or `base-sdk`
  *

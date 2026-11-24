@@ -9,6 +9,8 @@
 
 #include "mf-bundle-private.h"
 #include "mf-manifest-private.h"
+#include "mf-store-private.h"
+#include "mf-utils-private.h"
 
 /**
  * MfdBundleSource:
@@ -235,6 +237,93 @@ mfd_install_set_find_version(MfdInstallSet *set,
     }
 
     return NULL;
+}
+
+/**
+ * mfd_check_if_pending_item_wins:
+ * @pending: the manifest of an item of the set that provides an identity
+ * @installed: (nullable): the installed component that provides the same identity, or %NULL
+ *
+ * Check whether we use an item of the set to provide an identity, instead of
+ * the installed component that provides the same identity. The item wins,
+ * unless the installed component has the same ID as the item, and is the
+ * same or a newer version.
+ *
+ * Returns: %TRUE if the item of the set wins
+ */
+gboolean
+mfd_check_if_pending_item_wins(MfManifest *pending, MfComponent *installed)
+{
+    return installed == NULL ||
+           g_strcmp0(mf_component_get_id(installed), mf_manifest_get_component_id(pending)) != 0 ||
+           mf_version_compare_with_rev(mf_component_get_version(installed),
+                                       mf_component_get_revision(installed),
+                                       mf_manifest_get_version(pending),
+                                       mf_manifest_get_revision(pending)) < 0;
+}
+
+/**
+ * mfd_base_provider_clear:
+ */
+void
+mfd_base_provider_clear(MfdBaseProvider *provider)
+{
+    provider->item = NULL;
+    g_clear_object(&provider->installed);
+}
+
+/**
+ * mfd_install_set_find_base:
+ * @ref: a reference to a base or to a base SDK
+ * @ret_provider: (out caller-allocates): the component that is used for @ref
+ *
+ * Find the component that is used for a base reference, in the set or in
+ * the store.
+ *
+ * An exact reference only accepts the version and revision that it names,
+ * and that version must provide the identity of the reference. Any other
+ * reference accepts every component that provides its identity. If an item
+ * of the set and an installed component both provide the identity,
+ * mfd_check_if_pending_item_wins() decides which one is used.
+ *
+ * Returns: %TRUE if a component for @ref was found
+ */
+gboolean
+mfd_install_set_find_base(MfdInstallSet *set,
+                          MfStore *store,
+                          const MfBaseReference *ref,
+                          MfdBaseProvider *ret_provider)
+{
+    MfdInstallItem *item;
+    g_autoptr(MfComponent) installed = NULL;
+
+    if (ref->exact) {
+        const char *identity = NULL;
+
+        item = mfd_install_set_find_version(set, ref->id, ref->version, ref->revision);
+        if (item != NULL) {
+            identity = mf_manifest_get_identity(item->manifest);
+        } else {
+            installed = mf_store_find_version(store, ref->id, ref->version, ref->revision, NULL);
+            if (installed != NULL)
+                identity = mf_component_get_identity(installed);
+        }
+        if (g_strcmp0(identity, ref->identity) != 0)
+            return FALSE;
+    } else {
+        item = mfd_install_set_find_identity(set, ref->identity);
+        installed = mf_store_find_identity(store, ref->identity, NULL);
+        if (item != NULL && mfd_check_if_pending_item_wins(item->manifest, installed))
+            g_clear_object(&installed);
+        else
+            item = NULL;
+        if (item == NULL && installed == NULL)
+            return FALSE;
+    }
+
+    ret_provider->item = item;
+    ret_provider->installed = g_steal_pointer(&installed);
+    return TRUE;
 }
 
 /**

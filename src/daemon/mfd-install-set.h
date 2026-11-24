@@ -11,6 +11,8 @@
 
 #include <manifold.h>
 
+#include "mf-manifest-private.h"
+
 G_BEGIN_DECLS
 
 typedef struct _MfdInstallItem MfdInstallItem;
@@ -61,6 +63,19 @@ typedef struct {
     GPtrArray *warnings; /* (element-type utf8): warnings about components that were left out */
 } MfdInstallSet;
 
+/**
+ * MfdBaseProvider:
+ *
+ * The component that is used for a base reference. This is either an item of
+ * the install set or an installed component, so exactly one member is set.
+ */
+typedef struct {
+    MfdInstallItem *item;      /* (nullable): the item of the set */
+    MfComponent    *installed; /* (nullable): the installed component */
+} MfdBaseProvider;
+
+void            mfd_base_provider_clear(MfdBaseProvider *provider);
+
 MfdInstallSet  *mfd_install_set_new(void);
 MfdInstallSet  *mfd_install_set_new_for_bundle(MfBundle *bundle);
 void            mfd_install_set_free(MfdInstallSet *set);
@@ -78,8 +93,16 @@ MfdInstallItem *mfd_install_set_find_version(MfdInstallSet *set,
                                              const char    *component_id,
                                              const char    *version,
                                              uint64_t       revision);
+gboolean        mfd_check_if_pending_item_wins(MfManifest  *pending,
+                                               MfComponent *installed);
+gboolean        mfd_install_set_find_base(MfdInstallSet         *set,
+                                          MfStore               *store,
+                                          const MfBaseReference *ref,
+                                          MfdBaseProvider       *ret_provider);
 gboolean        mfd_install_set_is_privileged(MfdInstallSet *set);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdInstallSet, mfd_install_set_free)
+G_DEFINE_AUTO_CLEANUP_CLEAR_FUNC(MfdBaseProvider,
+                                 mfd_base_provider_clear)
 
 G_END_DECLS

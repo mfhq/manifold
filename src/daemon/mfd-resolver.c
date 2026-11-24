@@ -130,38 +130,6 @@ mfd_resolver_add(MfdResolver *resolver,
 }
 
 /**
- * mfd_resolver_has_base:
- *
- * Returns: %TRUE if the referenced component is installed, or is in the set
- */
-static gboolean
-mfd_resolver_has_base(MfdResolver *resolver, const MfBaseReference *ref)
-{
-    g_autoptr(MfComponent) provider = NULL;
-    g_autoptr(GPtrArray) versions = NULL;
-
-    if (!ref->exact) {
-        if (mfd_install_set_find_identity(resolver->set, ref->identity) != NULL)
-            return TRUE;
-        provider = mf_store_find_identity(resolver->store, ref->identity, NULL);
-        return provider != NULL;
-    }
-
-    if (mfd_install_set_find_version(resolver->set, ref->id, ref->version, ref->revision) != NULL)
-        return TRUE;
-    versions = mf_store_list_components(resolver->store, ref->id, MF_COMPONENT_KIND_UNKNOWN, NULL);
-    for (guint i = 0; versions != NULL && i < versions->len; i++) {
-        MfComponent *component = g_ptr_array_index(versions, i);
-
-        if (g_str_equal(mf_component_get_version(component), ref->version) &&
-            mf_component_get_revision(component) == ref->revision &&
-            g_strcmp0(mf_component_get_identity(component), ref->identity) == 0)
-            return TRUE;
-    }
-    return FALSE;
-}
-
-/**
  * mfd_resolver_find_base:
  * @channel: the channel of the component, which is searched first
  * @ref: the reference to the base or base SDK of the component
@@ -250,9 +218,11 @@ mfd_resolver_add_bases(MfdResolver *resolver,
 
     for (guint i = 0; i < G_N_ELEMENTS(refs); i++) {
         const MfBaseReference *ref = refs[i];
+        g_auto(MfdBaseProvider) provider = {};
         MfdInstallItem *base = NULL;
 
-        if (ref == NULL || mfd_resolver_has_base(resolver, ref))
+        /* check if the referenced component is installed, or is in the set already */
+        if (ref == NULL || mfd_install_set_find_base(resolver->set, resolver->store, ref, &provider))
             continue;
         if (depth == BASE_DEPTH_MAX) {
             g_set_error(error,
