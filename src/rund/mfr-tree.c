@@ -923,8 +923,14 @@ mfr_tree_assemble(MfrApp *app, MfrCaptures *captures, MfrImageMounts *img_mounts
 gboolean
 mfr_tree_matches(const MfrTree *tree, const MfrApp *app)
 {
-    g_autofree char *key = mfr_make_tree_key(app, tree->capture);
+    g_autofree char *key = NULL;
 
+    /* a capture has no ID while it is not loaded, which is the case if the host changed
+     * and the capture could not be built again */
+    if (mfr_capture_get_id(tree->capture) == NULL)
+        return FALSE;
+
+    key = mfr_make_tree_key(app, tree->capture);
     return g_str_equal(tree->key, key) && mfr_capture_is_fresh(tree->capture);
 }
 
