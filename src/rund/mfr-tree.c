@@ -78,9 +78,9 @@ static const char *const PROC_VISIBILITY_OPTIONS[] = {"hidepid=", "gid=", "subse
  * can be reused for as long as the application has the same layers and the
  * capture is unchanged.
  *
- * The images are mounted by the image mount cache #MfrImageMounts. The capture
- * is taken from the table of captures, which #MfrComposer owns and passes to
- * every new #MfrTree. The tree itself only mounts the overlay and the
+ * The images are mounted by the image mount cache #MfrImageMounts, and the
+ * capture is provided by #MfrCaptures. #MfrComposer owns both and passes them
+ * to every new #MfrTree. The tree itself only mounts the overlay and the
  * bind mounts of the host.
  *
  * Besides the mounts, a tree has a cache directory at
@@ -766,28 +766,21 @@ mfr_tree_acquire_images(MfrTree *tree, GError **error)
 }
 
 /**
- * mfr_tree_ensure_capture:
- * @captures: (element-type utf8 MfrCapture): table of captures, indexed by the verity hash of their core
+ * mfr_tree_acquire_capture:
  *
- * Look up the capture for the core of the application in the table, or
- * create it, and make sure that the capture is up to date with the host.
- * The image of the core must be mounted already.
+ * Get the capture for the core of the application. The capture is loaded
+ * or built if needed, so it is up to date with the host. The image of the
+ * core must be mounted already.
  */
 static gboolean
-mfr_tree_ensure_capture(MfrTree *tree, GHashTable *captures, GError **error)
+mfr_tree_acquire_capture(MfrTree *tree, MfrCaptures *captures, GError **error)
 {
-    const char *core_hash = tree->app->layers[MFR_LAYER_CORE].image.verity_hash;
-    MfrCapture *capture = g_hash_table_lookup(captures, core_hash);
-
-    if (capture == NULL) {
-        capture = mfr_capture_new(core_hash, tree->app->arch_tuple);
-        g_hash_table_insert(captures, g_strdup(core_hash), capture);
-    }
-    if (!mfr_capture_ensure(capture, mfr_image_mount_get_path(tree->mounts[MFR_LAYER_CORE]), error))
-        return FALSE;
-
-    tree->capture = g_object_ref(capture);
-    return TRUE;
+    tree->capture = mfr_captures_acquire(captures,
+                                         tree->app->layers[MFR_LAYER_CORE].image.verity_hash,
+                                         tree->app->arch_tuple,
+                                         mfr_image_mount_get_path(tree->mounts[MFR_LAYER_CORE]),
+                                         error);
+    return tree->capture != NULL;
 }
 
 /**
@@ -884,7 +877,7 @@ mfr_tree_assemble_internal(MfrTree *tree, GError **error)
 /**
  * mfr_tree_assemble:
  * @app: the application to assemble a tree for
- * @captures: (element-type utf8 MfrCapture): table of captures, indexed by the verity hash of their core
+ * @captures: the captures of the daemon
  * @img_mounts: the cache of mounted images
  *
  * Assemble and mount a tree for an application. The images are mounted via
@@ -893,7 +886,7 @@ mfr_tree_assemble_internal(MfrTree *tree, GError **error)
  * Returns: (transfer full): the tree, or %NULL on error
  */
 MfrTree *
-mfr_tree_assemble(MfrApp *app, GHashTable *captures, MfrImageMounts *img_mounts, GError **error)
+mfr_tree_assemble(MfrApp *app, MfrCaptures *captures, MfrImageMounts *img_mounts, GError **error)
 {
     g_autoptr(MfrTree) tree = g_object_new(MFR_TYPE_TREE, NULL);
 
@@ -901,7 +894,7 @@ mfr_tree_assemble(MfrApp *app, GHashTable *captures, MfrImageMounts *img_mounts,
     tree->img_mounts = g_object_ref(img_mounts);
 
     /* a capture needs the mounted core, so we mount the images first */
-    if (!mfr_tree_acquire_images(tree, error) || !mfr_tree_ensure_capture(tree, captures, error)) {
+    if (!mfr_tree_acquire_images(tree, error) || !mfr_tree_acquire_capture(tree, captures, error)) {
         mfr_tree_release_images(tree);
         return NULL;
     }

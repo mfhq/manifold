@@ -30,7 +30,7 @@ struct _MfrComposer {
     GObject parent_instance;
 
     GHashTable *trees;          /* component id -> MfrTree */
-    GHashTable *captures;       /* root hash of a core -> MfrCapture */
+    MfrCaptures *captures;      /* the captures of the host graphics stack, one for every core */
     MfrImageMounts *img_mounts; /* the mounted images of every tree */
     MfrHostBin *host_bin;       /* the links to the programs of the host */
 };
@@ -75,7 +75,7 @@ static void
 mfr_composer_init(MfrComposer *composer)
 {
     composer->trees = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-    composer->captures = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
+    composer->captures = mfr_captures_new();
     composer->img_mounts = mfr_image_mounts_new();
 }
 
@@ -103,7 +103,7 @@ mfr_composer_finalize(GObject *object)
     MfrComposer *composer = MFR_COMPOSER(object);
 
     g_hash_table_unref(composer->trees);
-    g_hash_table_unref(composer->captures);
+    g_object_unref(composer->captures);
     g_clear_object(&composer->img_mounts);
     g_clear_object(&composer->host_bin);
 
@@ -183,7 +183,7 @@ mfr_composer_new(sd_event *event, GError **error)
      * Captures and trees of running applications are kept. */
     used_layers = mfr_tree_collect_used_layers();
     used_captures = mfr_tree_collect_used_captures(used_layers);
-    mfr_capture_check_all(used_captures);
+    mfr_captures_check_all(used_captures);
     mfr_tree_remove_unused(used_layers);
     mfr_image_mounts_remove_stale_devices();
 
@@ -275,7 +275,6 @@ gboolean
 mfr_composer_refresh_capture(MfrComposer *composer, GError **error)
 {
     mfr_composer_drop_all_trees(composer);
-    g_hash_table_remove_all(composer->captures);
 
-    return mfr_capture_discard_all(error);
+    return mfr_captures_discard_all(composer->captures, error);
 }

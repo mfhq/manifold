@@ -112,7 +112,7 @@ test_check_all(Fixture *fixture, gconstpointer user_data)
     mft_write_file(not_a_stamp_path, "{\"id\": \"x\"}");
     g_assert_cmpint(g_mkdir(unfinished, 0755), ==, 0);
 
-    mfr_capture_check_all(NULL);
+    mfr_captures_check_all(NULL);
 
     g_assert_true(g_file_test(fresh, G_FILE_TEST_IS_DIR));
     /* a target that was missing when the capture was made (mtime 0), and is still missing,
@@ -143,16 +143,17 @@ test_discard_all(Fixture *fixture, gconstpointer user_data)
     g_autofree char *two = mft_write_capture("two", dirs, "[]");
     g_autofree char *one_aside = g_build_filename(TEST_CAPTURES_DIR, ".stale-one", NULL);
     g_autofree char *two_aside = g_build_filename(TEST_CAPTURES_DIR, ".stale-two", NULL);
+    g_autoptr(MfrCaptures) captures = mfr_captures_new();
     g_autoptr(GError) error = NULL;
 
-    g_assert_true(mfr_capture_discard_all(&error));
+    g_assert_true(mfr_captures_discard_all(captures, &error));
     g_assert_no_error(error);
     g_assert_false(g_file_test(one, G_FILE_TEST_EXISTS));
     g_assert_false(g_file_test(two, G_FILE_TEST_EXISTS));
     g_assert_true(g_file_test(one_aside, G_FILE_TEST_IS_DIR));
     g_assert_true(g_file_test(two_aside, G_FILE_TEST_IS_DIR));
 
-    mfr_capture_check_all(NULL);
+    mfr_captures_check_all(NULL);
     g_assert_false(g_file_test(one_aside, G_FILE_TEST_EXISTS));
     g_assert_false(g_file_test(two_aside, G_FILE_TEST_EXISTS));
     g_assert_true(g_file_test(TEST_CAPTURES_DIR, G_FILE_TEST_IS_DIR));

@@ -40,11 +40,14 @@
  *   stamp               the files and directories of the host that the
  *                       capture was made from, with their modification times
  *
- * An #MfrCapture describes the capture for one core image.
- * mfr_capture_ensure() loads it from its directory, or builds it. A capture
- * is stale if a host library that it links to has changed, or if a loader
- * manifest was added, removed or replaced. We check every link when the
- * daemon starts. Before an app launch, we only compare the modification
+ * An #MfrCapture describes the capture for one core image, and #MfrCaptures
+ * holds the captures that the daemon has loaded. mfr_captures_acquire()
+ * returns the capture for a core. It loads the capture from its directory,
+ * or builds it.
+ *
+ * A capture is stale if a host library that it links to has changed, or if
+ * a loader manifest was added, removed or replaced. We check every link when
+ * the daemon starts. Before an app launch, we only compare the modification
  * times of the library and manifest directories.
  *
  * While the daemon runs, a capture that we do not use anymore is only moved
@@ -62,13 +65,27 @@ struct _MfrCapture {
 
     char *dir;
     char *overrides_dir;
-    char *arch_tuple;   /* NULL for a capture that was created for an existing directory */
-    char *id;           /* unique ID of the capture, NULL until the capture is taken */
+    char *arch_tuple;
+    char *id;           /* unique ID of the capture, NULL until the capture is loaded or built */
     char **environment; /* VAR=VALUE entries, an empty VALUE means the variable must be unset */
     sd_json_variant *stamp;
 };
 
 G_DEFINE_FINAL_TYPE(MfrCapture, mfr_capture, G_TYPE_OBJECT)
+
+/**
+ * MfrCaptures:
+ *
+ * The captures that the daemon has loaded, one for every core that an
+ * application was launched on.
+ */
+struct _MfrCaptures {
+    GObject parent_instance;
+
+    GHashTable *by_core; /* verity hash of a core -> MfrCapture */
+};
+
+G_DEFINE_FINAL_TYPE(MfrCaptures, mfr_captures, G_TYPE_OBJECT)
 
 /**
  * mfr_capture_init:
@@ -103,6 +120,48 @@ static void
 mfr_capture_class_init(MfrCaptureClass *klass)
 {
     G_OBJECT_CLASS(klass)->finalize = mfr_capture_finalize;
+}
+
+/**
+ * mfr_captures_init:
+ */
+static void
+mfr_captures_init(MfrCaptures *captures)
+{
+    captures->by_core = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_object_unref);
+}
+
+/**
+ * mfr_captures_finalize:
+ */
+static void
+mfr_captures_finalize(GObject *object)
+{
+    MfrCaptures *captures = MFR_CAPTURES(object);
+
+    g_hash_table_unref(captures->by_core);
+
+    G_OBJECT_CLASS(mfr_captures_parent_class)->finalize(object);
+}
+
+/**
+ * mfr_captures_class_init:
+ */
+static void
+mfr_captures_class_init(MfrCapturesClass *klass)
+{
+    G_OBJECT_CLASS(klass)->finalize = mfr_captures_finalize;
+}
+
+/**
+ * mfr_captures_new:
+ *
+ * Returns: (transfer full): a new #MfrCaptures, which has no capture loaded yet
+ */
+MfrCaptures *
+mfr_captures_new(void)
+{
+    return g_object_new(MFR_TYPE_CAPTURES, NULL);
 }
 
 /**
@@ -326,18 +385,18 @@ mfr_capture_load_environment(const char *dir, GError **error)
 
 /**
  * mfr_capture_new_for_dir:
+ * @arch_tuple: (nullable): the multiarch tuple of the capture, or %NULL to set it later
  *
  * Create an #MfrCapture for the directory @dir, without loading the capture.
- * We use this function when scanning the capture directory, which may also
- * contain captures that were moved aside or are incomplete.
  */
 static MfrCapture *
-mfr_capture_new_for_dir(const char *dir)
+mfr_capture_new_for_dir(const char *dir, const char *arch_tuple)
 {
     MfrCapture *capture = g_object_new(MFR_TYPE_CAPTURE, NULL);
 
     capture->dir = g_strdup(dir);
     capture->overrides_dir = g_build_filename(dir, OVERRIDES_NAME, NULL);
+    capture->arch_tuple = g_strdup(arch_tuple);
     return capture;
 }
 
@@ -351,14 +410,12 @@ mfr_capture_new_for_dir(const char *dir)
  *
  * Returns: (transfer full): the capture
  */
-MfrCapture *
+static MfrCapture *
 mfr_capture_new(const char *core_hash, const char *arch_tuple)
 {
     g_autofree char *dir = g_build_filename(MFR_CAPTURE_DIR, core_hash, NULL);
-    MfrCapture *capture = mfr_capture_new_for_dir(dir);
 
-    capture->arch_tuple = g_strdup(arch_tuple);
-    return capture;
+    return mfr_capture_new_for_dir(dir, arch_tuple);
 }
 
 /**
@@ -394,7 +451,8 @@ mfr_capture_load(MfrCapture *capture, GError **error)
     if (stamp == NULL)
         return FALSE;
     id = mf_json_get_string(stamp, "id");
-    if (id == NULL || !sd_json_variant_is_array(sd_json_variant_by_key(stamp, "dirs")) ||
+    if (id == NULL || mf_json_get_string(stamp, "tuple") == NULL ||
+        !sd_json_variant_is_array(sd_json_variant_by_key(stamp, "dirs")) ||
         !sd_json_variant_is_array(sd_json_variant_by_key(stamp, "targets")))
         return glnx_throw(error, "%s is not a capture stamp", stamp_path);
     environment = mfr_capture_load_environment(capture->dir, error);
@@ -411,17 +469,20 @@ mfr_capture_load(MfrCapture *capture, GError **error)
 /**
  * mfr_capture_new_from_dir:
  *
- * Load the capture in @dir.
+ * Load the capture in @dir. We use this function when scanning the capture
+ * directory, where we do not know which core a capture is for. The multiarch
+ * tuple of the capture is taken from its stamp.
  *
  * Returns: (transfer full): the capture, or %NULL if it is incomplete
  */
 static MfrCapture *
 mfr_capture_new_from_dir(const char *dir, GError **error)
 {
-    g_autoptr(MfrCapture) capture = mfr_capture_new_for_dir(dir);
+    g_autoptr(MfrCapture) capture = mfr_capture_new_for_dir(dir, NULL);
 
     if (!mfr_capture_load(capture, error))
         return NULL;
+    capture->arch_tuple = g_strdup(mf_json_get_string(capture->stamp, "tuple"));
     return g_steal_pointer(&capture);
 }
 
@@ -561,7 +622,7 @@ mfr_capture_retire(const MfrCapture *capture, GHashTable *used_ids, const char *
  *
  * Returns: %TRUE if the capture can be used
  */
-gboolean
+static gboolean
 mfr_capture_ensure(MfrCapture *capture, const char *core_mount, GError **error)
 {
     g_autofree char *name = NULL;
@@ -570,8 +631,6 @@ mfr_capture_ensure(MfrCapture *capture, const char *core_mount, GError **error)
     g_auto(GStrv) environment = NULL;
     g_autoptr(GPtrArray) host_dirs = NULL;
     g_autoptr(GError) load_error = NULL;
-
-    g_return_val_if_fail(capture->arch_tuple != NULL, FALSE);
 
     name = g_path_get_basename(capture->dir);
     tmp_dir = g_strconcat(MFR_CAPTURE_DIR "/", MF_TMP_PREFIX, name, NULL);
@@ -616,7 +675,40 @@ mfr_capture_ensure(MfrCapture *capture, const char *core_mount, GError **error)
 }
 
 /**
- * mfr_capture_check_all:
+ * mfr_captures_acquire:
+ * @core_hash: the verity hash of the core that the capture is for
+ * @arch_tuple: the multiarch tuple of the applications that run on the core
+ * @core_mount: the path at which the core is mounted
+ *
+ * Get the capture for a core, and make sure that it is up to date with the
+ * host.
+ *
+ * Returns: (transfer full): the capture, or %NULL on error
+ */
+MfrCapture *
+mfr_captures_acquire(MfrCaptures *captures,
+                     const char *core_hash,
+                     const char *arch_tuple,
+                     const char *core_mount,
+                     GError **error)
+{
+    MfrCapture *capture = g_hash_table_lookup(captures->by_core, core_hash);
+
+    if (capture == NULL) {
+        capture = mfr_capture_new(core_hash, arch_tuple);
+        g_hash_table_insert(captures->by_core, g_strdup(core_hash), capture);
+    }
+    /* NOTE: A capture stays in the table if it can not be loaded or built, so the next
+     * launch tries again with the same object. Trees that were assembled with the capture
+     * refer to this object, and notice that it has changed once it is built again. */
+    if (!mfr_capture_ensure(capture, core_mount, error))
+        return NULL;
+
+    return g_object_ref(capture);
+}
+
+/**
+ * mfr_captures_check_all:
  * @used_ids: (nullable): the IDs of the captures of all trees that are still in use
  *
  * Check all captures, and retire every capture that is outdated because its
@@ -625,7 +717,7 @@ mfr_capture_ensure(MfrCapture *capture, const char *core_mount, GError **error)
  * builds. This function must only be called when the daemon starts.
  */
 void
-mfr_capture_check_all(GHashTable *used_ids)
+mfr_captures_check_all(GHashTable *used_ids)
 {
     g_autoptr(GDir) entries = g_dir_open(MFR_CAPTURE_DIR, 0, NULL);
     const char *name;
@@ -665,15 +757,18 @@ mfr_capture_check_all(GHashTable *used_ids)
 }
 
 /**
- * mfr_capture_discard_all:
+ * mfr_captures_discard_all:
  *
- * Move every capture aside, so the next launch builds a new capture.
+ * Forget every loaded capture, and move the directories of all captures
+ * aside, so the next launch builds a new capture.
  */
 gboolean
-mfr_capture_discard_all(GError **error)
+mfr_captures_discard_all(MfrCaptures *captures, GError **error)
 {
     g_autoptr(GDir) entries = g_dir_open(MFR_CAPTURE_DIR, 0, NULL);
     const char *name;
+
+    g_hash_table_remove_all(captures->by_core);
 
     while (entries != NULL && (name = g_dir_read_name(entries)) != NULL) {
         g_autofree char *dir = g_build_filename(MFR_CAPTURE_DIR, name, NULL);

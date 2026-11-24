@@ -24,7 +24,7 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE(MfrTree, mfr_tree, MFR, TREE, GObject)
 
 MfrTree           *mfr_tree_assemble(MfrApp         *app,
-                                     GHashTable     *captures,
+                                     MfrCaptures    *captures,
                                      MfrImageMounts *img_mounts,
                                      GError        **error);
 void               mfr_tree_teardown(MfrTree *tree);
