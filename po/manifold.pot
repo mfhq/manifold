@@ -7,7 +7,7 @@
 msgid   ""
 msgstr  "Project-Id-Version: manifold\n"
         "Report-Msgid-Bugs-To: https://github.com/ximion/manifold/issues\n"
-        "POT-Creation-Date: 2026-11-23 22:52+0100\n"
+        "POT-Creation-Date: 2026-11-24 21:08+0100\n"
         "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
         "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
         "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -789,7 +789,7 @@ msgstr  ""
 msgid   "The bundle contains %s as two different kinds of component"
 msgstr  ""
 
-#: src/libmanifold/mf-bundle.c:1000 src/libmanifold/mf-manager.c:728
+#: src/libmanifold/mf-bundle.c:1000 src/libmanifold/mf-manager.c:802
 #, c-format
 msgid   "Unable to duplicate file descriptor: %s"
 msgstr  ""
@@ -1022,7 +1022,8 @@ msgstr  ""
 msgid   "the value of an attribute is not allowed"
 msgstr  ""
 
-#: src/libmanifold/mf-integration.c:1591
+#. TRANSLATORS: a summary of an error, then a detailed description that is not translated
+#: src/libmanifold/mf-integration.c:1591 src/libmanifold/mf-manager.c:432
 #, c-format
 msgid   "%s: %s"
 msgstr  ""
@@ -1118,274 +1119,337 @@ msgid   "Unable to format %s: %s"
 msgstr  ""
 
 #. TRANSLATORS: the component, and the identifier and version of its base
-#: src/libmanifold/mf-manager.c:272
+#: src/libmanifold/mf-manager.c:277
 #, c-format
 msgid   "Component %s needs base %s %s, which is not installed"
 msgstr  ""
 
+#. TRANSLATORS: the component, and the identifier and version of its base
+#: src/libmanifold/mf-manager.c:289
+#, c-format
+msgid   "Component %s needs base %s %s, which is not available in any remote"
+msgstr  ""
+
+#. TRANSLATORS: an origin like "example-main", then the component
+#: src/libmanifold/mf-manager.c:299
+#, c-format
+msgid   "The origin %s does not have the component %s"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:300
+#, c-format
+msgid   "No remote has the component %s"
+msgstr  ""
+
 #. TRANSLATORS: a component and its version
-#: src/libmanifold/mf-manager.c:282
+#: src/libmanifold/mf-manager.c:306
 #, c-format
 msgid   "Component %s %s is installed already"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:290
+#: src/libmanifold/mf-manager.c:309
 #, c-format
 msgid   "Component %s %s is not installed"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:292
+#: src/libmanifold/mf-manager.c:310
 #, c-format
 msgid   "Component %s is not installed"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:299
+#: src/libmanifold/mf-manager.c:316
 #, c-format
 msgid   "Component %s is used by the installed component %s"
 msgstr  ""
 
 #. TRANSLATORS: the component, its architecture, and that of this system
-#: src/libmanifold/mf-manager.c:308
+#: src/libmanifold/mf-manager.c:327
 #, c-format
 msgid   "Component %s is built for %s, but this system is %s"
 msgstr  ""
 
-#. TRANSLATORS: the component, and the kind it is installed as, like "app"
-#: src/libmanifold/mf-manager.c:321
+#: src/libmanifold/mf-manager.c:340
 #, c-format
 msgid   "Component %s is installed already as another kind of component (%s SDK)"
 msgstr  ""
 
 #. TRANSLATORS: the component, and the kind it is installed as, like "app"
-#: src/libmanifold/mf-manager.c:329
+#: src/libmanifold/mf-manager.c:344
 #, c-format
 msgid   "Component %s is installed already as another kind of component (%s)"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:350
-msgid   "The URL of a repository has to be an https URL without a query or fragment"
+#: src/libmanifold/mf-manager.c:364
+msgid   "Not found"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:352
-msgid   "The public key is not a valid SSH public key"
+#: src/libmanifold/mf-manager.c:366
+msgid   "The component is not available in any remote"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:354
-msgid   "A channel name is not valid, or a channel is named twice"
-msgstr  ""
-
-#: src/libmanifold/mf-manager.c:356
-msgid   "The origin has to be given as <remote>-<channel>"
-msgstr  ""
-
-#: src/libmanifold/mf-manager.c:358
-msgid   "The ID of the remote is not valid"
-msgstr  ""
-
-#: src/libmanifold/mf-manager.c:360
-msgid   "The component identifier is not valid"
-msgstr  ""
-
-#: src/libmanifold/mf-manager.c:376
-msgid   "unknown error"
-msgstr  ""
-
-#: src/libmanifold/mf-manager.c:386
+#: src/libmanifold/mf-manager.c:368
 msgid   "Not authorized to do this"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:389
-#, c-format
-msgid   "Not a valid bundle: %s"
+#: src/libmanifold/mf-manager.c:370
+msgid   "Not a valid bundle"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:372
+msgid   "The component is built for a different architecture"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:374
+msgid   "Verification failed"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:376
+msgid   "The base of a component is missing"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:378
+msgid   "The base of a component is not available in any remote"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:380
+msgid   "The component is installed already"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:382
+msgid   "The component is in use"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:384
+msgid   "Not a valid manifest"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:386
+msgid   "The component was revoked"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:388
+msgid   "A component of a different kind is installed with the same ID"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:390
+msgid   "File conflict"
 msgstr  ""
 
 #: src/libmanifold/mf-manager.c:392
-#, c-format
-msgid   "Not a valid manifest: %s"
+msgid   "Not a valid repository"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:395
-#, c-format
-msgid   "Verification failed: %s"
+#: src/libmanifold/mf-manager.c:394
+msgid   "The metadata of the repository has expired"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:396
+msgid   "Download failed"
 msgstr  ""
 
 #: src/libmanifold/mf-manager.c:398
-#, c-format
-msgid   "File conflict: %s"
+msgid   "The request is ambiguous"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:401
-#, c-format
-msgid   "Not a valid repository: %s"
+#: src/libmanifold/mf-manager.c:400
+msgid   "The remote is configured already"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:412
+#: src/libmanifold/mf-manager.c:436
+msgid   "unknown error"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:454
+msgid   "The URL of a repository has to be an https URL without a query or fragment"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:456
+msgid   "The public key is not a valid SSH public key"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:458
+msgid   "A channel name is not valid, or a channel is named twice"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:460
+msgid   "The origin has to be given as <remote>-<channel>"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:462
+msgid   "The ID of the remote is not valid"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:464
+msgid   "The component identifier is not valid"
+msgstr  ""
+
+#: src/libmanifold/mf-manager.c:486
 msgid   "Lost the Manifold service: the connection was closed"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:418
+#: src/libmanifold/mf-manager.c:492
 msgid   "The Manifold service did not reply in time"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:424
+#: src/libmanifold/mf-manager.c:498
 msgid   "The Manifold service does not implement this operation"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:435
+#: src/libmanifold/mf-manager.c:509
 #, c-format
 msgid   "The Manifold service rejected the parameter %s"
 msgstr  ""
 
 #. TRANSLATORS: %s is the identifier of the error, like org.freedesktop.manifold.Failed
-#: src/libmanifold/mf-manager.c:442
+#: src/libmanifold/mf-manager.c:516
 #, c-format
 msgid   "The Manifold service replied with an error: %s"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:610
+#: src/libmanifold/mf-manager.c:684
 #, c-format
 msgid   "Lost the Manifold service: %s"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:692
+#: src/libmanifold/mf-manager.c:766
 #, c-format
 msgid   "Unable to build call parameters: %s"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:702
+#: src/libmanifold/mf-manager.c:776
 #, c-format
 msgid   "Unable to reach the Manifold service at %s: %s"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:715
+#: src/libmanifold/mf-manager.c:789
 #, c-format
 msgid   "Unable to set up the connection to the Manifold service: %s"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:739
+#: src/libmanifold/mf-manager.c:813
 #, c-format
 msgid   "Unable to pass file descriptor: %s"
 msgstr  ""
 
-#: src/libmanifold/mf-manager.c:751
+#: src/libmanifold/mf-manager.c:825
 #, c-format
 msgid   "Unable to call the Manifold service: %s"
 msgstr  ""
 
-#: src/libmanifold/mf-manifest.c:296
+#: src/libmanifold/mf-manifest.c:281
 msgid   "component identifier is not valid"
 msgstr  ""
 
-#: src/libmanifold/mf-manifest.c:319
+#: src/libmanifold/mf-manifest.c:304
 msgid   "version is not valid"
 msgstr  ""
 
 #. TRANSLATORS: "kind" is a field of the manifest, and not translated, %s is its value
-#: src/libmanifold/mf-manifest.c:348
+#: src/libmanifold/mf-manifest.c:333
 #, c-format
 msgid   "kind %s is not known"
 msgstr  ""
 
 #. TRANSLATORS: %s is a section of the manifest, "base" or "base-sdk"
-#: src/libmanifold/mf-manifest.c:374
+#: src/libmanifold/mf-manifest.c:361
 #, c-format
 msgid   "%s is not an object"
 msgstr  ""
 
 #. TRANSLATORS: the kind and ID of the component, "base-sdk" is a section of the manifest
-#: src/libmanifold/mf-manifest.c:421
+#: src/libmanifold/mf-manifest.c:409
 #, c-format
 msgid   "%s%s %s can not have a base-sdk, which is only for an SDK that extends its own layer"
 msgstr  ""
 
 #. TRANSLATORS: %s is the kind of the component, like "platform" or "kit"
-#: src/libmanifold/mf-manifest.c:432
+#: src/libmanifold/mf-manifest.c:420
 #, c-format
 msgid   "the SDK of a %s must name the SDK of the layer below it"
 msgstr  ""
 
 #. TRANSLATORS: the kind and ID of the component, then the kind and ID of its base SDK
-#: src/libmanifold/mf-manifest.c:441
+#: src/libmanifold/mf-manifest.c:429
 #, c-format
 msgid   "%s SDK %s can not have the %s SDK %s below it"
 msgstr  ""
 
 #. TRANSLATORS: "image" is a section of the manifest, and not translated
-#: src/libmanifold/mf-manifest.c:464
+#: src/libmanifold/mf-manifest.c:452
 msgid   "image is missing or not an object"
 msgstr  ""
 
 #. TRANSLATORS: "image" is the section of the manifest this is about, and not translated
-#: src/libmanifold/mf-manifest.c:494
+#: src/libmanifold/mf-manifest.c:482
 msgid   "image: the hash partition is placed before the data"
 msgstr  ""
 
 #. TRANSLATORS: "permissions" is a field of the manifest, and not translated
-#: src/libmanifold/mf-manifest.c:517
+#: src/libmanifold/mf-manifest.c:505
 msgid   "permissions is not a list"
 msgstr  ""
 
 #. TRANSLATORS: "permissions" is a field of the manifest, and not translated
-#: src/libmanifold/mf-manifest.c:527
+#: src/libmanifold/mf-manifest.c:515
 msgid   "permissions: entry is not a string"
 msgstr  ""
 
 #. TRANSLATORS: "format" is a manifest field, and not translated
-#: src/libmanifold/mf-manifest.c:568
+#: src/libmanifold/mf-manifest.c:556
 #, c-format
 msgid   "format %<PRIu64> is not supported, only %d is"
 msgstr  ""
 
-#: src/libmanifold/mf-manifest.c:591
+#: src/libmanifold/mf-manifest.c:579
 msgid   "architecture is not valid"
 msgstr  ""
 
-#: src/libmanifold/mf-manifest.c:607
+#: src/libmanifold/mf-manifest.c:601
 msgid   "an SDK must name the component it extends"
 msgstr  ""
 
 #. TRANSLATORS: %s is the kind of the component, like "app" or "kit"
-#: src/libmanifold/mf-manifest.c:613
+#: src/libmanifold/mf-manifest.c:607
 #, c-format
 msgid   "a %s must name the layer it is built on"
 msgstr  ""
 
 #. TRANSLATORS: the kind and ID of the component, then the kind and ID of its base
-#: src/libmanifold/mf-manifest.c:624
+#: src/libmanifold/mf-manifest.c:618
 #, c-format
 msgid   "%s%s %s can not build on %s %s"
 msgstr  ""
 
 #. TRANSLATORS: "app" is a section of the manifest, and not translated
-#: src/libmanifold/mf-manifest.c:645
+#: src/libmanifold/mf-manifest.c:640
 msgid   "app is not an object"
 msgstr  ""
 
 #. TRANSLATORS: "app" and "command" are a section and field of the manifest, not translated
-#: src/libmanifold/mf-manifest.c:655
+#: src/libmanifold/mf-manifest.c:650
 #, c-format
 msgid   "app: command is not a plain name: %s"
 msgstr  ""
 
-#: src/libmanifold/mf-manifest.c:659
+#: src/libmanifold/mf-manifest.c:654
 msgid   "an app must have a command to run"
 msgstr  ""
 
-#: src/libmanifold/mf-manifest.c:1251
+#: src/libmanifold/mf-manifest.c:1108
 msgid   "integration: only applications can use this"
 msgstr  ""
 
-#: src/libmanifold/mf-manifest.c:1325
+#: src/libmanifold/mf-manifest.c:1182
 msgid   "permissions: only applications can use this"
 msgstr  ""
 
 #. TRANSLATORS: "permissions" is a field of the manifest, and not translated, %s is an entry of it
-#: src/libmanifold/mf-manifest.c:1335
+#: src/libmanifold/mf-manifest.c:1192
 #, c-format
 msgid   "permissions: %s is not known"
 msgstr  ""
 
-#: src/libmanifold/mf-manifest.c:1341
+#: src/libmanifold/mf-manifest.c:1198
 #, c-format
 msgid   "permissions: %s can not be requested, it follows from integration"
 msgstr  ""
@@ -1489,13 +1553,13 @@ msgid   "Link %s does not name a version of a component: %s"
 msgstr  ""
 
 #. TRANSLATORS: the component, and the identifier and version of its base
-#: src/libmanifold/mf-store.c:1036
+#: src/libmanifold/mf-store.c:1074
 #, c-format
 msgid   "%s builds on %s %s, which is not installed"
 msgstr  ""
 
 #. TRANSLATORS: %s is the identity hash of an image
-#: src/libmanifold/mf-store.c:1127
+#: src/libmanifold/mf-store.c:1165
 #, c-format
 msgid   "Nothing installed provides identity %s"
 msgstr  ""
