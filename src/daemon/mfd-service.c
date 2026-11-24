@@ -114,36 +114,6 @@ struct _MfdRequest {
     char *remote_id;  /* the remote to remove */
 };
 
-/**
- * mfd_request_new:
- * @link: The connection that the method was called on.
- * @run: The function that executes the request.
- * @method: The method that was called.
- * @action_id: The polkit action that the caller needs.
- * @flags: The flags of the method call.
- *
- * Create a request for a method call. The caller sets the parameters of the
- * request, and then passes it to mfd_service_authorize().
- */
-static MfdRequest *
-mfd_request_new(sd_varlink *link,
-                MfdRequestFunc run,
-                const char *method,
-                const char *action_id,
-                sd_varlink_method_flags_t flags)
-{
-    MfdRequest *request = g_new0(MfdRequest, 1);
-
-    request->link = sd_varlink_ref(link);
-    request->run = run;
-    request->method = method;
-    request->action_id = action_id;
-    request->report_progress = (flags & SD_VARLINK_METHOD_MORE) != 0;
-    request->bundle_fd = -1;
-
-    return request;
-}
-
 static void
 mfd_request_free(MfdRequest *request)
 {
@@ -232,6 +202,10 @@ mfd_json_dispatch_transaction_flags(const char *name,
     return 0;
 }
 
+/* the entry of a dispatch table that reads the "flags" parameter into the member `flags` of @type */
+#define MFD_JSON_DISPATCH_TRANSACTION_FLAGS(type) \
+    {"flags", _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags, offsetof(type, flags), 0}
+
 /**
  * mfd_error_is_about_request:
  *
@@ -319,6 +293,26 @@ mfd_service_reply_result(sd_varlink *link, MfResult *result)
 }
 
 /**
+ * mfd_service_reply_result_or_error:
+ * @result: (nullable): the result of the operation, or %NULL if it failed
+ * @error: (nullable): why the operation failed, if @result is %NULL
+ *
+ * Send the final reply of an operation: its result, or the error if it failed.
+ *
+ * Returns: a negative errno if we were unable to reply, any other number if we replied
+ */
+static int
+mfd_service_reply_result_or_error(sd_varlink *link, MfResult *result, const GError *error)
+{
+    if (result == NULL) {
+        mfd_service_reply_error(link, error);
+        return 0;
+    }
+
+    return mfd_service_reply_result(link, result);
+}
+
+/**
  * mfd_varlink_can_write:
  *
  * Check whether the socket of a connection can take more data right now.
@@ -359,6 +353,19 @@ mfd_service_on_progress(const MfProgress *progress, gpointer user_data)
 }
 
 /**
+ * mfd_request_get_progress_func:
+ *
+ * Returns: (nullable): the function that reports progress to the caller of
+ *   @request, or %NULL if the caller did not ask for progress. The function
+ *   takes the connection of the request as its user data.
+ */
+static MfProgressFunc
+mfd_request_get_progress_func(const MfdRequest *request)
+{
+    return request->report_progress ? mfd_service_on_progress : NULL;
+}
+
+/**
  * mfd_service_remove:
  *
  * Remove the component of the request, or clean up if the request names
@@ -381,15 +388,10 @@ mfd_service_remove(MfdService *service, MfdRequest *request)
     result = mfd_manager_remove(service->manager,
                                 request->component_id,
                                 request->version,
-                                request->report_progress ? mfd_service_on_progress : NULL,
+                                mfd_request_get_progress_func(request),
                                 request->link,
                                 &error);
-    if (result == NULL) {
-        mfd_service_reply_error(request->link, error);
-        return 0;
-    }
-
-    return mfd_service_reply_result(request->link, result);
+    return mfd_service_reply_result_or_error(request->link, result, error);
 }
 
 /**
@@ -409,15 +411,10 @@ mfd_service_refresh(MfdService *service, MfdRequest *request)
 
     result = mfd_manager_refresh(service->manager,
                                  (const char *const *) request->remote_ids,
-                                 request->report_progress ? mfd_service_on_progress : NULL,
+                                 mfd_request_get_progress_func(request),
                                  request->link,
                                  &error);
-    if (result == NULL) {
-        mfd_service_reply_error(request->link, error);
-        return 0;
-    }
-
-    return mfd_service_reply_result(request->link, result);
+    return mfd_service_reply_result_or_error(request->link, result, error);
 }
 
 /**
@@ -485,15 +482,10 @@ mfd_service_add_remote(MfdService *service, MfdRequest *request)
                                     request->url,
                                     request->public_key,
                                     (const char *const *) request->channels,
-                                    request->report_progress ? mfd_service_on_progress : NULL,
+                                    mfd_request_get_progress_func(request),
                                     request->link,
                                     &error);
-    if (result == NULL) {
-        mfd_service_reply_error(request->link, error);
-        return 0;
-    }
-
-    return mfd_service_reply_result(request->link, result);
+    return mfd_service_reply_result_or_error(request->link, result, error);
 }
 
 /**
@@ -806,15 +798,10 @@ mfd_service_install_bundle(MfdService *service, MfdRequest *request)
 
     result = mfd_manager_install_set(service->manager,
                                      request->install_set,
-                                     request->report_progress ? mfd_service_on_progress : NULL,
+                                     mfd_request_get_progress_func(request),
                                      request->link,
                                      &error);
-    if (result == NULL) {
-        mfd_service_reply_error(request->link, error);
-        return 0;
-    }
-
-    return mfd_service_reply_result(request->link, result);
+    return mfd_service_reply_result_or_error(request->link, result, error);
 }
 
 /**
@@ -878,7 +865,7 @@ mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
 
         result = mfd_manager_install_set(service->manager,
                                          request->install_set,
-                                         request->report_progress ? mfd_service_on_progress : NULL,
+                                         mfd_request_get_progress_func(request),
                                          request->link,
                                          &error);
         if (result != NULL)
@@ -933,6 +920,67 @@ mfd_service_update(MfdService *service, MfdRequest *request)
 }
 
 /**
+ * MfdMethod:
+ *
+ * A method of the interface that changes the installation, with the polkit
+ * action that its caller needs and the function that executes it.
+ */
+typedef struct {
+    const char *name;
+    const char *action_id;
+    MfdRequestFunc run;
+} MfdMethod;
+
+/* NOTE: Installing a privileged component needs MFD_POLKIT_ACTION_INSTALL_PRIVILEGED in
+ * addition, which is only known once the components to install are known. See
+ * mfd_service_install_bundle() and mfd_service_install_from_remotes(). */
+static const MfdMethod METHODS[] = {
+    {MF_VARLINK_METHOD_INSTALL_FILE,      MFD_POLKIT_ACTION_INSTALL_UNTRUSTED, mfd_service_install_bundle   },
+    {MF_VARLINK_METHOD_INSTALL_COMPONENT, MFD_POLKIT_ACTION_INSTALL,           mfd_service_install_component},
+    {MF_VARLINK_METHOD_UPDATE,            MFD_POLKIT_ACTION_UPDATE,            mfd_service_update           },
+    {MF_VARLINK_METHOD_REMOVE_COMPONENT,  MFD_POLKIT_ACTION_REMOVE,            mfd_service_remove           },
+    /* a request without a component cleans up, see mfd_service_remove() */
+    {MF_VARLINK_METHOD_CLEANUP,           MFD_POLKIT_ACTION_REMOVE,            mfd_service_remove           },
+    {MF_VARLINK_METHOD_MARK_COMPONENT,    MFD_POLKIT_ACTION_MARK,              mfd_service_mark             },
+    {MF_VARLINK_METHOD_REFRESH,           MFD_POLKIT_ACTION_REFRESH,           mfd_service_refresh          },
+    {MF_VARLINK_METHOD_INSPECT_REMOTE,    MFD_POLKIT_ACTION_MANAGE_REMOTES,    mfd_service_inspect_remote   },
+    {MF_VARLINK_METHOD_ADD_REMOTE,        MFD_POLKIT_ACTION_MANAGE_REMOTES,    mfd_service_add_remote       },
+    {MF_VARLINK_METHOD_REMOVE_REMOTE,     MFD_POLKIT_ACTION_MANAGE_REMOTES,    mfd_service_remove_remote    },
+};
+
+/**
+ * mfd_request_new:
+ * @link: the connection that the method was called on
+ * @method_name: the method that was called, which has to be one of %METHODS
+ * @flags: the flags of the method call
+ *
+ * Create a request for a method call. The caller sets the parameters of the
+ * request, and then passes it to mfd_service_authorize().
+ */
+static MfdRequest *
+mfd_request_new(sd_varlink *link, const char *method_name, sd_varlink_method_flags_t flags)
+{
+    const MfdMethod *method = NULL;
+    MfdRequest *request;
+
+    for (size_t i = 0; method == NULL && i < G_N_ELEMENTS(METHODS); i++) {
+        if (g_str_equal(METHODS[i].name, method_name))
+            method = &METHODS[i];
+    }
+    g_assert(method != NULL);
+
+    request = g_new0(MfdRequest, 1);
+    request->link = sd_varlink_ref(link);
+    request->run = method->run;
+    request->method = method->name;
+    request->action_id = method->action_id;
+    request->report_progress = (flags & SD_VARLINK_METHOD_MORE) != 0;
+    request->bundle_fd = -1;
+
+    return request;
+}
+
+/**
  * mfd_json_variant_get_strv:
  * @variant: (nullable): a parameter of a call
  * @ret_strv: (out) (transfer full): the strings of @variant, or %NULL if it is not set
@@ -982,10 +1030,7 @@ mfd_varlink_method_install_file(sd_varlink *link,
          _SD_JSON_VARIANT_TYPE_INVALID, sd_json_dispatch_uint,
          offsetof(typeof(p), fd_index),
          SD_JSON_MANDATORY},
-        {"flags",
-         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
-         offsetof(typeof(p), flags),
-         0},
+        MFD_JSON_DISPATCH_TRANSACTION_FLAGS(typeof(p)),
         {},
     };
     g_autoptr(MfdRequest) request = NULL;
@@ -996,11 +1041,7 @@ mfd_varlink_method_install_file(sd_varlink *link,
     if (r != 0)
         return r;
 
-    request = mfd_request_new(link,
-                              mfd_service_install_bundle,
-                              MF_VARLINK_METHOD_INSTALL_FILE,
-                              MFD_POLKIT_ACTION_INSTALL_UNTRUSTED,
-                              flags);
+    request = mfd_request_new(link, MF_VARLINK_METHOD_INSTALL_FILE, flags);
 
     request->bundle_fd = sd_varlink_take_fd(link, p.fd_index);
     if (request->bundle_fd < 0)
@@ -1040,10 +1081,7 @@ mfd_varlink_method_install_component(sd_varlink *link,
          offsetof(typeof(p), component_id),
          SD_JSON_MANDATORY},
         {"origin", SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string, offsetof(typeof(p), origin), 0},
-        {"flags",
-         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
-         offsetof(typeof(p), flags),
-         0},
+        MFD_JSON_DISPATCH_TRANSACTION_FLAGS(typeof(p)),
         {},
     };
     MfdRequest *request;
@@ -1058,11 +1096,7 @@ mfd_varlink_method_install_component(sd_varlink *link,
     if (p.origin != NULL && !mf_origin_split_name(p.origin, NULL, NULL))
         return sd_varlink_error_invalid_parameter_name(link, "origin");
 
-    request = mfd_request_new(link,
-                              mfd_service_install_component,
-                              MF_VARLINK_METHOD_INSTALL_COMPONENT,
-                              MFD_POLKIT_ACTION_INSTALL,
-                              flags);
+    request = mfd_request_new(link, MF_VARLINK_METHOD_INSTALL_COMPONENT, flags);
     request->repo_request = mfd_repo_request_new_install(p.component_id, p.origin);
 
     return mfd_service_authorize(service, request, p.flags);
@@ -1087,10 +1121,7 @@ mfd_varlink_method_update(sd_varlink *link,
          _SD_JSON_VARIANT_TYPE_INVALID, sd_json_dispatch_variant_noref,
          offsetof(typeof(p), component_ids),
          0},
-        {"flags",
-         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
-         offsetof(typeof(p), flags),
-         0},
+        MFD_JSON_DISPATCH_TRANSACTION_FLAGS(typeof(p)),
         {},
     };
     g_auto(GStrv) component_ids = NULL;
@@ -1108,11 +1139,7 @@ mfd_varlink_method_update(sd_varlink *link,
             return sd_varlink_error_invalid_parameter_name(link, "componentIds");
     }
 
-    request = mfd_request_new(link,
-                              mfd_service_update,
-                              MF_VARLINK_METHOD_UPDATE,
-                              MFD_POLKIT_ACTION_UPDATE,
-                              flags);
+    request = mfd_request_new(link, MF_VARLINK_METHOD_UPDATE, flags);
     request->repo_request = mfd_repo_request_new_update((const char *const *) component_ids);
 
     return mfd_service_authorize(service, request, p.flags);
@@ -1139,10 +1166,7 @@ mfd_varlink_method_remove_component(sd_varlink *link,
          offsetof(typeof(p), component_id),
          SD_JSON_MANDATORY},
         {"version", SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string, offsetof(typeof(p), version), 0},
-        {"flags",
-         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
-         offsetof(typeof(p), flags),
-         0},
+        MFD_JSON_DISPATCH_TRANSACTION_FLAGS(typeof(p)),
         {},
     };
     MfdRequest *request;
@@ -1157,11 +1181,7 @@ mfd_varlink_method_remove_component(sd_varlink *link,
     if (p.version != NULL && !mf_version_is_valid(p.version))
         return sd_varlink_error_invalid_parameter_name(link, "version");
 
-    request = mfd_request_new(link,
-                              mfd_service_remove,
-                              MF_VARLINK_METHOD_REMOVE_COMPONENT,
-                              MFD_POLKIT_ACTION_REMOVE,
-                              flags);
+    request = mfd_request_new(link, MF_VARLINK_METHOD_REMOVE_COMPONENT, flags);
     request->component_id = g_strdup(p.component_id);
     request->version = g_strdup(p.version);
 
@@ -1178,26 +1198,23 @@ mfd_varlink_method_cleanup(sd_varlink *link,
                            void *userdata)
 {
     MfdService *service = userdata;
+    struct {
+        MfTransactionFlags flags;
+    } p = {};
     static const sd_json_dispatch_field dispatch_table[] = {
-        {"flags", _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags, 0, 0},
+        MFD_JSON_DISPATCH_TRANSACTION_FLAGS(typeof(p)),
         {},
     };
-    MfTransactionFlags transaction_flags = MF_TRANSACTION_FLAG_NONE;
     MfdRequest *request;
     int r;
 
-    r = sd_varlink_dispatch(link, parameters, dispatch_table, &transaction_flags);
+    r = sd_varlink_dispatch(link, parameters, dispatch_table, &p);
     if (r != 0)
         return r;
 
-    /* a request without a component cleans up, see mfd_service_remove() */
-    request = mfd_request_new(link,
-                              mfd_service_remove,
-                              MF_VARLINK_METHOD_CLEANUP,
-                              MFD_POLKIT_ACTION_REMOVE,
-                              flags);
+    request = mfd_request_new(link, MF_VARLINK_METHOD_CLEANUP, flags);
 
-    return mfd_service_authorize(service, request, transaction_flags);
+    return mfd_service_authorize(service, request, p.flags);
 }
 
 /**
@@ -1219,10 +1236,7 @@ mfd_varlink_method_refresh(sd_varlink *link,
          _SD_JSON_VARIANT_TYPE_INVALID, sd_json_dispatch_variant_noref,
          offsetof(typeof(p), remotes),
          0},
-        {"flags",
-         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
-         offsetof(typeof(p), flags),
-         0},
+        MFD_JSON_DISPATCH_TRANSACTION_FLAGS(typeof(p)),
         {},
     };
     g_auto(GStrv) remote_ids = NULL;
@@ -1236,11 +1250,7 @@ mfd_varlink_method_refresh(sd_varlink *link,
     if (!mfd_json_variant_get_strv(p.remotes, &remote_ids))
         return sd_varlink_error_invalid_parameter_name(link, "remotes");
 
-    request = mfd_request_new(link,
-                              mfd_service_refresh,
-                              MF_VARLINK_METHOD_REFRESH,
-                              MFD_POLKIT_ACTION_REFRESH,
-                              flags);
+    request = mfd_request_new(link, MF_VARLINK_METHOD_REFRESH, flags);
     request->remote_ids = g_steal_pointer(&remote_ids);
 
     return mfd_service_authorize(service, request, p.flags);
@@ -1270,10 +1280,7 @@ mfd_varlink_method_inspect_remote(sd_varlink *link,
          SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
          offsetof(typeof(p), public_key),
          0},
-        {"flags",
-         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
-         offsetof(typeof(p), flags),
-         0},
+        MFD_JSON_DISPATCH_TRANSACTION_FLAGS(typeof(p)),
         {},
     };
     g_autofree char *url = NULL;
@@ -1294,11 +1301,7 @@ mfd_varlink_method_inspect_remote(sd_varlink *link,
             return sd_varlink_error_invalid_parameter_name(link, "publicKey");
     }
 
-    request = mfd_request_new(link,
-                              mfd_service_inspect_remote,
-                              MF_VARLINK_METHOD_INSPECT_REMOTE,
-                              MFD_POLKIT_ACTION_MANAGE_REMOTES,
-                              flags);
+    request = mfd_request_new(link, MF_VARLINK_METHOD_INSPECT_REMOTE, flags);
     request->url = g_steal_pointer(&url);
     request->public_key = g_steal_pointer(&public_key);
 
@@ -1339,10 +1342,7 @@ mfd_varlink_method_add_remote(sd_varlink *link,
          _SD_JSON_VARIANT_TYPE_INVALID, sd_json_dispatch_variant_noref,
          offsetof(typeof(p), channels),
          0},
-        {"flags",
-         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
-         offsetof(typeof(p), flags),
-         0},
+        MFD_JSON_DISPATCH_TRANSACTION_FLAGS(typeof(p)),
         {},
     };
     g_autofree char *url = NULL;
@@ -1371,11 +1371,7 @@ mfd_varlink_method_add_remote(sd_varlink *link,
             return sd_varlink_error_invalid_parameter_name(link, "channels");
     }
 
-    request = mfd_request_new(link,
-                              mfd_service_add_remote,
-                              MF_VARLINK_METHOD_ADD_REMOTE,
-                              MFD_POLKIT_ACTION_MANAGE_REMOTES,
-                              flags);
+    request = mfd_request_new(link, MF_VARLINK_METHOD_ADD_REMOTE, flags);
     request->remote_id = g_strdup(p.remote_id);
     request->url = g_steal_pointer(&url);
     request->public_key = g_steal_pointer(&public_key);
@@ -1403,10 +1399,7 @@ mfd_varlink_method_remove_remote(sd_varlink *link,
          SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
          offsetof(typeof(p), remote_id),
          SD_JSON_MANDATORY},
-        {"flags",
-         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
-         offsetof(typeof(p), flags),
-         0},
+        MFD_JSON_DISPATCH_TRANSACTION_FLAGS(typeof(p)),
         {},
     };
     MfdRequest *request;
@@ -1419,11 +1412,7 @@ mfd_varlink_method_remove_remote(sd_varlink *link,
     if (!mf_remote_id_is_valid(p.remote_id))
         return sd_varlink_error_invalid_parameter_name(link, "remoteId");
 
-    request = mfd_request_new(link,
-                              mfd_service_remove_remote,
-                              MF_VARLINK_METHOD_REMOVE_REMOTE,
-                              MFD_POLKIT_ACTION_MANAGE_REMOTES,
-                              flags);
+    request = mfd_request_new(link, MF_VARLINK_METHOD_REMOVE_REMOTE, flags);
     request->remote_id = g_strdup(p.remote_id);
 
     return mfd_service_authorize(service, request, p.flags);
@@ -1455,10 +1444,7 @@ mfd_varlink_method_mark_component(sd_varlink *link,
          SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
          offsetof(typeof(p), mode),
          SD_JSON_MANDATORY},
-        {"flags",
-         _SD_JSON_VARIANT_TYPE_INVALID, mfd_json_dispatch_transaction_flags,
-         offsetof(typeof(p), flags),
-         0},
+        MFD_JSON_DISPATCH_TRANSACTION_FLAGS(typeof(p)),
         {},
     };
     MfdRequest *request;
@@ -1477,11 +1463,7 @@ mfd_varlink_method_mark_component(sd_varlink *link,
     if (mode == MF_INSTALL_MODE_UNKNOWN)
         return sd_varlink_error_invalid_parameter_name(link, "mode");
 
-    request = mfd_request_new(link,
-                              mfd_service_mark,
-                              MF_VARLINK_METHOD_MARK_COMPONENT,
-                              MFD_POLKIT_ACTION_MARK,
-                              flags);
+    request = mfd_request_new(link, MF_VARLINK_METHOD_MARK_COMPONENT, flags);
     request->component_id = g_strdup(p.component_id);
     request->version = g_strdup(p.version);
     request->mode = mode;
