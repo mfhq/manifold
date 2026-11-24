@@ -12,6 +12,7 @@
 #include <string.h>
 #include <sys/utsname.h>
 #include <glib/gi18n-lib.h>
+#include <glib/gstdio.h>
 #include <appstream.h>
 #include <blake3.h>
 
@@ -708,6 +709,19 @@ mf_get_host_architecture(void)
 
     return architecture;
 #endif
+}
+
+/**
+ * mf_clear_fd:
+ * @fd: the location of a file descriptor
+ *
+ * Close a file descriptor, and set it to -1. This function can be used as
+ * the clear function of a #GArray of file descriptors.
+ */
+void
+mf_clear_fd(int *fd)
+{
+    g_clear_fd(fd, NULL);
 }
 
 /**

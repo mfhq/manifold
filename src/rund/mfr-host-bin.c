@@ -9,6 +9,7 @@
 #include "config.h"
 #include "mfr-host-bin.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/inotify.h>
 #include <sys/stat.h>
@@ -16,7 +17,9 @@
 #include <libglnx.h>
 
 #include "mf-constants-private.h"
+#include "mf-host-links.h"
 #include "mf-store-private.h"
+#include "mf-utils-private.h"
 
 /**
  * MfrHostBin:
@@ -124,97 +127,40 @@ mfr_host_bin_class_init(MfrHostBinClass *klass)
 }
 
 /**
- * mfr_host_bin_collect_programs:
- * @dir: a program directory of the host
- * @programs: (inout): the set of program names to add to
- *
- * Add the names of the programs in a directory to a set. We add nothing
- * if the directory does not exist.
- */
-static gboolean
-mfr_host_bin_collect_programs(const char *dir, GHashTable *programs, GError **error)
-{
-    g_auto(GLnxDirFdIterator) iter = {0};
-    g_autoptr(GError) local_error = NULL;
-
-    if (!glnx_dirfd_iterator_init_at(AT_FDCWD, dir, TRUE, &iter, &local_error)) {
-        if (g_error_matches(local_error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND) ||
-            g_error_matches(local_error, G_IO_ERROR, G_IO_ERROR_NOT_DIRECTORY))
-            return TRUE;
-        g_propagate_error(error, g_steal_pointer(&local_error));
-        return FALSE;
-    }
-
-    while (TRUE) {
-        struct dirent *entry;
-        struct stat st;
-
-        if (!glnx_dirfd_iterator_next_dent(&iter, &entry, NULL, error))
-            return FALSE;
-        if (entry == NULL)
-            break;
-        if (entry->d_name[0] == '.')
-            continue;
-        /* we follow links, so we add a link to a program, and skip a broken link */
-        if (fstatat(iter.fd, entry->d_name, &st, 0) != 0)
-            continue;
-        if (S_ISREG(st.st_mode) && (st.st_mode & 0111) != 0)
-            g_hash_table_add(programs, g_strdup(entry->d_name));
-    }
-
-    return TRUE;
-}
-
-/**
  * mfr_host_bin_sync:
  * @host_bin: the links
  * @error: a #GError
  *
- * Update the links to match the programs that the host has now. We add and
- * remove links in the existing directory, because trees have it mounted.
+ * Update the links to match the programs that the host has now. A program
+ * directory that does not exist is skipped.
  */
 gboolean
 mfr_host_bin_sync(MfrHostBin *host_bin, GError **error)
 {
-    g_autoptr(GHashTable) programs = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-    g_auto(GLnxDirFdIterator) iter = {0};
-    GHashTableIter programs_iter;
-    gpointer name;
+    g_autoptr(GArray) dir_fds = g_array_new(FALSE, FALSE, sizeof(int));
+    g_autofd int links_fd = -1;
+    int r;
 
     g_return_val_if_fail(MFR_IS_HOST_BIN(host_bin), FALSE);
 
+    g_array_set_clear_func(dir_fds, (GDestroyNotify) mf_clear_fd);
     for (char **dir = host_bin->program_dirs; *dir != NULL; dir++) {
-        if (!mfr_host_bin_collect_programs(*dir, programs, error))
-            return FALSE;
+        int fd = open(*dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+
+        if (fd >= 0)
+            g_array_append_val(dir_fds, fd);
+        else if (errno != ENOENT && errno != ENOTDIR)
+            return glnx_throw_errno_prefix(error, "Unable to open %s", *dir);
     }
 
-    /* remove the links of programs that the host no longer has */
-    if (!glnx_dirfd_iterator_init_at(AT_FDCWD, host_bin->links_dir, TRUE, &iter, error))
-        return FALSE;
-    while (TRUE) {
-        struct dirent *entry;
+    links_fd = open(host_bin->links_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (links_fd < 0)
+        return glnx_throw_errno_prefix(error, "Unable to open %s", host_bin->links_dir);
 
-        if (!glnx_dirfd_iterator_next_dent(&iter, &entry, NULL, error))
-            return FALSE;
-        if (entry == NULL)
-            break;
-        /* the link of this program exists, so we do not need to create it */
-        if (g_hash_table_remove(programs, entry->d_name))
-            continue;
-        if (unlinkat(iter.fd, entry->d_name, 0) != 0)
-            return glnx_throw_errno_prefix(error,
-                                           "Unable to remove %s/%s",
-                                           host_bin->links_dir,
-                                           entry->d_name);
-    }
-
-    g_hash_table_iter_init(&programs_iter, programs);
-    while (g_hash_table_iter_next(&programs_iter, &name, NULL)) {
-        if (symlinkat(MF_HOST_RUN_PATH, iter.fd, name) != 0)
-            return glnx_throw_errno_prefix(error,
-                                           "Unable to create %s/%s",
-                                           host_bin->links_dir,
-                                           (const char *) name);
+    r = mf_host_links_sync(links_fd, (const int *) dir_fds->data, dir_fds->len);
+    if (r < 0) {
+        errno = -r;
+        return glnx_throw_errno_prefix(error, "Unable to update the links in %s", host_bin->links_dir);
     }
 
     return TRUE;

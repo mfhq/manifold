@@ -24,6 +24,7 @@ mf_rund_src = [
 manifold_rund_lib = static_library('manifold-rund',
     [mf_rund_src,
      mf_daemon_shared_src,
+     mf_host_links_src,
      mf_run_varlink_src],
     c_args: hardening_c_args + ['-DG_LOG_DOMAIN="manifold-rund"'],
     include_directories: [root_inc_dir, shared_inc_dir],

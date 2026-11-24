@@ -27,6 +27,12 @@ mf_host_varlink_src = files(
     'mf-host-interface.h',
 )
 
+# the links to the programs of the host, which do not use GLib
+mf_host_links_src = files(
+    'mf-host-links.c',
+    'mf-host-links.h',
+)
+
 # the semi-private interface for running a Manifold application
 mf_run_varlink_src = files(
     'mf-run-interface.c',

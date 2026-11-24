@@ -55,6 +55,8 @@ void      mf_hasher_finish(MfHasher    *hasher,
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfHasher, mf_hasher_free)
 
+MF_INTERNAL_VISIBLE
+void     mf_clear_fd(int *fd);
 gboolean mf_write_all(int         fd,
                       const char *buffer,
                       size_t      size,

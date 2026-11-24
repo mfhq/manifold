@@ -2,7 +2,7 @@
 # mfrun/runapp: The unprivileged, user-facing runner
 #
 manifold_run_exe = executable('mfrun',
-    ['manifold-run.c'],
+    ['manifold-run.c', mf_host_links_src],
     include_directories: [root_inc_dir, shared_inc_dir],
     dependencies: [libsystemd_dep],
     install: true,

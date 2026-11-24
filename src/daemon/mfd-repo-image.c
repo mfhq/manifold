@@ -212,17 +212,6 @@ mfd_find_chunk_sources(MfStore *store, MfManifest *manifest)
 }
 
 /**
- * mfd_clear_fd:
- *
- * Close a file descriptor that is an element of a #GArray.
- */
-static void
-mfd_clear_fd(gpointer fd)
-{
-    g_clear_fd((int *) fd, NULL);
-}
-
-/**
  * mfd_write_image_from:
  * @url: the zchunk file of the image
  *
@@ -251,7 +240,7 @@ mfd_write_image_from(MfdRepoSource *source,
     g_autoptr(GArray) missing = NULL;
     uint64_t gap_max = RANGE_GAP_MAX;
 
-    g_array_set_clear_func(source_fds, mfd_clear_fd);
+    g_array_set_clear_func(source_fds, (GDestroyNotify) mf_clear_fd);
     if (!glnx_shutil_mkdir_p_at(AT_FDCWD, DOWNLOADS_DIR, 0700, NULL, error) ||
         !glnx_open_anonymous_tmpfile_full(O_RDWR | O_CLOEXEC, DOWNLOADS_DIR, &partial, error))
         return FALSE;

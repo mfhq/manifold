@@ -8,7 +8,6 @@
 
 #include "config.h"
 
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -28,6 +27,7 @@
 #include <systemd/sd-varlink.h>
 
 #include "mf-constants-private.h"
+#include "mf-host-links.h"
 #include "mf-run-interface.h"
 
 /*
@@ -621,28 +621,12 @@ mfx_clean_search_path(const char *caller_path)
 }
 
 /**
- * mfx_is_program:
- *
- * Returns: true if the directory has an executable file with the given name
- */
-static bool
-mfx_is_program(int dir_fd, const char *name)
-{
-    struct stat st;
-
-    /* we follow links, so we accept a link to a program, and reject a broken link */
-    return fstatat(dir_fd, name, &st, 0) == 0 && S_ISREG(st.st_mode) && (st.st_mode & 0111) != 0;
-}
-
-/**
  * mfx_sync_user_links:
  * @links_fd: the directory with the links
  * @user_dirs: program directories of the host, separated by colons
  *
  * Update the links in a directory to match the programs in the given
- * program directories of the host. The directory gets one link to the
- * trampoline program for every program. We add and remove links in the
- * existing directory, because running applications may have it in their PATH.
+ * program directories of the host. A directory that we can not read is skipped.
  *
  * Returns: 0 on success, or a negative errno
  */
@@ -651,8 +635,7 @@ mfx_sync_user_links(int links_fd, const char *user_dirs)
 {
     size_t n_dirs = 1;
     int *dir_fds;
-    DIR *links;
-    int r = 0;
+    int r;
 
     for (const char *c = user_dirs; *c != '\0'; c++) {
         if (*c == ':')
@@ -677,45 +660,10 @@ mfx_sync_user_links(int links_fd, const char *user_dirs)
         entry += length + (entry[length] == ':' ? 1 : 0);
     }
 
-    /* remove the links of programs that the host no longer has */
-    int links_dup_fd = fcntl(links_fd, F_DUPFD_CLOEXEC, 3);
-    links = links_dup_fd >= 0 ? fdopendir(links_dup_fd) : nullptr;
-    if (links == nullptr) {
-        r = -errno;
-        if (links_dup_fd >= 0)
-            close(links_dup_fd);
-    } else {
-        for (struct dirent *entry = readdir(links); entry != nullptr; entry = readdir(links)) {
-            bool found = false;
+    r = mf_host_links_sync(links_fd, dir_fds, n_dirs);
 
-            if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
-                continue;
-            for (size_t i = 0; i < n_dirs && !found; i++)
-                found = mfx_is_program(dir_fds[i], entry->d_name);
-            if (!found && unlinkat(links_fd, entry->d_name, 0) != 0 && errno != ENOENT)
-                r = -errno;
-        }
-        closedir(links);
-    }
-
-    for (size_t i = 0; i < n_dirs; i++) {
-        /* the directory stream takes ownership of the file descriptor */
-        DIR *dir = fdopendir(dir_fds[i]);
-
-        if (dir == nullptr) {
-            close(dir_fds[i]);
-            continue;
-        }
-        for (struct dirent *entry = readdir(dir); entry != nullptr; entry = readdir(dir)) {
-            if (entry->d_name[0] == '.' || !mfx_is_program(dir_fds[i], entry->d_name))
-                continue;
-            /* a different launch may create the same link at the same time, so we ignore EEXIST */
-            if (symlinkat(MF_HOST_RUN_PATH, links_fd, entry->d_name) != 0 && errno != EEXIST)
-                r = -errno;
-        }
-        closedir(dir);
-    }
-
+    for (size_t i = 0; i < n_dirs; i++)
+        close(dir_fds[i]);
     free(dir_fds);
     return r;
 }
