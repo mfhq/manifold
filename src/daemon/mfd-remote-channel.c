@@ -96,7 +96,7 @@ mfd_remote_read_cached_root_index(const char *root,
                                   GError **error)
 {
     const char *remote_id = mf_remote_get_id(remote);
-    g_autofree char *remote_dir = g_build_filename(root, MF_STORE_REMOTES_SUBDIR, remote_id, NULL);
+    g_autofree char *remote_dir = mf_store_remote_dir_at(root, remote_id);
     g_autofree char *data_path = g_build_filename(remote_dir, MF_REPO_ROOT_INDEX_NAME, NULL);
     g_autofree char *signature_path = g_build_filename(remote_dir, MF_REPO_ROOT_SIGNATURE_NAME, NULL);
     g_autoptr(GBytes) data = NULL;
@@ -156,12 +156,7 @@ mfd_remote_channel_load(const char *root,
         return NULL;
     }
 
-    path = g_build_filename(root,
-                            MF_STORE_REMOTES_SUBDIR,
-                            remote_id,
-                            channel_name,
-                            MF_REPO_COMPONENT_INDEX_NAME,
-                            NULL);
+    path = mf_store_component_index_path_at(root, remote_id, channel_name);
     data = mfd_read_cached_file(path, remote_id, error);
     if (data == NULL)
         return NULL;

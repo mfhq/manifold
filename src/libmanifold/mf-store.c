@@ -16,6 +16,7 @@
 #include "mf-manifest.h"
 #include "mf-utils.h"
 #include "mf-utils-private.h"
+#include "mf-repo-private.h"
 
 /**
  * MfStore:
@@ -62,9 +63,12 @@ G_DEFINE_TYPE_WITH_PRIVATE(MfStore, mf_store, G_TYPE_OBJECT)
 
 #define GET_PRIVATE(o) ((MfStorePrivate *) mf_store_get_instance_private(o))
 
+/* the path from a version directory to the root of the store */
+#define COMPONENT_TO_ROOT "../../.."
+
 /* the prefixes that the target of a link in a version directory must have */
-#define COMPONENT_TO_IMAGE_PREFIX MF_STORE_COMPONENT_TO_IMAGES "/"
-#define COMPONENT_TO_ROOT_PREFIX  MF_STORE_COMPONENT_TO_ROOT "/"
+#define COMPONENT_TO_IMAGE_PREFIX COMPONENT_TO_ROOT "/" MF_STORE_IMAGES_SUBDIR "/"
+#define COMPONENT_TO_ROOT_PREFIX  COMPONENT_TO_ROOT "/"
 
 /**
  * mf_is_version_dir_name:
@@ -79,6 +83,11 @@ mf_is_version_dir_name(const char *name)
 
     return mf_split_full_version(name, &version, &revision);
 }
+
+/* the suffix of the file name of an image, which is named by its verity hash */
+constexpr char IMAGE_SUFFIX[] = ".raw";
+/* the suffix of the file name of the AppStream catalog of an origin */
+constexpr char CATALOG_FILE_SUFFIX[] = ".xml.zst";
 
 /* the subdirectories of the store that hold component directories */
 static const char *const COMPONENT_SUBDIRS[] = {
@@ -113,7 +122,7 @@ mf_store_get_component_subdirs(void)
 char *
 mf_store_build_image_name(const char *verity_hash)
 {
-    return g_strconcat(verity_hash, MF_STORE_IMAGE_SUFFIX, NULL);
+    return g_strconcat(verity_hash, IMAGE_SUFFIX, NULL);
 }
 
 /**
@@ -127,9 +136,9 @@ mf_store_hash_from_image_name(const char *name)
 {
     g_autofree char *hash = NULL;
 
-    if (!g_str_has_suffix(name, MF_STORE_IMAGE_SUFFIX))
+    if (!g_str_has_suffix(name, IMAGE_SUFFIX))
         return NULL;
-    hash = g_strndup(name, strlen(name) - strlen(MF_STORE_IMAGE_SUFFIX));
+    hash = g_strndup(name, strlen(name) - strlen(IMAGE_SUFFIX));
     if (!mf_hex_hash_is_valid(hash))
         return NULL;
 
@@ -290,8 +299,7 @@ mf_store_subdir_for_kind(MfComponentKind kind, gboolean sdk)
 const char *
 mf_store_image_link_for_subdir(const char *subdir)
 {
-    return g_str_equal(subdir, MF_STORE_RUNTIMES_SUBDIR) ? MF_STORE_RUNTIME_IMAGE_LINK
-                                                         : MF_STORE_APP_IMAGE_LINK;
+    return g_str_equal(subdir, MF_STORE_RUNTIMES_SUBDIR) ? "runtime.raw" : "app.raw";
 }
 
 /**
@@ -610,7 +618,7 @@ mf_base_link_free(MfBaseLink *link)
 char *
 mf_base_link_get_target(const MfBaseLink *link)
 {
-    return g_build_filename(MF_STORE_COMPONENT_TO_ROOT,
+    return g_build_filename(COMPONENT_TO_ROOT,
                             link->subdir,
                             link->component_id,
                             link->version_name != NULL ? link->version_name : MF_STORE_CURRENT_NAME,
@@ -758,8 +766,184 @@ mf_store_component_is_revoked_at(const char *root, const char *component_id)
     subdir = mf_find_component_subdir_at(root, component_id, NULL);
     if (subdir == NULL)
         return FALSE;
-    marker = g_build_filename(root, subdir, component_id, MF_STORE_REVOKED_NAME, NULL);
+    marker = g_build_filename(root, subdir, component_id, "revoked", NULL);
     return g_file_test(marker, G_FILE_TEST_EXISTS);
+}
+
+/**
+ * mf_store_remotes_dir_at:
+ * @root: the root directory of a store
+ *
+ * Returns: (transfer full): the path of the directory with the cached metadata of all remotes
+ */
+char *
+mf_store_remotes_dir_at(const char *root)
+{
+    return g_build_filename(root, "remotes", NULL);
+}
+
+/**
+ * mf_store_remote_dir_at:
+ * @root: the root directory of a store
+ * @remote_id: the ID of a remote
+ *
+ * Returns: (transfer full): the path of the directory with the cached metadata of the remote
+ */
+char *
+mf_store_remote_dir_at(const char *root, const char *remote_id)
+{
+    g_autofree char *remotes_dir = mf_store_remotes_dir_at(root);
+
+    return g_build_filename(remotes_dir, remote_id, NULL);
+}
+
+/**
+ * mf_store_component_index_path_at:
+ * @root: the root directory of a store
+ * @remote_id: the ID of a remote
+ * @channel: the name of a channel of the remote
+ *
+ * Returns: (transfer full): the path of the cached component index of the channel
+ */
+char *
+mf_store_component_index_path_at(const char *root, const char *remote_id, const char *channel)
+{
+    g_autofree char *remote_dir = mf_store_remote_dir_at(root, remote_id);
+
+    return g_build_filename(remote_dir, channel, MF_REPO_COMPONENT_INDEX_NAME, NULL);
+}
+
+/**
+ * mf_store_catalog_dir_at:
+ * @root: the root directory of a store
+ *
+ * Returns: (transfer full): the path of the directory with the AppStream catalog files of all origins
+ */
+char *
+mf_store_catalog_dir_at(const char *root)
+{
+    return g_build_filename(root, "catalog/xml", NULL);
+}
+
+/**
+ * mf_store_build_catalog_name:
+ * @origin: an origin, `<remote>-<channel>`
+ *
+ * Build the file name of the catalog file of an origin, `<origin>.xml.zst`.
+ *
+ * Returns: (transfer full): the file name
+ */
+char *
+mf_store_build_catalog_name(const char *origin)
+{
+    return g_strconcat(origin, CATALOG_FILE_SUFFIX, NULL);
+}
+
+/**
+ * mf_store_origin_from_catalog_name:
+ * @name: a file name of the form <origin>.xml.zst
+ *
+ * Returns: (transfer full) (nullable): the origin in @name, or %NULL if @name
+ *   is not the name of a catalog file
+ */
+char *
+mf_store_origin_from_catalog_name(const char *name)
+{
+    if (!g_str_has_suffix(name, CATALOG_FILE_SUFFIX))
+        return NULL;
+    return g_strndup(name, strlen(name) - strlen(CATALOG_FILE_SUFFIX));
+}
+
+/**
+ * mf_store_catalog_path_at:
+ * @root: the root directory of a store
+ * @origin: an origin, `<remote>-<channel>`
+ *
+ * Returns: (transfer full): the path of the catalog file of the origin
+ */
+char *
+mf_store_catalog_path_at(const char *root, const char *origin)
+{
+    g_autofree char *catalog_dir = mf_store_catalog_dir_at(root);
+    g_autofree char *file_name = mf_store_build_catalog_name(origin);
+
+    return g_build_filename(catalog_dir, file_name, NULL);
+}
+
+/**
+ * mf_store_catalog_icons_root_at:
+ * @root: the root directory of a store
+ *
+ * Returns: (transfer full): the path of the directory with the catalog icons of all origins
+ */
+char *
+mf_store_catalog_icons_root_at(const char *root)
+{
+    return g_build_filename(root, "catalog/icons", NULL);
+}
+
+/**
+ * mf_store_catalog_icons_dir_at:
+ * @root: the root directory of a store
+ * @origin: an origin, `<remote>-<channel>`
+ *
+ * Returns: (transfer full): the path of the directory with the catalog icons of the origin
+ */
+char *
+mf_store_catalog_icons_dir_at(const char *root, const char *origin)
+{
+    g_autofree char *icons_root = mf_store_catalog_icons_root_at(root);
+
+    return g_build_filename(icons_root, origin, NULL);
+}
+
+/**
+ * mf_store_build_image_link_target:
+ * @verity_hash: the root hash of an image
+ *
+ * Build the target of the link in a version directory that points to the
+ * image of the version. The target is relative, so the store can be moved.
+ *
+ * Returns: (transfer full): the target of the link
+ */
+char *
+mf_store_build_image_link_target(const char *verity_hash)
+{
+    g_autofree char *file_name = mf_store_build_image_name(verity_hash);
+
+    return g_strconcat(COMPONENT_TO_IMAGE_PREFIX, file_name, NULL);
+}
+
+/**
+ * mf_store_build_catalog_link_target:
+ * @store_path: the path of a file in the store, relative to the root of the store
+ *
+ * Build the target of a link in the catalog directory, see
+ * mf_store_catalog_dir_at(), that points to a file in the store.
+ *
+ * Returns: (transfer full): the target of the link
+ */
+char *
+mf_store_build_catalog_link_target(const char *store_path)
+{
+    /* the catalog directory is two levels below the root of the store */
+    return g_build_filename("../..", store_path, NULL);
+}
+
+/**
+ * mf_store_build_catalog_icon_link_target:
+ * @store_path: the path of a file in the store, relative to the root of the store
+ *
+ * Build the target of a link that points to a file in the store. The link
+ * is located in an icon size directory of an origin, like `64x64`.
+ *
+ * Returns: (transfer full): the target of the link
+ */
+char *
+mf_store_build_catalog_icon_link_target(const char *store_path)
+{
+    /* an icon size directory is four levels below the root of the store */
+    return g_build_filename("../../../..", store_path, NULL);
 }
 
 /**

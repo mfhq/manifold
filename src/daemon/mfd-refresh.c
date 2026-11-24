@@ -115,9 +115,8 @@ mfd_replace_dir(const char *staging, const char *live, GError **error)
 static gboolean
 mfd_remove_origin(const char *root, const char *origin, GError **error)
 {
-    g_autofree char *file_name = g_strconcat(origin, MF_STORE_CATALOG_FILE_SUFFIX, NULL);
-    g_autofree char *catalog = g_build_filename(root, MF_STORE_CATALOG_XML_SUBDIR, file_name, NULL);
-    g_autofree char *icons = g_build_filename(root, MF_STORE_CATALOG_ICONS_SUBDIR, origin, NULL);
+    g_autofree char *catalog = mf_store_catalog_path_at(root, origin);
+    g_autofree char *icons = mf_store_catalog_icons_dir_at(root, origin);
 
     g_info("Removing the catalog of %s", origin);
     if (unlink(catalog) < 0 && errno != ENOENT)
@@ -135,12 +134,13 @@ static GHashTable *
 mfd_list_origins(const char *root, GError **error)
 {
     g_autoptr(GHashTable) origins = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-    const char *subdirs[] = {MF_STORE_CATALOG_XML_SUBDIR, MF_STORE_CATALOG_ICONS_SUBDIR};
+    g_autofree char *catalog_dir = mf_store_catalog_dir_at(root);
+    g_autofree char *icons_dir = mf_store_catalog_icons_root_at(root);
+    const char *dirs[] = {catalog_dir, icons_dir};
 
-    for (size_t i = 0; i < G_N_ELEMENTS(subdirs); i++) {
-        g_autofree char *dir = g_build_filename(root, subdirs[i], NULL);
+    for (size_t i = 0; i < G_N_ELEMENTS(dirs); i++) {
         g_autoptr(GError) local_error = NULL;
-        g_autoptr(GDir) gdir = g_dir_open(dir, 0, &local_error);
+        g_autoptr(GDir) gdir = g_dir_open(dirs[i], 0, &local_error);
         const char *name;
 
         if (gdir == NULL) {
@@ -154,14 +154,9 @@ mfd_list_origins(const char *root, GError **error)
 
             if (name[0] == '.')
                 continue;
-            if (i == 0) {
-                if (!g_str_has_suffix(name, MF_STORE_CATALOG_FILE_SUFFIX))
-                    continue;
-                origin = g_strndup(name, strlen(name) - strlen(MF_STORE_CATALOG_FILE_SUFFIX));
-            } else {
-                origin = g_strdup(name);
-            }
-            if (mf_origin_split_name(origin, NULL, NULL))
+            /* the catalog directory has one file per origin, the icons directory one directory */
+            origin = dirs[i] == catalog_dir ? mf_store_origin_from_catalog_name(name) : g_strdup(name);
+            if (origin != NULL && mf_origin_split_name(origin, NULL, NULL))
                 g_hash_table_add(origins, g_steal_pointer(&origin));
         }
     }
@@ -345,7 +340,7 @@ mfd_prepare_channel(const char *root,
     MfdMemoryDownload *downloads[] = {&index_file, &catalog_file, &icon_index_file};
 
     prepared->origin = mf_origin_build_name(mf_remote_get_id(remote), channel);
-    prepared->icons_live = g_build_filename(root, MF_STORE_CATALOG_ICONS_SUBDIR, prepared->origin, NULL);
+    prepared->icons_live = mf_store_catalog_icons_dir_at(root, prepared->origin);
 
     if (!mfd_fetcher_download_to_memory(fetcher, downloads, G_N_ELEMENTS(downloads), error))
         return NULL;
@@ -381,9 +376,8 @@ mfd_prepare_channel(const char *root,
 static gboolean
 mfd_swap_in_channel(const char *root, MfdPreparedChannel *prepared, GError **error)
 {
-    g_autofree char *file_name = g_strconcat(prepared->origin, MF_STORE_CATALOG_FILE_SUFFIX, NULL);
-    g_autofree char *catalog_dir = g_build_filename(root, MF_STORE_CATALOG_XML_SUBDIR, NULL);
-    g_autofree char *catalog = g_build_filename(catalog_dir, file_name, NULL);
+    g_autofree char *catalog = mf_store_catalog_path_at(root, prepared->origin);
+    g_autofree char *catalog_dir = g_path_get_dirname(catalog);
 
     if (!mfd_replace_dir(prepared->icons_staging, prepared->icons_live, error))
         return FALSE;
@@ -483,18 +477,10 @@ mfd_cached_metadata_is_complete(const char *root, MfRemote *remote, MfRepoRootIn
         return FALSE;
 
     for (guint i = 0; channels[i] != NULL; i++) {
-        MfRepoChannel *channel = mf_repo_root_index_find_channel(index, channels[i]);
-        gboolean available = channel != NULL &&
-                             mf_repo_channel_find_architecture(channel, architecture) != NULL;
+        gboolean available = mf_repo_root_index_find_architecture(index, channels[i], architecture) != NULL;
         g_autofree char *origin_name = mf_origin_build_name(remote_id, channels[i]);
-        g_autofree char *catalog_name = g_strconcat(origin_name, MF_STORE_CATALOG_FILE_SUFFIX, NULL);
-        g_autofree char *catalog = g_build_filename(root, MF_STORE_CATALOG_XML_SUBDIR, catalog_name, NULL);
-        g_autofree char *component_index = g_build_filename(root,
-                                                            MF_STORE_REMOTES_SUBDIR,
-                                                            remote_id,
-                                                            channels[i],
-                                                            MF_REPO_COMPONENT_INDEX_NAME,
-                                                            NULL);
+        g_autofree char *catalog = mf_store_catalog_path_at(root, origin_name);
+        g_autofree char *component_index = mf_store_component_index_path_at(root, remote_id, channels[i]);
 
         if (g_file_test(component_index, G_FILE_TEST_EXISTS) != available ||
             g_file_test(catalog, G_FILE_TEST_EXISTS) != available)
@@ -528,9 +514,7 @@ mfd_warn_about_missing_channels(MfResult *result, MfRemote *remote, MfRepoRootIn
     const char *architecture = mf_get_host_architecture();
 
     for (guint i = 0; channels[i] != NULL; i++) {
-        MfRepoChannel *channel = mf_repo_root_index_find_channel(index, channels[i]);
-
-        if (channel == NULL || mf_repo_channel_find_architecture(channel, architecture) == NULL)
+        if (mf_repo_root_index_find_architecture(index, channels[i], architecture) == NULL)
             mfd_emit_warning(result,
                              "The repository %s has no channel %s for %s",
                              mf_remote_get_id(remote),
@@ -611,7 +595,7 @@ mfd_refresh_remote(const char *root,
         prepared = g_ptr_array_new_with_free_func((GDestroyNotify) mfd_prepared_channel_free);
     g_autoptr(GPtrArray) gone = g_ptr_array_new_with_free_func(g_free);
     g_autoptr(GHashTable) origins = NULL;
-    g_autofree char *remote_dir = g_build_filename(root, MF_STORE_REMOTES_SUBDIR, remote_id, NULL);
+    g_autofree char *remote_dir = mf_store_remote_dir_at(root, remote_id);
     g_autofree char *staging_dir = NULL;
     g_autofree char *index_path = NULL;
     g_autofree char *signature_path = NULL;
@@ -651,9 +635,7 @@ mfd_refresh_remote(const char *root,
         goto out;
 
     for (guint i = 0; channels[i] != NULL; i++) {
-        MfRepoChannel *channel = mf_repo_root_index_find_channel(index, channels[i]);
-        MfRepoArchitecture *arch = channel != NULL ? mf_repo_channel_find_architecture(channel, architecture)
-                                                   : NULL;
+        MfRepoArchitecture *arch = mf_repo_root_index_find_architecture(index, channels[i], architecture);
         MfdPreparedChannel *channel_data;
 
         if (arch == NULL) {
@@ -718,7 +700,7 @@ out:
 gboolean
 mfd_refresh_forget_remote(const char *root, const char *remote_id, GError **error)
 {
-    g_autofree char *remote_dir = g_build_filename(root, MF_STORE_REMOTES_SUBDIR, remote_id, NULL);
+    g_autofree char *remote_dir = mf_store_remote_dir_at(root, remote_id);
     g_autoptr(GHashTable) origins = NULL;
     GHashTableIter iter;
     gpointer origin;
@@ -779,8 +761,8 @@ mfd_refresh_remove_unconfigured(const char *root, GPtrArray *remotes, GError **e
 {
     g_autoptr(GHashTable) ids = g_hash_table_new(g_str_hash, g_str_equal);
     g_autoptr(GHashTable) gone = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
-    g_autofree char *remotes_dir = g_build_filename(root, MF_STORE_REMOTES_SUBDIR, NULL);
-    g_autofree char *icons_dir = g_build_filename(root, MF_STORE_CATALOG_ICONS_SUBDIR, NULL);
+    g_autofree char *remotes_dir = mf_store_remotes_dir_at(root);
+    g_autofree char *icons_dir = mf_store_catalog_icons_root_at(root);
     g_autoptr(GHashTable) origins = NULL;
     g_autoptr(GDir) gdir = NULL;
     GHashTableIter iter;

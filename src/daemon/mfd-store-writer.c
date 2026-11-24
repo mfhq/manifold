@@ -187,7 +187,8 @@ mfd_store_writer_update_icon_links(MfdStoreWriter *writer,
                                                       MF_STORE_CURRENT_NAME,
                                                       MF_STORE_ICONS_NAME,
                                                       NULL);
-    g_autofree char *icons_dir = mfd_store_writer_get_path(writer, MF_STORE_LOCAL_ICONS_SUBDIR, NULL);
+    g_autofree char *icons_dir = mf_store_catalog_icons_dir_at(mf_store_get_path(writer->store),
+                                                               MF_BUNDLE_CATALOG_ORIGIN);
     g_autoptr(GDir) sizes = g_dir_open(current_icons, 0, NULL);
     g_autoptr(GDir) linked = NULL;
     const char *size;
@@ -195,18 +196,19 @@ mfd_store_writer_update_icon_links(MfdStoreWriter *writer,
     while (sizes != NULL && (size = g_dir_read_name(sizes)) != NULL) {
         g_autofree char *icon = g_build_filename(current_icons, size, icon_name, NULL);
         g_autofree char *size_dir = g_build_filename(icons_dir, size, NULL);
+        g_autofree char *icon_in_store = NULL;
         g_autofree char *target = NULL;
 
         if (mfd_is_hidden(size) || !g_file_test(icon, G_FILE_TEST_IS_REGULAR))
             continue;
-        target = g_build_filename(MF_STORE_LOCAL_ICONS_TO_ROOT,
-                                  dir_name,
-                                  component_id,
-                                  MF_STORE_CURRENT_NAME,
-                                  MF_STORE_ICONS_NAME,
-                                  size,
-                                  icon_name,
-                                  NULL);
+        icon_in_store = g_build_filename(dir_name,
+                                         component_id,
+                                         MF_STORE_CURRENT_NAME,
+                                         MF_STORE_ICONS_NAME,
+                                         size,
+                                         icon_name,
+                                         NULL);
+        target = mf_store_build_catalog_icon_link_target(icon_in_store);
         if (!mfd_make_dir(size_dir, error))
             return FALSE;
         if (!mfd_replace_link(target, size_dir, icon_name, error))
@@ -246,14 +248,14 @@ mfd_store_writer_update_catalog_links(MfdStoreWriter *writer, const char *compon
     g_autofree char *file_name = g_strconcat(component_id, MF_STORE_CATALOG_SUFFIX, NULL);
     g_autofree char *current = g_build_filename(component_dir, MF_STORE_CURRENT_NAME, file_name, NULL);
     g_autofree char *link_name = g_strconcat(MF_BUNDLE_CATALOG_ORIGIN "-", file_name, NULL);
-    g_autofree char *catalog_dir = mfd_store_writer_get_path(writer, MF_STORE_CATALOG_XML_SUBDIR, NULL);
+    g_autofree char *catalog_dir = mf_store_catalog_dir_at(mf_store_get_path(writer->store));
     g_autofree char *link_path = g_build_filename(catalog_dir, link_name, NULL);
-    g_autofree char *target = g_build_filename(MF_STORE_CATALOG_XML_TO_ROOT,
-                                               dir_name,
-                                               component_id,
-                                               MF_STORE_CURRENT_NAME,
-                                               file_name,
-                                               NULL);
+    g_autofree char *current_in_store = g_build_filename(dir_name,
+                                                         component_id,
+                                                         MF_STORE_CURRENT_NAME,
+                                                         file_name,
+                                                         NULL);
+    g_autofree char *target = mf_store_build_catalog_link_target(current_in_store);
 
     if (!g_file_test(current, G_FILE_TEST_IS_REGULAR)) {
         if (!mfd_remove_if_exists(link_path, error))
@@ -444,8 +446,7 @@ mfd_store_writer_install_component(MfdStoreWriter *writer,
     }
 
     {
-        g_autofree char *file_name = mf_store_build_image_name(mf_manifest_get_verity_hash(manifest));
-        g_autofree char *target = g_build_filename(MF_STORE_COMPONENT_TO_IMAGES, file_name, NULL);
+        g_autofree char *target = mf_store_build_image_link_target(mf_manifest_get_verity_hash(manifest));
         g_autofree char *path = g_build_filename(tmp_dir, mf_store_image_link_for_subdir(subdir), NULL);
 
         if (!mfd_make_symlink(target, path, error))

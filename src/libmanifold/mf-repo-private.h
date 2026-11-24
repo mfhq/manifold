@@ -88,6 +88,10 @@ MF_INTERNAL_VISIBLE
 MfRepoArchitecture *mf_repo_channel_find_architecture(MfRepoChannel *channel,
                                                       const char    *architecture);
 MF_INTERNAL_VISIBLE
+MfRepoArchitecture *mf_repo_root_index_find_architecture(MfRepoRootIndex *index,
+                                                         const char      *channel_name,
+                                                         const char      *architecture);
+MF_INTERNAL_VISIBLE
 gboolean mf_repo_root_index_is_expired(MfRepoRootIndex *index,
                                        GDateTime       *now);
 MF_INTERNAL_VISIBLE

@@ -20,7 +20,7 @@
 #include "mfd-store-writer.h"
 #include "mfd-utils.h"
 
-#define IMAGES   MF_STORE_IMAGES_DIR
+#define IMAGES   MF_STORAGE_DIR "/" MF_STORE_IMAGES_SUBDIR
 #define APPS     MF_STORE_APPS_DIR
 #define RUNTIMES MF_STORE_RUNTIMES_DIR
 

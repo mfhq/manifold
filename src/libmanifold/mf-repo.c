@@ -578,6 +578,23 @@ mf_repo_channel_find_architecture(MfRepoChannel *channel, const char *architectu
 }
 
 /**
+ * mf_repo_root_index_find_architecture:
+ *
+ * Returns: (transfer none) (nullable): the file entries of the channel
+ *   @channel_name for @architecture, or %NULL if the repository has no such
+ *   channel, or the channel has no components for the architecture
+ */
+MfRepoArchitecture *
+mf_repo_root_index_find_architecture(MfRepoRootIndex *index,
+                                     const char *channel_name,
+                                     const char *architecture)
+{
+    MfRepoChannel *channel = mf_repo_root_index_find_channel(index, channel_name);
+
+    return channel != NULL ? mf_repo_channel_find_architecture(channel, architecture) : NULL;
+}
+
+/**
  * mf_repo_root_index_is_expired:
  *
  * Returns: %TRUE if the root index is not valid anymore at the time @now

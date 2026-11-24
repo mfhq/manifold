@@ -24,38 +24,18 @@ MF_BEGIN_PRIVATE_DECLS
 /* holds one file per component, which lists the files we installed for it on the host */
 #define MF_STORE_INTEGRATIONS_SUBDIR "integrations"
 
-#define MF_STORE_IMAGES_DIR   MF_STORAGE_DIR "/" MF_STORE_IMAGES_SUBDIR
 #define MF_STORE_APPS_DIR     MF_STORAGE_DIR "/" MF_STORE_APPS_SUBDIR
 #define MF_STORE_RUNTIMES_DIR MF_STORAGE_DIR "/" MF_STORE_RUNTIMES_SUBDIR
 
-/* the AppStream catalogs of all origins */
-#define MF_STORE_CATALOG_XML_SUBDIR   "catalog/xml"
-#define MF_STORE_CATALOG_FILE_SUFFIX  ".xml.zst"
-#define MF_STORE_CATALOG_ICONS_SUBDIR "catalog/icons"
-#define MF_STORE_LOCAL_ICONS_SUBDIR   MF_STORE_CATALOG_ICONS_SUBDIR "/" MF_BUNDLE_CATALOG_ORIGIN
-
-/* the cached metadata of all remotes */
-#define MF_STORE_REMOTES_SUBDIR "remotes"
-
-#define MF_STORE_COMPONENT_TO_ROOT   "../../.."
-#define MF_STORE_CATALOG_XML_TO_ROOT "../.."
-#define MF_STORE_LOCAL_ICONS_TO_ROOT "../../../.."
-#define MF_STORE_COMPONENT_TO_IMAGES MF_STORE_COMPONENT_TO_ROOT "/images/by-verity"
-
-#define MF_STORE_IMAGE_SUFFIX       ".raw"
-#define MF_STORE_APP_IMAGE_LINK     "app.raw"
-#define MF_STORE_RUNTIME_IMAGE_LINK "runtime.raw"
-#define MF_STORE_BASE_LINK          "base"
-#define MF_STORE_BASE_SDK_LINK      "base-sdk"
-#define MF_STORE_MANIFEST_NAME      "manifest.json"
-#define MF_STORE_CURRENT_NAME       "current"
-#define MF_STORE_ORIGIN_NAME        "origin"
-#define MF_STORE_MODE_NAME          "mode"
-#define MF_STORE_ICONS_NAME         "icons"
-#define MF_STORE_EXPORTS_NAME       "exports"
-#define MF_STORE_CATALOG_SUFFIX     ".xml"
-
-#define MF_STORE_REVOKED_NAME "revoked"
+#define MF_STORE_BASE_LINK      "base"
+#define MF_STORE_BASE_SDK_LINK  "base-sdk"
+#define MF_STORE_MANIFEST_NAME  "manifest.json"
+#define MF_STORE_CURRENT_NAME   "current"
+#define MF_STORE_ORIGIN_NAME    "origin"
+#define MF_STORE_MODE_NAME      "mode"
+#define MF_STORE_ICONS_NAME     "icons"
+#define MF_STORE_EXPORTS_NAME   "exports"
+#define MF_STORE_CATALOG_SUFFIX ".xml"
 
 /* the layout of the store */
 MF_INTERNAL_VISIBLE
@@ -113,6 +93,39 @@ MF_INTERNAL_VISIBLE
 char *mf_base_link_get_target(const MfBaseLink *link);
 
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfBaseLink, mf_base_link_free)
+
+/* the paths of the cached metadata of the remotes, and of the catalog data of their channels */
+MF_INTERNAL_VISIBLE
+char *mf_store_remotes_dir_at(const char *root);
+MF_INTERNAL_VISIBLE
+char *mf_store_remote_dir_at(const char *root,
+                             const char *remote_id);
+MF_INTERNAL_VISIBLE
+char *mf_store_component_index_path_at(const char *root,
+                                       const char *remote_id,
+                                       const char *channel);
+MF_INTERNAL_VISIBLE
+char *mf_store_catalog_dir_at(const char *root);
+MF_INTERNAL_VISIBLE
+char *mf_store_build_catalog_name(const char *origin);
+MF_INTERNAL_VISIBLE
+char *mf_store_origin_from_catalog_name(const char *name);
+MF_INTERNAL_VISIBLE
+char *mf_store_catalog_path_at(const char *root,
+                               const char *origin);
+MF_INTERNAL_VISIBLE
+char *mf_store_catalog_icons_root_at(const char *root);
+MF_INTERNAL_VISIBLE
+char *mf_store_catalog_icons_dir_at(const char *root,
+                                    const char *origin);
+
+/* the targets of relative links within the store */
+MF_INTERNAL_VISIBLE
+char *mf_store_build_image_link_target(const char *verity_hash);
+MF_INTERNAL_VISIBLE
+char *mf_store_build_catalog_link_target(const char *store_path);
+MF_INTERNAL_VISIBLE
+char *mf_store_build_catalog_icon_link_target(const char *store_path);
 
 /* direct access to a store by its root directory, without loading the store */
 MF_INTERNAL_VISIBLE

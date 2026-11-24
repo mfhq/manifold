@@ -197,8 +197,10 @@ mf_remote_check_channels(const char *remote_id, const char *const *channels, GEr
             g_set_error(error, MF_ERROR, MF_ERROR_FAILED, _("The channel %s is named twice"), channels[i]);
             return FALSE;
         }
-        if (strlen(remote_id) + 1 + strlen(channels[i]) + strlen(MF_STORE_CATALOG_FILE_SUFFIX) >
-            FILE_NAME_LENGTH_MAX) {
+        g_autofree char *origin = mf_origin_build_name(remote_id, channels[i]);
+        g_autofree char *catalog_name = mf_store_build_catalog_name(origin);
+
+        if (strlen(catalog_name) > FILE_NAME_LENGTH_MAX) {
             g_set_error(error,
                         MF_ERROR,
                         MF_ERROR_FAILED,
@@ -401,12 +403,10 @@ mf_remote_new_for_dirs(const char *vendor_dir,
 MfRemote *
 mf_remote_new_for_id(const char *remote_id, GError **error)
 {
+    g_autofree char *state_dir = mf_store_remotes_dir_at(MF_STORAGE_DIR);
+
     g_return_val_if_fail(remote_id != NULL, NULL);
-    return mf_remote_new_for_dirs(MF_REMOTES_VENDOR_DIR,
-                                  MF_REMOTES_ADMIN_DIR,
-                                  MF_STORAGE_DIR "/" MF_STORE_REMOTES_SUBDIR,
-                                  remote_id,
-                                  error);
+    return mf_remote_new_for_dirs(MF_REMOTES_VENDOR_DIR, MF_REMOTES_ADMIN_DIR, state_dir, remote_id, error);
 }
 
 /**
@@ -561,10 +561,9 @@ mf_remote_list_for_dirs(const char *vendor_dir, const char *admin_dir, const cha
 GPtrArray *
 mf_remote_list_all(GError **error)
 {
-    return mf_remote_list_for_dirs(MF_REMOTES_VENDOR_DIR,
-                                   MF_REMOTES_ADMIN_DIR,
-                                   MF_STORAGE_DIR "/" MF_STORE_REMOTES_SUBDIR,
-                                   error);
+    g_autofree char *state_dir = mf_store_remotes_dir_at(MF_STORAGE_DIR);
+
+    return mf_remote_list_for_dirs(MF_REMOTES_VENDOR_DIR, MF_REMOTES_ADMIN_DIR, state_dir, error);
 }
 
 /**
