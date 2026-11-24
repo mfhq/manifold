@@ -41,6 +41,7 @@ mfd_repo_request_new_install(const char *component_id, const char *origin)
 {
     MfdRepoRequest *request = g_new0(MfdRepoRequest, 1);
 
+    request->kind = MFD_REPO_REQUEST_INSTALL;
     request->component_id = g_strdup(component_id);
     request->origin = g_strdup(origin);
     return request;
@@ -58,6 +59,7 @@ mfd_repo_request_new_update(const char *const *component_ids)
 {
     MfdRepoRequest *request = g_new0(MfdRepoRequest, 1);
 
+    request->kind = MFD_REPO_REQUEST_UPDATE;
     request->update_ids = g_strdupv((GStrv) component_ids);
     return request;
 }
@@ -710,7 +712,7 @@ mfd_resolver_resolve(MfdRepoRequest *request,
     MfdResolver resolver = {set, store, fetcher, channel_set};
     g_autoptr(GPtrArray) updates = NULL;
 
-    if (request->component_id != NULL)
+    if (request->kind == MFD_REPO_REQUEST_INSTALL)
         return mfd_resolver_resolve_component(&resolver, request, error);
 
     updates = mfd_resolver_find_updates(&resolver,

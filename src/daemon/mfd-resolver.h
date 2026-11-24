@@ -17,15 +17,28 @@
 G_BEGIN_DECLS
 
 /**
+ * MfdRepoRequestKind:
+ * @MFD_REPO_REQUEST_INSTALL: install one component
+ * @MFD_REPO_REQUEST_UPDATE: update installed components
+ *
+ * The kind of a #MfdRepoRequest.
+ */
+typedef enum {
+    MFD_REPO_REQUEST_INSTALL,
+    MFD_REPO_REQUEST_UPDATE,
+} MfdRepoRequestKind;
+
+/**
  * MfdRepoRequest:
  *
  * A request to install or update components from the remotes.
  */
 typedef struct {
-    char    *component_id; /* the component to install, or NULL if this is an update request */
-    char    *origin;       /* the origin to install the component from, or NULL */
-    GStrv    update_ids;   /* the components to update, or NULL for all of them */
-    gboolean refreshed;    /* whether remotes were refreshed for the request, which we do only once */
+    MfdRepoRequestKind kind;
+    char              *component_id; /* the component to install, for an install request */
+    char              *origin;       /* the origin to install the component from, or NULL */
+    GStrv              update_ids;   /* the components to update, or NULL for all, for an update request */
+    gboolean           refreshed; /* whether remotes were refreshed for the request, which we do only once */
 } MfdRepoRequest;
 
 MfdRepoRequest *mfd_repo_request_new_install(const char *component_id,

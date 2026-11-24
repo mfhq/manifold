@@ -80,6 +80,22 @@ typedef struct _MfdRequest MfdRequest;
 typedef int (*MfdRequestFunc)(MfdService *service, MfdRequest *request);
 
 /**
+ * MfdPrivilegedState:
+ * @MFD_PRIVILEGED_NOT_ASKED: polkit was not asked for the second authorization
+ * @MFD_PRIVILEGED_ASKED: the request waits for polkit to answer
+ * @MFD_PRIVILEGED_AUTHORIZED: polkit authorized the caller to install privileged components
+ *
+ * The state of the second authorization of a request. A request needs it if
+ * it installs a privileged component, which is only known once the components
+ * to install are known.
+ */
+typedef enum {
+    MFD_PRIVILEGED_NOT_ASKED,
+    MFD_PRIVILEGED_ASKED,
+    MFD_PRIVILEGED_AUTHORIZED,
+} MfdPrivilegedState;
+
+/**
  * MfdRequest:
  *
  * A method call that changes the installation. We reply to it later: first
@@ -93,16 +109,17 @@ struct _MfdRequest {
     MfdService *service;
     sd_varlink *link;
     MfdRequestFunc run;
-    const char *method;       /* the method that was called, for the log */
-    const char *action_id;    /* the polkit action that the caller needs */
-    uid_t uid;                /* the calling user */
-    gboolean report_progress; /* the call was made with the 'more' flag */
-    MfTransactionFlags flags; /* the transaction flags of the call */
-    sd_bus_slot *polkit_slot; /* the authorization check in progress, or NULL */
+    const char *method;            /* the method that was called, for the log */
+    const char *action_id;         /* the polkit action that the caller needs */
+    uid_t uid;                     /* the calling user */
+    gboolean report_progress;      /* the call was made with the 'more' flag */
+    MfTransactionFlags flags;      /* the transaction flags of the call */
+    sd_bus_slot *polkit_slot;      /* the authorization check in progress, or NULL */
+    MfdPrivilegedState privileged; /* the second authorization, for installing privileged components */
 
     int bundle_fd; /* the bundle to install, or -1 */
-    MfdInstallSet *
-        install_set; /* the components to install, set once the bundle was read or the request was resolved */
+    /* the components to install, set once the bundle was read or the request was resolved */
+    MfdInstallSet *install_set;
     MfdRepoRequest *repo_request; /* the request to install from the remotes, or NULL */
     char *component_id;           /* the component to remove or mark */
     char *version;                /* the version to remove or mark, or NULL for all of them */
@@ -277,22 +294,6 @@ mfd_service_reply_error(sd_varlink *link, const GError *error)
 }
 
 /**
- * mfd_service_reply_result:
- *
- * Send the final reply of an operation, which describes its result.
- */
-static int
-mfd_service_reply_result(sd_varlink *link, MfResult *result)
-{
-    g_autoptr(sd_json_variant) reply = NULL;
-    int r;
-
-    if ((r = mf_result_to_reply(result, &reply)) < 0)
-        return r;
-    return sd_varlink_reply(link, reply);
-}
-
-/**
  * mfd_service_reply_result_or_error:
  * @result: (nullable): the result of the operation, or %NULL if it failed
  * @error: (nullable): why the operation failed, if @result is %NULL
@@ -304,12 +305,17 @@ mfd_service_reply_result(sd_varlink *link, MfResult *result)
 static int
 mfd_service_reply_result_or_error(sd_varlink *link, MfResult *result, const GError *error)
 {
+    g_autoptr(sd_json_variant) reply = NULL;
+    int r;
+
     if (result == NULL) {
         mfd_service_reply_error(link, error);
         return 0;
     }
 
-    return mfd_service_reply_result(link, result);
+    if ((r = mf_result_to_reply(result, &reply)) < 0)
+        return r;
+    return sd_varlink_reply(link, reply);
 }
 
 /**
@@ -657,6 +663,8 @@ mfd_service_on_polkit_reply(sd_bus_message *reply, void *userdata, sd_bus_error 
     r = mfd_policy_read_reply(reply, &error);
     if (r > 0) {
         g_message("User %u is authorized for %s", (guint) request->uid, request->action_id);
+        if (request->privileged == MFD_PRIVILEGED_ASKED)
+            request->privileged = MFD_PRIVILEGED_AUTHORIZED;
         mfd_service_queue_request(service, request);
         return 0;
     }
@@ -753,58 +761,6 @@ mfd_service_authorize(MfdService *service, MfdRequest *request, MfTransactionFla
 }
 
 /**
- * mfd_service_install_bundle:
- *
- * Install all components of a bundle, and reply to the call.
- *
- * We only know whether a bundle has a privileged component after reading it,
- * and we only read a bundle for a caller that is authorized to install bundles.
- * A bundle with a privileged component therefore needs a second authorization:
- * we pass the request to polkit again with the stricter action, and queue it
- * again once polkit has authorized the caller. Root and the user we are
- * running as are authorized for every action.
- */
-static int
-mfd_service_install_bundle(MfdService *service, MfdRequest *request)
-{
-    g_autoptr(MfResult) result = NULL;
-    g_autoptr(GError) error = NULL;
-
-    if (request->install_set == NULL) {
-        g_autoptr(MfBundle) bundle = NULL;
-
-        g_message("User %u requested to install a bundle", (guint) request->uid);
-
-        bundle = mf_bundle_new_from_fd(request->bundle_fd, &error);
-        if (bundle == NULL) {
-            mfd_service_reply_error(request->link, error);
-            return 0;
-        }
-
-        /* TODO: Verify the signature against trusted keys, once a host has some. */
-        if (mf_bundle_is_signed(bundle))
-            g_warning(
-                "The bundle is signed, but the signature was not verified: trusted keys are not supported yet");
-        else
-            g_warning("The bundle is not signed");
-
-        request->install_set = mfd_install_set_new_for_bundle(bundle);
-        if (!mf_peer_is_privileged(request->uid) && mfd_install_set_is_privileged(request->install_set)) {
-            request->action_id = MFD_POLKIT_ACTION_INSTALL_PRIVILEGED;
-            mfd_service_ask_polkit(service, request);
-            return MFD_REQUEST_DEFERRED;
-        }
-    }
-
-    result = mfd_manager_install_set(service->manager,
-                                     request->install_set,
-                                     mfd_request_get_progress_func(request),
-                                     request->link,
-                                     &error);
-    return mfd_service_reply_result_or_error(request->link, result, error);
-}
-
-/**
  * mfd_service_needs_privileged:
  *
  * Check whether a request still needs the second authorization from polkit.
@@ -817,32 +773,53 @@ mfd_service_install_bundle(MfdService *service, MfdRequest *request)
 static gboolean
 mfd_service_needs_privileged(MfdService *service, MfdRequest *request)
 {
-    if (mf_peer_is_privileged(request->uid) ||
-        g_str_equal(request->action_id, MFD_POLKIT_ACTION_INSTALL_PRIVILEGED))
+    if (mf_peer_is_privileged(request->uid) || request->privileged == MFD_PRIVILEGED_AUTHORIZED)
         return FALSE;
-    /* a request without a component to install is an update */
-    if (request->repo_request->component_id == NULL)
+    if (request->repo_request != NULL && request->repo_request->kind == MFD_REPO_REQUEST_UPDATE)
         return mfd_manager_install_set_gains_privileges(service->manager, request->install_set);
 
     return mfd_install_set_is_privileged(request->install_set);
 }
 
+static int mfd_service_install_request_set(MfdService *service, MfdRequest *request);
+
 /**
- * mfd_service_install_from_remotes:
+ * mfd_service_ask_for_privileged:
  *
- * Install the components of the request from the remotes, with the bases
- * they need, and reply to the call.
+ * Pass a request to polkit again, for the action that allows installing
+ * privileged components. Once polkit has authorized the caller, the request
+ * is queued again and continues with mfd_service_install_request_set().
  *
- * Like for bundles, a privileged component needs a second authorization.
- * We can only ask polkit for it once the request is resolved, as we need
- * the manifest of the component to know whether it is privileged.
- *
- * If the installation fails because a repository has changed since the last
- * refresh, we refresh the remotes once and resolve the request again. The
- * new install set is then checked for privileged components again.
+ * Returns: %MFD_REQUEST_DEFERRED
  */
 static int
-mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
+mfd_service_ask_for_privileged(MfdService *service, MfdRequest *request)
+{
+    request->action_id = MFD_POLKIT_ACTION_INSTALL_PRIVILEGED;
+    request->privileged = MFD_PRIVILEGED_ASKED;
+    request->run = mfd_service_install_request_set;
+    /* NOTE: The request is freed already if polkit could not be asked */
+    mfd_service_ask_polkit(service, request);
+
+    return MFD_REQUEST_DEFERRED;
+}
+
+/**
+ * mfd_service_install_request_set:
+ *
+ * Install the components of a request, and reply to the call. The install
+ * set of a bundle exists already. For a request to the remotes, we resolve
+ * the request first, which creates its install set.
+ *
+ * An install set with a privileged component needs the second authorization,
+ * see #MfdPrivilegedState and mfd_service_ask_for_privileged().
+ *
+ * If installing from the remotes fails because a repository has changed
+ * since the last refresh, we refresh the remotes once and resolve the request
+ * again. The new install set is then checked for privileged components again.
+ */
+static int
+mfd_service_install_request_set(MfdService *service, MfdRequest *request)
 {
     g_autoptr(MfResult) result = NULL;
     g_autoptr(GError) error = NULL;
@@ -856,31 +833,58 @@ mfd_service_install_from_remotes(MfdService *service, MfdRequest *request)
                 mfd_service_reply_error(request->link, error);
                 return 0;
             }
-            if (mfd_service_needs_privileged(service, request)) {
-                request->action_id = MFD_POLKIT_ACTION_INSTALL_PRIVILEGED;
-                mfd_service_ask_polkit(service, request);
-                return MFD_REQUEST_DEFERRED;
-            }
         }
+        if (mfd_service_needs_privileged(service, request))
+            return mfd_service_ask_for_privileged(service, request);
 
         result = mfd_manager_install_set(service->manager,
                                          request->install_set,
                                          mfd_request_get_progress_func(request),
                                          request->link,
                                          &error);
-        if (result != NULL)
-            return mfd_service_reply_result(request->link, result);
-        if (!mfd_manager_refresh_for_retry(service->manager,
+        /* only a request to the remotes can be tried again, after a refresh */
+        if (result != NULL || request->repo_request == NULL ||
+            !mfd_manager_refresh_for_retry(service->manager,
                                            request->repo_request,
                                            request->install_set,
-                                           error)) {
-            mfd_service_reply_error(request->link, error);
-            return 0;
-        }
+                                           error))
+            return mfd_service_reply_result_or_error(request->link, result, error);
 
         g_clear_pointer(&request->install_set, mfd_install_set_free);
         g_clear_error(&error);
     }
+}
+
+/**
+ * mfd_service_install_bundle:
+ *
+ * Read the bundle of the request, install all of its components, and reply
+ * to the call.
+ */
+static int
+mfd_service_install_bundle(MfdService *service, MfdRequest *request)
+{
+    g_autoptr(MfBundle) bundle = NULL;
+    g_autoptr(GError) error = NULL;
+
+    g_message("User %u requested to install a bundle", (guint) request->uid);
+
+    bundle = mf_bundle_new_from_fd(request->bundle_fd, &error);
+    if (bundle == NULL) {
+        mfd_service_reply_error(request->link, error);
+        return 0;
+    }
+
+    /* TODO: Verify the signature against trusted keys, once a host has some. */
+    if (mf_bundle_is_signed(bundle))
+        g_warning(
+            "The bundle is signed, but the signature was not verified: trusted keys are not supported yet");
+    else
+        g_warning("The bundle is not signed");
+
+    request->install_set = mfd_install_set_new_for_bundle(bundle);
+
+    return mfd_service_install_request_set(service, request);
 }
 
 /**
@@ -893,14 +897,13 @@ mfd_service_install_component(MfdService *service, MfdRequest *request)
 {
     MfdRepoRequest *repo_request = request->repo_request;
 
-    if (request->install_set == NULL)
-        g_message("User %u requested to install %s%s%s",
-                  (guint) request->uid,
-                  repo_request->component_id,
-                  repo_request->origin != NULL ? " from " : "",
-                  repo_request->origin != NULL ? repo_request->origin : "");
+    g_message("User %u requested to install %s%s%s",
+              (guint) request->uid,
+              repo_request->component_id,
+              repo_request->origin != NULL ? " from " : "",
+              repo_request->origin != NULL ? repo_request->origin : "");
 
-    return mfd_service_install_from_remotes(service, request);
+    return mfd_service_install_request_set(service, request);
 }
 
 /**
@@ -911,12 +914,11 @@ mfd_service_install_component(MfdService *service, MfdRequest *request)
 static int
 mfd_service_update(MfdService *service, MfdRequest *request)
 {
-    if (request->install_set == NULL)
-        g_message("User %u requested to update %s",
-                  (guint) request->uid,
-                  request->repo_request->update_ids != NULL ? "some components" : "all components");
+    g_message("User %u requested to update %s",
+              (guint) request->uid,
+              request->repo_request->update_ids != NULL ? "some components" : "all components");
 
-    return mfd_service_install_from_remotes(service, request);
+    return mfd_service_install_request_set(service, request);
 }
 
 /**
@@ -932,8 +934,7 @@ typedef struct {
 } MfdMethod;
 
 /* NOTE: Installing a privileged component needs MFD_POLKIT_ACTION_INSTALL_PRIVILEGED in
- * addition, which is only known once the components to install are known. See
- * mfd_service_install_bundle() and mfd_service_install_from_remotes(). */
+ * addition, see mfd_service_install_request_set() */
 static const MfdMethod METHODS[] = {
     {MF_VARLINK_METHOD_INSTALL_FILE,      MFD_POLKIT_ACTION_INSTALL_UNTRUSTED, mfd_service_install_bundle   },
     {MF_VARLINK_METHOD_INSTALL_COMPONENT, MFD_POLKIT_ACTION_INSTALL,           mfd_service_install_component},
