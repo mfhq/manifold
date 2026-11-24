@@ -173,14 +173,14 @@ test_state(Fixture *f, gconstpointer user_data)
     g_autoptr(MfRemote) remote = NULL;
     g_autoptr(GError) error = NULL;
     g_autofree char *valid_until = NULL;
+    MfRemoteInfo *info;
 
     mft_write_remote(f->vendor_dir, "example", "[Remote]\nURL=https://example.org/repo\n");
 
     /* nothing is known before the first refresh */
     remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, state_dir, "example", &error);
     g_assert_no_error(error);
-    g_assert_null(mf_remote_get_summary(remote));
-    g_assert_null(mf_remote_get_valid_until(remote));
+    g_assert_null(mf_remote_get_info(remote));
     g_clear_object(&remote);
 
     g_assert_false(ZSTD_isError(size));
@@ -188,10 +188,18 @@ test_state(Fixture *f, gconstpointer user_data)
     g_assert_true(g_file_set_contents(index_path, (const char *) compressed, (ssize_t) size, NULL));
     remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, state_dir, "example", &error);
     g_assert_no_error(error);
-    g_assert_cmpstr(mf_remote_get_summary(remote), ==, "Example applications");
-    g_assert_cmpstr(mf_remote_get_publisher_name(remote), ==, "Example Inc.");
-    g_assert_cmpstr(mf_remote_get_publisher_email(remote), ==, "repo@example.org");
-    valid_until = g_date_time_format_iso8601(mf_remote_get_valid_until(remote));
+    info = mf_remote_get_info(remote);
+    g_assert_nonnull(info);
+    g_assert_cmpstr(mf_remote_info_get_id(info), ==, "example");
+    g_assert_cmpstr(mf_remote_info_get_url(info), ==, "https://example.org/repo");
+    g_assert_cmpstr(mf_remote_info_get_summary(info), ==, "Example applications");
+    g_assert_cmpstr(mf_remote_info_get_publisher_name(info), ==, "Example Inc.");
+    g_assert_cmpstr(mf_remote_info_get_publisher_email(info), ==, "repo@example.org");
+    /* the cached root index is not verified, so the description has no key */
+    g_assert_null(mf_remote_info_get_public_key(info));
+    g_assert_null(mf_remote_info_get_fingerprint(info));
+    g_assert_cmpuint(g_strv_length((GStrv) mf_remote_info_get_available_channels(info)), ==, 0);
+    valid_until = g_date_time_format_iso8601(mf_remote_info_get_valid_until(info));
     g_assert_cmpstr(valid_until, ==, "2027-05-04T14:57:58Z");
 }
 

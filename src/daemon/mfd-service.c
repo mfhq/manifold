@@ -21,6 +21,7 @@
 #include "mf-component-private.h"
 #include "mf-manager-interface.h"
 #include "mf-progress-private.h"
+#include "mf-remote-info-private.h"
 #include "mf-remote-private.h"
 #include "mf-result-private.h"
 #include "mf-sdautoptr-private.h"
@@ -433,10 +434,10 @@ static int
 mfd_service_inspect_remote(MfdService *service, MfdRequest *request)
 {
     g_autoptr(MfdRemoteInspection) inspection = NULL;
+    g_autoptr(MfRemoteInfo) info = NULL;
+    g_autoptr(sd_json_variant) reply = NULL;
     g_autoptr(GError) error = NULL;
-    g_auto(GStrv) channels = NULL;
-    g_autofree char *valid_until = NULL;
-    MfRepoRootIndex *index;
+    int r;
 
     g_message("User %u requested to inspect the repository at %s", (guint) request->uid, request->url);
 
@@ -445,27 +446,11 @@ mfd_service_inspect_remote(MfdService *service, MfdRequest *request)
         mfd_service_reply_error(request->link, error);
         return 0;
     }
-    index = inspection->index;
-    channels = mfd_remote_inspection_list_channels(inspection);
-    valid_until = g_date_time_format_iso8601(index->valid_until);
 
-    return sd_varlink_replybo(
-        request->link,
-        SD_JSON_BUILD_PAIR(
-            "remote",
-            SD_JSON_BUILD_OBJECT(SD_JSON_BUILD_PAIR_STRING("id", index->id),
-                                 SD_JSON_BUILD_PAIR_STRING("url", inspection->url),
-                                 SD_JSON_BUILD_PAIR_STRING("summary", index->summary),
-                                 SD_JSON_BUILD_PAIR_CONDITION(index->publisher_name != NULL,
-                                                              "publisherName",
-                                                              SD_JSON_BUILD_STRING(index->publisher_name)),
-                                 SD_JSON_BUILD_PAIR_CONDITION(index->publisher_email != NULL,
-                                                              "publisherEmail",
-                                                              SD_JSON_BUILD_STRING(index->publisher_email)),
-                                 SD_JSON_BUILD_PAIR_STRING("validUntil", valid_until),
-                                 SD_JSON_BUILD_PAIR("channels", SD_JSON_BUILD_STRV(channels)),
-                                 SD_JSON_BUILD_PAIR_STRING("publicKey", inspection->public_key),
-                                 SD_JSON_BUILD_PAIR_STRING("fingerprint", index->key_fingerprint))));
+    info = mf_remote_info_new_for_root_index(inspection->index, inspection->url, inspection->public_key);
+    if ((r = mf_remote_info_to_reply(info, &reply)) < 0)
+        return r;
+    return sd_varlink_reply(request->link, reply);
 }
 
 /**

@@ -12,14 +12,17 @@
 
 #include <glib-object.h>
 
-#include "mf-remote.h"
-
 G_BEGIN_DECLS
 
 #define MF_TYPE_REMOTE_INFO (mf_remote_info_get_type())
 G_DECLARE_FINAL_TYPE(MfRemoteInfo, mf_remote_info, MF, REMOTE_INFO, GObject)
 
-MfRemote          *mf_remote_info_get_remote(MfRemoteInfo *info);
+const char        *mf_remote_info_get_id(MfRemoteInfo *info);
+const char        *mf_remote_info_get_url(MfRemoteInfo *info);
+const char        *mf_remote_info_get_summary(MfRemoteInfo *info);
+const char        *mf_remote_info_get_publisher_name(MfRemoteInfo *info);
+const char        *mf_remote_info_get_publisher_email(MfRemoteInfo *info);
+GDateTime         *mf_remote_info_get_valid_until(MfRemoteInfo *info);
 const char *const *mf_remote_info_get_available_channels(MfRemoteInfo *info);
 const char        *mf_remote_info_get_public_key(MfRemoteInfo *info);
 const char        *mf_remote_info_get_fingerprint(MfRemoteInfo *info);

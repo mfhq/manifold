@@ -33,8 +33,6 @@ typedef struct {
 void mfd_remote_inspection_free(MfdRemoteInspection *inspection);
 G_DEFINE_AUTOPTR_CLEANUP_FUNC(MfdRemoteInspection, mfd_remote_inspection_free)
 
-GStrv                mfd_remote_inspection_list_channels(MfdRemoteInspection *inspection);
-
 MfdRemoteInspection *mfd_remotes_inspect(MfdFetcher *fetcher,
                                          const char *url,
                                          const char *public_key,

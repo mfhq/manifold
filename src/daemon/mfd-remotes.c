@@ -47,28 +47,6 @@ mfd_remote_inspection_free(MfdRemoteInspection *inspection)
 }
 
 /**
- * mfd_remote_inspection_list_channels:
- *
- * Returns: (transfer full): the channels of the repository that have
- *   components for the architecture of this system
- */
-GStrv
-mfd_remote_inspection_list_channels(MfdRemoteInspection *inspection)
-{
-    const char *architecture = mf_get_host_architecture();
-    g_autoptr(GStrvBuilder) builder = g_strv_builder_new();
-
-    for (guint i = 0; i < inspection->index->channels->len; i++) {
-        MfRepoChannel *channel = g_ptr_array_index(inspection->index->channels, i);
-
-        if (mf_repo_channel_find_architecture(channel, architecture) != NULL)
-            g_strv_builder_add(builder, channel->name);
-    }
-
-    return g_strv_builder_end(builder);
-}
-
-/**
  * mfd_fetch_public_key:
  * @url: the URL of the repository
  * @remote_id: the ID of the repository, from its root index
@@ -203,7 +181,7 @@ mfd_remotes_check_channels(MfdRemoteInspection *inspection, const char *const *c
 {
     const char *remote_id = inspection->index->id;
     const char *architecture = mf_get_host_architecture();
-    g_auto(GStrv) available = mfd_remote_inspection_list_channels(inspection);
+    g_auto(GStrv) available = mf_repo_root_index_list_channels(inspection->index, architecture);
     g_autofree char *names = NULL;
 
     if (!mf_remote_check_channels(remote_id, channels, error))

@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <systemd/sd-json.h>
 
 #include "mf-remote.h"
 #include "mf-macros-private.h"
@@ -54,8 +53,6 @@ GPtrArray *mf_remote_list_for_dirs(const char *vendor_dir,
                                    const char *admin_dir,
                                    const char *state_dir,
                                    GError    **error);
-
-MfRemote  *mf_remote_new_from_json(sd_json_variant *object);
 
 MF_INTERNAL_VISIBLE
 char *mf_remote_build_url(MfRemote   *remote,

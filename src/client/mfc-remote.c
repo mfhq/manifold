@@ -38,32 +38,36 @@ static const GOptionEntry remote_add_options[] = {
 
 /**
  * mfc_print_remote:
+ * @remote_id: the ID of the remote
+ * @url: the URL of its repository
+ * @info: (nullable): the description of the repository, or %NULL if the
+ *   remote was not refreshed yet
  * @channels: the enabled channels of the remote
  *
- * Print the configuration of a remote, together with the publisher and the
- * expiry date from the cached metadata of its repository.
+ * Print the configuration of a remote, together with the description of
+ * its repository.
  */
 static void
-mfc_print_remote(MfRemote *remote, const char *const *channels)
+mfc_print_remote(const char *remote_id, const char *url, MfRemoteInfo *info, const char *const *channels)
 {
-    const char *summary = mf_remote_get_summary(remote);
-    const char *publisher = mf_remote_get_publisher_name(remote);
-    const char *email = mf_remote_get_publisher_email(remote);
-    GDateTime *valid_until = mf_remote_get_valid_until(remote);
+    const char *summary = info != NULL ? mf_remote_info_get_summary(info) : NULL;
+    const char *publisher = info != NULL ? mf_remote_info_get_publisher_name(info) : NULL;
+    const char *email = info != NULL ? mf_remote_info_get_publisher_email(info) : NULL;
+    GDateTime *valid_until = info != NULL ? mf_remote_info_get_valid_until(info) : NULL;
     g_autoptr(GDateTime) now = g_date_time_new_now_utc();
     g_autofree char *channel_list = g_strjoinv(", ", (char **) channels);
 
     if (summary != NULL)
-        g_print("%s: %s\n", mf_remote_get_id(remote), summary);
+        g_print("%s: %s\n", remote_id, summary);
     else
-        g_print("%s\n", mf_remote_get_id(remote));
+        g_print("%s\n", remote_id);
     if (publisher != NULL && email != NULL)
         /* TRANSLATORS: name and email address of the publisher of a repository */
         g_print(_("  Publisher: %s <%s>\n"), publisher, email);
     else if (publisher != NULL)
         /* TRANSLATORS: name of the publisher of a repository */
         g_print(_("  Publisher: %s\n"), publisher);
-    g_print(_("  URL: %s\n"), mf_remote_get_url(remote));
+    g_print(_("  URL: %s\n"), url);
     g_print(_("  Channels: %s\n"), channel_list);
 
     if (valid_until == NULL) {
@@ -115,10 +119,14 @@ mfc_run_remote_list_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **a
     }
 
     for (guint i = 0; i < remotes->len; i++) {
+        MfRemote *remote = g_ptr_array_index(remotes, i);
+
         if (i > 0)
             g_print("\n");
-        mfc_print_remote(g_ptr_array_index(remotes, i),
-                         mf_remote_get_channels(g_ptr_array_index(remotes, i)));
+        mfc_print_remote(mf_remote_get_id(remote),
+                         mf_remote_get_url(remote),
+                         mf_remote_get_info(remote),
+                         mf_remote_get_channels(remote));
     }
 
     return MFC_EXIT_SUCCESS;
@@ -157,7 +165,7 @@ mfc_read_public_key(const char *path)
 static gboolean
 mfc_check_remote_info(MfRemoteInfo *info, const char *const *channels)
 {
-    const char *remote_id = mf_remote_get_id(mf_remote_info_get_remote(info));
+    const char *remote_id = mf_remote_info_get_id(info);
     const char *const *available = mf_remote_info_get_available_channels(info);
     g_autoptr(MfRemote) existing = mf_remote_new_for_id(remote_id, NULL);
 
@@ -193,7 +201,6 @@ mfc_run_remote_add_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **ar
     g_autofree char *channel_list = NULL;
     const char *const *channels;
     const char *url;
-    MfRemote *remote;
     int ret;
 
     context = mfc_option_context_for_command(cmd, remote_add_options);
@@ -231,10 +238,9 @@ mfc_run_remote_add_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **ar
         g_printerr(_("Unable to add the repository at %s: %s\n"), url, error->message);
         return MFC_EXIT_FAILURE;
     }
-    remote = mf_remote_info_get_remote(info);
     if (!mfc_check_remote_info(info, channels))
         return MFC_EXIT_FAILURE;
-    mfc_print_remote(remote, channels);
+    mfc_print_remote(mf_remote_info_get_id(info), mf_remote_info_get_url(info), info, channels);
     /* TRANSLATORS: the fingerprint of the key that signs a repository */
     g_print(_("  Key: %s\n"), mf_remote_info_get_fingerprint(info));
 
@@ -246,8 +252,8 @@ mfc_run_remote_add_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **ar
     }
 
     result = mf_manager_add_remote(mfc_context_get_manager(ctx),
-                                   mf_remote_get_id(remote),
-                                   mf_remote_get_url(remote),
+                                   mf_remote_info_get_id(info),
+                                   mf_remote_info_get_url(info),
                                    mf_remote_info_get_public_key(info),
                                    channels,
                                    mfc_on_progress,
@@ -256,13 +262,13 @@ mfc_run_remote_add_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **ar
                                    &error);
     mfc_progress_bar_finish(ctx->progress_bar);
     if (result == NULL) {
-        g_printerr(_("Unable to add the remote %s: %s\n"), mf_remote_get_id(remote), error->message);
+        g_printerr(_("Unable to add the remote %s: %s\n"), mf_remote_info_get_id(info), error->message);
         return MFC_EXIT_FAILURE;
     }
 
     channel_list = g_strjoinv(", ", (char **) channels);
     /* TRANSLATORS: the ID of the new remote, and a list of its enabled channels */
-    g_print(_("Added the remote %s, which installs from %s.\n"), mf_remote_get_id(remote), channel_list);
+    g_print(_("Added the remote %s, which installs from %s.\n"), mf_remote_info_get_id(info), channel_list);
     mfc_print_result(result);
 
     return MFC_EXIT_SUCCESS;

@@ -595,6 +595,27 @@ mf_repo_root_index_find_architecture(MfRepoRootIndex *index,
 }
 
 /**
+ * mf_repo_root_index_list_channels:
+ *
+ * Returns: (transfer full): the names of the channels of the repository
+ *   that have components for @architecture
+ */
+GStrv
+mf_repo_root_index_list_channels(MfRepoRootIndex *index, const char *architecture)
+{
+    g_autoptr(GStrvBuilder) builder = g_strv_builder_new();
+
+    for (guint i = 0; i < index->channels->len; i++) {
+        MfRepoChannel *channel = g_ptr_array_index(index->channels, i);
+
+        if (mf_repo_channel_find_architecture(channel, architecture) != NULL)
+            g_strv_builder_add(builder, channel->name);
+    }
+
+    return g_strv_builder_end(builder);
+}
+
+/**
  * mf_repo_root_index_is_expired:
  *
  * Returns: %TRUE if the root index is not valid anymore at the time @now

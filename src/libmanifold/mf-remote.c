@@ -10,10 +10,10 @@
 
 #include <string.h>
 #include <glib/gi18n-lib.h>
-#include <systemd/sd-json.h>
 
 #include "mf-bundle-private.h"
 #include "mf-error.h"
+#include "mf-remote-info-private.h"
 #include "mf-repo-private.h"
 #include "mf-store-private.h"
 #include "mf-utils-private.h"
@@ -37,8 +37,8 @@
  * link to `/dev/null` in `/etc` masks the remote. The keys in the `keys/`
  * subdirectory of both directories are trusted to sign the repository.
  *
- * A remote that mf_remote_info_get_remote() returns is not configured yet. It
- * describes a repository, but has no channels and no trusted keys.
+ * The description of the repository of a remote is read from its cached
+ * metadata, see mf_remote_get_info().
  */
 
 /* the longest name a file can have. The catalog file of a channel is named after its origin. */
@@ -50,14 +50,14 @@ struct _MfRemote {
     char *id;
     char *url;
     GStrv channels;
-    char *vendor_dir; /* the directory of the remote in the vendor directory, or NULL */
-    char *admin_dir;  /* the directory of the remote in the administrator directory, or NULL */
+    char *vendor_dir; /* the directory of the remote in the vendor directory */
+    char *admin_dir;  /* the directory of the remote in the administrator directory */
+    char *state_dir;  /* the directory with the cached metadata of all remotes, or NULL */
 
-    /* the description of the repository from its cached root index, if there is one */
-    char *summary;
-    char *publisher_name;
-    char *publisher_email;
-    GDateTime *valid_until;
+    /* the description of the repository from its cached root index. It is read when it
+     * is requested first, and is NULL if the remote was not refreshed yet. */
+    MfRemoteInfo *info;
+    gboolean info_loaded;
 };
 
 G_DEFINE_FINAL_TYPE(MfRemote, mf_remote, G_TYPE_OBJECT)
@@ -72,10 +72,8 @@ mf_remote_finalize(GObject *object)
     g_strfreev(remote->channels);
     g_free(remote->vendor_dir);
     g_free(remote->admin_dir);
-    g_free(remote->summary);
-    g_free(remote->publisher_name);
-    g_free(remote->publisher_email);
-    g_clear_pointer(&remote->valid_until, g_date_time_unref);
+    g_free(remote->state_dir);
+    g_clear_object(&remote->info);
 
     G_OBJECT_CLASS(mf_remote_parent_class)->finalize(object);
 }
@@ -294,37 +292,6 @@ mf_remote_read_channels(GKeyFile *config, const char *config_path, const char *r
 }
 
 /**
- * mf_remote_read_state:
- * @state_dir: the directory with the cached metadata of all remotes
- *
- * Read the description of the repository from the cached root index of the
- * remote, if there is one.
- */
-static void
-mf_remote_read_state(MfRemote *remote, const char *state_dir)
-{
-    g_autofree char *path = g_build_filename(state_dir, remote->id, MF_REPO_ROOT_INDEX_NAME, NULL);
-    g_autoptr(GMappedFile) file = g_mapped_file_new(path, FALSE, NULL);
-    g_autoptr(GBytes) data = NULL;
-    g_autoptr(MfRepoRootIndex) index = NULL;
-    g_autoptr(GError) error = NULL;
-
-    if (file == NULL)
-        return;
-    data = g_mapped_file_get_bytes(file);
-    index = mf_repo_root_index_new_from_stored(data, remote->id, &error);
-    if (index == NULL) {
-        g_debug("Unable to read the cached root index of %s: %s", remote->id, error->message);
-        return;
-    }
-
-    remote->summary = g_steal_pointer(&index->summary);
-    remote->publisher_name = g_steal_pointer(&index->publisher_name);
-    remote->publisher_email = g_steal_pointer(&index->publisher_email);
-    remote->valid_until = g_date_time_ref(index->valid_until);
-}
-
-/**
  * mf_remote_new_for_dirs:
  * @vendor_dir: the directory with the remotes that vendors ship
  * @admin_dir: the directory with the remotes of the administrator
@@ -384,8 +351,7 @@ mf_remote_new_for_dirs(const char *vendor_dir,
     remote->channels = mf_remote_read_channels(config, config_path, remote_id, error);
     if (remote->channels == NULL)
         return NULL;
-    if (state_dir != NULL)
-        mf_remote_read_state(remote, state_dir);
+    remote->state_dir = g_strdup(state_dir);
 
     return g_steal_pointer(&remote);
 }
@@ -407,76 +373,6 @@ mf_remote_new_for_id(const char *remote_id, GError **error)
 
     g_return_val_if_fail(remote_id != NULL, NULL);
     return mf_remote_new_for_dirs(MF_REMOTES_VENDOR_DIR, MF_REMOTES_ADMIN_DIR, state_dir, remote_id, error);
-}
-
-/**
- * mf_remote_new_from_json:
- * @object: the description of a repository, from the reply of the service
- *   to a request to inspect the repository
- *
- * Create a remote for a repository that is not configured as a remote yet.
- * It has no channels and no trusted keys.
- *
- * Returns: (transfer full) (nullable): the remote, or %NULL if @object does not
- *   describe a repository
- */
-MfRemote *
-mf_remote_new_from_json(sd_json_variant *object)
-{
-    struct {
-        const char *id;
-        const char *url;
-        const char *summary;
-        const char *publisher_name;
-        const char *publisher_email;
-        const char *valid_until;
-    } fields = {};
-    static const sd_json_dispatch_field fields_table[] = {
-        {"id",
-         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
-         offsetof(typeof(fields), id),
-         SD_JSON_MANDATORY},
-        {"url",
-         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
-         offsetof(typeof(fields), url),
-         SD_JSON_MANDATORY},
-        {"summary",
-         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
-         offsetof(typeof(fields), summary),
-         SD_JSON_MANDATORY},
-        {"publisherName",
-         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
-         offsetof(typeof(fields), publisher_name),
-         0},
-        {"publisherEmail",
-         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
-         offsetof(typeof(fields), publisher_email),
-         0},
-        {"validUntil",
-         SD_JSON_VARIANT_STRING, sd_json_dispatch_const_string,
-         offsetof(typeof(fields), valid_until),
-         SD_JSON_MANDATORY},
-        {},
-    };
-    g_autoptr(MfRemote) remote = NULL;
-    g_autoptr(GDateTime) valid_until = NULL;
-
-    if (sd_json_dispatch(object, fields_table, SD_JSON_ALLOW_EXTENSIONS, &fields) < 0)
-        return NULL;
-    valid_until = g_date_time_new_from_iso8601(fields.valid_until, NULL);
-    if (valid_until == NULL || !mf_remote_id_is_valid(fields.id))
-        return NULL;
-
-    remote = g_object_new(MF_TYPE_REMOTE, NULL);
-    remote->id = g_strdup(fields.id);
-    remote->url = g_strdup(fields.url);
-    remote->channels = g_new0(char *, 1);
-    remote->summary = g_strdup(fields.summary);
-    remote->publisher_name = g_strdup(fields.publisher_name);
-    remote->publisher_email = g_strdup(fields.publisher_email);
-    remote->valid_until = g_steal_pointer(&valid_until);
-
-    return g_steal_pointer(&remote);
 }
 
 /**
@@ -625,62 +521,47 @@ mf_remote_get_channels(MfRemote *remote)
 }
 
 /**
- * mf_remote_get_summary:
+ * mf_remote_get_info:
  * @remote: an #MfRemote
  *
- * Returns: (nullable): a short description of the repository, or %NULL if
- *   the remote was not refreshed yet
+ * Get the description of the repository of the remote, as of the last
+ * refresh. It is read from the cached metadata of the remote when this
+ * function is called first.
+ *
+ * NOTE: The cached metadata is not verified here, as it is only displayed.
+ * The service verifies it before it installs anything from the remote.
+ *
+ * Returns: (transfer none) (nullable): the description of the repository, or
+ *   %NULL if the remote was not refreshed yet
  */
-const char *
-mf_remote_get_summary(MfRemote *remote)
+MfRemoteInfo *
+mf_remote_get_info(MfRemote *remote)
 {
-    g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
-    return remote->summary;
-}
+    g_autofree char *path = NULL;
+    g_autoptr(GMappedFile) file = NULL;
+    g_autoptr(GBytes) data = NULL;
+    g_autoptr(MfRepoRootIndex) index = NULL;
+    g_autoptr(GError) error = NULL;
 
-/**
- * mf_remote_get_publisher_name:
- * @remote: an #MfRemote
- *
- * Returns: (nullable): the name of the publisher of the repository, or %NULL
- *   if it is not known, or the remote was not refreshed yet
- */
-const char *
-mf_remote_get_publisher_name(MfRemote *remote)
-{
     g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
-    return remote->publisher_name;
-}
 
-/**
- * mf_remote_get_publisher_email:
- * @remote: an #MfRemote
- *
- * Returns: (nullable): the email address of the publisher of the
- *   repository, or %NULL if there is none
- */
-const char *
-mf_remote_get_publisher_email(MfRemote *remote)
-{
-    g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
-    return remote->publisher_email;
-}
+    if (remote->info_loaded || remote->state_dir == NULL)
+        return remote->info;
+    remote->info_loaded = TRUE;
 
-/**
- * mf_remote_get_valid_until:
- * @remote: an #MfRemote
- *
- * Nothing is installed from a remote with expired metadata, until the remote
- * is refreshed.
- *
- * Returns: (nullable) (transfer none): the time at which the cached metadata
- *   of the remote expires, or %NULL if the remote was not refreshed yet
- */
-GDateTime *
-mf_remote_get_valid_until(MfRemote *remote)
-{
-    g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
-    return remote->valid_until;
+    path = g_build_filename(remote->state_dir, remote->id, MF_REPO_ROOT_INDEX_NAME, NULL);
+    file = g_mapped_file_new(path, FALSE, NULL);
+    if (file == NULL)
+        return NULL;
+    data = g_mapped_file_get_bytes(file);
+    index = mf_repo_root_index_new_from_stored(data, remote->id, &error);
+    if (index == NULL) {
+        g_debug("Unable to read the cached root index of %s: %s", remote->id, error->message);
+        return NULL;
+    }
+    remote->info = mf_remote_info_new_for_root_index(index, remote->url, NULL);
+
+    return remote->info;
 }
 
 /**
@@ -703,12 +584,6 @@ mf_remote_load_trusted_keys(MfRemote *remote, GError **error)
     g_autofree char *admin_keys = NULL;
 
     g_return_val_if_fail(MF_IS_REMOTE(remote), NULL);
-
-    /* a repository that was only inspected has no directories to read keys from */
-    if (remote->vendor_dir == NULL || remote->admin_dir == NULL) {
-        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, _("The remote %s is not configured"), remote->id);
-        return NULL;
-    }
 
     vendor_keys = g_build_filename(remote->vendor_dir, MF_REMOTE_KEYS_SUBDIR, NULL);
     admin_keys = g_build_filename(remote->admin_dir, MF_REMOTE_KEYS_SUBDIR, NULL);
