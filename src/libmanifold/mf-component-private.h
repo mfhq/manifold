@@ -39,11 +39,17 @@ MfComponent *mf_component_new_from_reply(sd_json_variant *variant,
                                          GError         **error);
 GPtrArray   *mf_component_array_from_reply(sd_json_variant *list,
                                            GError         **error);
+MF_INTERNAL_VISIBLE
+int mf_component_to_json(MfComponent      *component,
+                         sd_json_variant **ret_variant);
+MF_INTERNAL_VISIBLE
+int  mf_component_array_to_json(GPtrArray        *components,
+                                sd_json_variant **ret_array);
 
-void         mf_component_set_manifest(MfComponent *component,
-                                       MfManifest  *manifest);
+void mf_component_set_manifest(MfComponent *component,
+                               MfManifest  *manifest);
 
-int          mf_component_compare(gconstpointer a,
-                                  gconstpointer b);
+int  mf_component_compare(gconstpointer a,
+                          gconstpointer b);
 
 MF_END_PRIVATE_DECLS

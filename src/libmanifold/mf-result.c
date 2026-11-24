@@ -7,10 +7,13 @@
 #include "config.h"
 #include "mf-result-private.h"
 
+#include <errno.h>
 #include <glib/gi18n-lib.h>
 
 #include "mf-component-private.h"
 #include "mf-error.h"
+#include "mf-json-private.h"
+#include "mf-sdautoptr-private.h"
 
 /**
  * MfUpdate:
@@ -477,6 +480,61 @@ mf_result_read_strings(sd_json_variant *array, GPtrArray *strings, GError **erro
 }
 
 /**
+ * mf_result_build_strings:
+ * @strings: (element-type utf8): the strings to put into the array
+ * @ret_array: (out): the JSON array
+ *
+ * Returns: 0, or a negative errno
+ */
+static int
+mf_result_build_strings(GPtrArray *strings, sd_json_variant **ret_array)
+{
+    g_autoptr(sd_json_variant) array = NULL;
+    int r;
+
+    for (guint i = 0; i < strings->len; i++) {
+        r = sd_json_variant_append_arrayb(&array, SD_JSON_BUILD_STRING(g_ptr_array_index(strings, i)));
+        if (r < 0)
+            return r;
+    }
+    if ((r = mf_json_ensure_array(&array)) < 0)
+        return r;
+
+    *ret_array = g_steal_pointer(&array);
+    return 0;
+}
+
+/**
+ * mf_update_to_json:
+ * @ret_variant: (out): the description of the update
+ *
+ * Describe an update for a reply of the service.
+ *
+ * Returns: 0, or a negative errno
+ */
+static int
+mf_update_to_json(MfUpdate *update, sd_json_variant **ret_variant)
+{
+    g_autoptr(sd_json_variant) component = NULL;
+    g_autoptr(sd_json_variant) added = NULL;
+    g_autoptr(sd_json_variant) removed = NULL;
+    int r;
+
+    if ((r = mf_component_to_json(update->component, &component)) < 0)
+        return r;
+    if ((r = mf_result_build_strings(update->integration_added, &added)) < 0)
+        return r;
+    if ((r = mf_result_build_strings(update->integration_removed, &removed)) < 0)
+        return r;
+
+    return sd_json_buildo(ret_variant,
+                          SD_JSON_BUILD_PAIR_VARIANT("component", component),
+                          SD_JSON_BUILD_PAIR_STRING("previousVersion", update->previous_version),
+                          SD_JSON_BUILD_PAIR_VARIANT("integrationAdded", added),
+                          SD_JSON_BUILD_PAIR_VARIANT("integrationRemoved", removed));
+}
+
+/**
  * mf_update_new_from_reply:
  * @variant: the description of an update, from a reply of the service
  *
@@ -586,4 +644,57 @@ mf_result_new_from_reply(sd_json_variant *reply, GError **error)
         return NULL;
 
     return g_steal_pointer(&result);
+}
+
+/**
+ * mf_result_to_reply:
+ * @ret_reply: (out): the parameters of the final reply of an operation
+ *
+ * Build the final reply of an operation. mf_result_new_from_reply() reads
+ * the reply.
+ *
+ * Returns: 0, or a negative errno
+ */
+int
+mf_result_to_reply(MfResult *result, sd_json_variant **ret_reply)
+{
+    g_autoptr(sd_json_variant) updated = NULL;
+    g_autoptr(sd_json_variant) installed = NULL;
+    g_autoptr(sd_json_variant) removed = NULL;
+    g_autoptr(sd_json_variant) removed_images = NULL;
+    g_autoptr(sd_json_variant) warnings = NULL;
+    int r;
+
+    g_return_val_if_fail(MF_IS_RESULT(result), -EINVAL);
+    auto priv = GET_PRIVATE(result);
+
+    for (guint i = 0; i < priv->updated->len; i++) {
+        g_autoptr(sd_json_variant) update = NULL;
+
+        if ((r = mf_update_to_json(g_ptr_array_index(priv->updated, i), &update)) < 0)
+            return r;
+        if ((r = sd_json_variant_append_array(&updated, update)) < 0)
+            return r;
+    }
+    if ((r = mf_json_ensure_array(&updated)) < 0)
+        return r;
+    if ((r = mf_component_array_to_json(priv->installed, &installed)) < 0)
+        return r;
+    if ((r = mf_component_array_to_json(priv->removed, &removed)) < 0)
+        return r;
+    if ((r = mf_result_build_strings(priv->removed_images, &removed_images)) < 0)
+        return r;
+    if ((r = mf_result_build_strings(priv->warnings, &warnings)) < 0)
+        return r;
+
+    return sd_json_buildo(
+        ret_reply,
+        SD_JSON_BUILD_PAIR("result",
+                           SD_JSON_BUILD_OBJECT(SD_JSON_BUILD_PAIR_VARIANT("updated", updated),
+                                                SD_JSON_BUILD_PAIR_VARIANT("installed", installed),
+                                                SD_JSON_BUILD_PAIR_VARIANT("removed", removed),
+                                                SD_JSON_BUILD_PAIR_VARIANT("removedImages", removed_images),
+                                                SD_JSON_BUILD_PAIR_UNSIGNED("bytesAdded", priv->bytes_added),
+                                                SD_JSON_BUILD_PAIR_UNSIGNED("bytesFreed", priv->bytes_freed),
+                                                SD_JSON_BUILD_PAIR_VARIANT("warnings", warnings))));
 }

@@ -15,6 +15,9 @@ MF_BEGIN_PRIVATE_DECLS
 
 MfResult *mf_result_new_from_reply(sd_json_variant *reply,
                                    GError         **error);
+MF_INTERNAL_VISIBLE
+int mf_result_to_reply(MfResult         *result,
+                       sd_json_variant **ret_reply);
 
 MF_INTERNAL_VISIBLE
 void mf_result_add_removed_image(MfResult   *result,

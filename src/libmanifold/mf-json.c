@@ -274,3 +274,19 @@ mf_json_write_file(const char *path, sd_json_variant *json, GError **error)
     }
     return g_file_set_contents(path, formatted, -1, error);
 }
+
+/**
+ * mf_json_ensure_array:
+ *
+ * Create an empty JSON array if @array is %NULL. The array is %NULL if
+ * sd_json_variant_append_array() was never called for it.
+ *
+ * Returns: 0, or a negative errno
+ */
+int
+mf_json_ensure_array(sd_json_variant **array)
+{
+    if (*array != NULL)
+        return 0;
+    return sd_json_variant_new_array(array, NULL, 0);
+}

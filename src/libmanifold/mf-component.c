@@ -11,7 +11,9 @@
 #include <glib/gi18n-lib.h>
 
 #include "mf-error.h"
+#include "mf-json-private.h"
 #include "mf-manifest.h"
+#include "mf-sdautoptr-private.h"
 #include "mf-utils.h"
 #include "mf-utils-private.h"
 
@@ -491,6 +493,62 @@ mf_component_compare(gconstpointer a, gconstpointer b)
                                        mf_component_get_revision(component_a),
                                        mf_component_get_version(component_b),
                                        mf_component_get_revision(component_b));
+}
+
+/**
+ * mf_component_to_json:
+ * @ret_variant: (out): the description of the component
+ *
+ * Describe a component for a reply of the service. mf_component_new_from_reply()
+ * reads the description.
+ *
+ * Returns: 0, or a negative errno
+ */
+int
+mf_component_to_json(MfComponent *component, sd_json_variant **ret_variant)
+{
+    return sd_json_buildo(
+        ret_variant,
+        SD_JSON_BUILD_PAIR_STRING("componentId", component->component_id),
+        SD_JSON_BUILD_PAIR_STRING("kind", mf_component_kind_to_string(component->kind)),
+        SD_JSON_BUILD_PAIR_STRING("version", component->version),
+        SD_JSON_BUILD_PAIR_UNSIGNED("revision", component->revision),
+        SD_JSON_BUILD_PAIR_BOOLEAN("sdk", component->sdk),
+        SD_JSON_BUILD_PAIR_STRING("identity", component->identity),
+        SD_JSON_BUILD_PAIR_STRING("verityHash", component->verity_hash),
+        SD_JSON_BUILD_PAIR_BOOLEAN("current", component->current),
+        SD_JSON_BUILD_PAIR_STRING("installMode", mf_install_mode_to_string(component->install_mode)),
+        SD_JSON_BUILD_PAIR_STRING("origin", component->origin));
+}
+
+/**
+ * mf_component_array_to_json:
+ * @components: (element-type MfComponent): the components to describe
+ * @ret_array: (out): the array of components
+ *
+ * Describe a list of components for a reply of the service.
+ *
+ * Returns: 0, or a negative errno
+ */
+int
+mf_component_array_to_json(GPtrArray *components, sd_json_variant **ret_array)
+{
+    g_autoptr(sd_json_variant) array = NULL;
+    int r;
+
+    for (guint i = 0; i < components->len; i++) {
+        g_autoptr(sd_json_variant) variant = NULL;
+
+        if ((r = mf_component_to_json(g_ptr_array_index(components, i), &variant)) < 0)
+            return r;
+        if ((r = sd_json_variant_append_array(&array, variant)) < 0)
+            return r;
+    }
+    if ((r = mf_json_ensure_array(&array)) < 0)
+        return r;
+
+    *ret_array = g_steal_pointer(&array);
+    return 0;
 }
 
 /**

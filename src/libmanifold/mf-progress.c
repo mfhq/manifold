@@ -462,3 +462,39 @@ mf_progress_new_from_reply(sd_json_variant *variant)
 
     return g_steal_pointer(&progress);
 }
+
+/**
+ * mf_progress_to_json:
+ * @ret_variant: (out): the description of the progress
+ *
+ * Describe the progress of an operation for a reply of the service.
+ * mf_progress_new_from_reply() reads the description.
+ *
+ * Returns: 0, or a negative errno
+ */
+int
+mf_progress_to_json(const MfProgress *progress, sd_json_variant **ret_variant)
+{
+    const MfItemProgress *item = progress->item;
+
+    if (item == NULL)
+        return sd_json_buildo(ret_variant, SD_JSON_BUILD_PAIR_REAL("percent", progress->percent));
+
+    return sd_json_buildo(
+        ret_variant,
+        SD_JSON_BUILD_PAIR_REAL("percent", progress->percent),
+        SD_JSON_BUILD_PAIR(
+            "item",
+            SD_JSON_BUILD_OBJECT(SD_JSON_BUILD_PAIR_STRING("action", mf_action_to_string(item->action)),
+                                 SD_JSON_BUILD_PAIR_STRING("subject", item->subject),
+                                 SD_JSON_BUILD_PAIR_CONDITION(item->version != NULL,
+                                                              "version",
+                                                              SD_JSON_BUILD_STRING(item->version)),
+                                 SD_JSON_BUILD_PAIR_REAL("percent", item->percent),
+                                 SD_JSON_BUILD_PAIR_CONDITION(item->bytes_total > 0,
+                                                              "bytesDone",
+                                                              SD_JSON_BUILD_UNSIGNED(item->bytes_done)),
+                                 SD_JSON_BUILD_PAIR_CONDITION(item->bytes_total > 0,
+                                                              "bytesTotal",
+                                                              SD_JSON_BUILD_UNSIGNED(item->bytes_total)))));
+}

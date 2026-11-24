@@ -18,8 +18,11 @@
 #include <systemd/sd-varlink.h>
 
 #include <manifold.h>
+#include "mf-component-private.h"
 #include "mf-manager-interface.h"
+#include "mf-progress-private.h"
 #include "mf-remote-private.h"
+#include "mf-result-private.h"
 #include "mf-sdautoptr-private.h"
 #include "mf-trusted-keys-private.h"
 
@@ -300,169 +303,19 @@ mfd_service_reply_error(sd_varlink *link, const GError *error)
 }
 
 /**
- * mfd_varlink_append_component:
- *
- * Add an installed component to the array of a reply.
- */
-static int
-mfd_varlink_append_component(sd_json_variant **array, MfComponent *component)
-{
-    return sd_json_variant_append_arraybo(
-        array,
-        SD_JSON_BUILD_PAIR_STRING("componentId", mf_component_get_id(component)),
-        SD_JSON_BUILD_PAIR_STRING("kind", mf_component_kind_to_string(mf_component_get_kind(component))),
-        SD_JSON_BUILD_PAIR_STRING("version", mf_component_get_version(component)),
-        SD_JSON_BUILD_PAIR_UNSIGNED("revision", mf_component_get_revision(component)),
-        SD_JSON_BUILD_PAIR_BOOLEAN("sdk", mf_component_is_sdk(component)),
-        SD_JSON_BUILD_PAIR_STRING("identity", mf_component_get_identity(component)),
-        SD_JSON_BUILD_PAIR_STRING("verityHash", mf_component_get_verity_hash(component)),
-        SD_JSON_BUILD_PAIR_BOOLEAN("current", mf_component_is_current(component)),
-        SD_JSON_BUILD_PAIR_STRING("installMode",
-                                  mf_install_mode_to_string(mf_component_get_install_mode(component))),
-        SD_JSON_BUILD_PAIR_STRING("origin", mf_component_get_origin(component)));
-}
-
-/**
- * mfd_json_ensure_array:
- *
- * Create an empty JSON array if @array is %NULL. An array that nothing was
- * appended to is still %NULL, but a reply needs an empty array in this case.
- *
- * Returns: 0, or a negative errno
- */
-static int
-mfd_json_ensure_array(sd_json_variant **array)
-{
-    if (*array != NULL)
-        return 0;
-    return sd_json_variant_new_array(array, NULL, 0);
-}
-
-/**
- * mfd_varlink_build_components_array:
- *
- * Build the array of components of a reply.
- *
- * Returns: 0, or a negative errno
- */
-static int
-mfd_varlink_build_components_array(GPtrArray *components, sd_json_variant **ret_array)
-{
-    g_autoptr(sd_json_variant) array = NULL;
-    int r;
-
-    for (guint i = 0; i < components->len; i++) {
-        if ((r = mfd_varlink_append_component(&array, g_ptr_array_index(components, i))) < 0)
-            return r;
-    }
-    if ((r = mfd_json_ensure_array(&array)) < 0)
-        return r;
-
-    *ret_array = g_steal_pointer(&array);
-    return 0;
-}
-
-/**
- * mfd_varlink_build_strings_array:
- * @strings: (element-type utf8): the strings to put into the array
- * @ret: (out): the JSON array
- *
- * Returns: 0, or a negative errno
- */
-static int
-mfd_varlink_build_strings_array(GPtrArray *strings, sd_json_variant **ret)
-{
-    int r;
-
-    for (guint i = 0; i < strings->len; i++) {
-        r = sd_json_variant_append_arrayb(ret, SD_JSON_BUILD_STRING(g_ptr_array_index(strings, i)));
-        if (r < 0)
-            return r;
-    }
-
-    return mfd_json_ensure_array(ret);
-}
-
-/**
- * mfd_varlink_build_updates_array:
- * @updates: (element-type MfUpdate): the components that an operation updated
- * @ret_array: (out): the JSON array
- *
- * Returns: 0, or a negative errno
- */
-static int
-mfd_varlink_build_updates_array(GPtrArray *updates, sd_json_variant **ret_array)
-{
-    g_autoptr(sd_json_variant) array = NULL;
-    int r;
-
-    for (guint i = 0; i < updates->len; i++) {
-        MfUpdate *update = g_ptr_array_index(updates, i);
-        g_autoptr(sd_json_variant) components = NULL;
-        g_autoptr(sd_json_variant) added = NULL;
-        g_autoptr(sd_json_variant) removed = NULL;
-
-        if ((r = mfd_varlink_append_component(&components, mf_update_get_component(update))) < 0)
-            return r;
-        if ((r = mfd_varlink_build_strings_array(mf_update_get_integration_added(update), &added)) < 0)
-            return r;
-        if ((r = mfd_varlink_build_strings_array(mf_update_get_integration_removed(update), &removed)) < 0)
-            return r;
-        r = sd_json_variant_append_arraybo(
-            &array,
-            SD_JSON_BUILD_PAIR_VARIANT("component", sd_json_variant_by_index(components, 0)),
-            SD_JSON_BUILD_PAIR_STRING("previousVersion", mf_update_get_previous_version(update)),
-            SD_JSON_BUILD_PAIR_VARIANT("integrationAdded", added),
-            SD_JSON_BUILD_PAIR_VARIANT("integrationRemoved", removed));
-        if (r < 0)
-            return r;
-    }
-    if ((r = mfd_json_ensure_array(&array)) < 0)
-        return r;
-
-    *ret_array = g_steal_pointer(&array);
-    return 0;
-}
-
-/**
  * mfd_service_reply_result:
  *
- * Send the final reply of an operation: the components it updated, installed
- * and removed, the images it removed, the disk space it used and freed, and
- * its warnings.
+ * Send the final reply of an operation, which describes its result.
  */
 static int
 mfd_service_reply_result(sd_varlink *link, MfResult *result)
 {
-    g_autoptr(sd_json_variant) updated = NULL;
-    g_autoptr(sd_json_variant) installed = NULL;
-    g_autoptr(sd_json_variant) removed = NULL;
-    g_autoptr(sd_json_variant) removed_images = NULL;
-    g_autoptr(sd_json_variant) warnings = NULL;
+    g_autoptr(sd_json_variant) reply = NULL;
     int r;
 
-    if ((r = mfd_varlink_build_updates_array(mf_result_get_updated(result), &updated)) < 0)
+    if ((r = mf_result_to_reply(result, &reply)) < 0)
         return r;
-    if ((r = mfd_varlink_build_components_array(mf_result_get_installed(result), &installed)) < 0)
-        return r;
-    if ((r = mfd_varlink_build_components_array(mf_result_get_removed(result), &removed)) < 0)
-        return r;
-    if ((r = mfd_varlink_build_strings_array(mf_result_get_removed_images(result), &removed_images)) < 0)
-        return r;
-    if ((r = mfd_varlink_build_strings_array(mf_result_get_warnings(result), &warnings)) < 0)
-        return r;
-
-    return sd_varlink_replybo(
-        link,
-        SD_JSON_BUILD_PAIR(
-            "result",
-            SD_JSON_BUILD_OBJECT(SD_JSON_BUILD_PAIR_VARIANT("updated", updated),
-                                 SD_JSON_BUILD_PAIR_VARIANT("installed", installed),
-                                 SD_JSON_BUILD_PAIR_VARIANT("removed", removed),
-                                 SD_JSON_BUILD_PAIR_VARIANT("removedImages", removed_images),
-                                 SD_JSON_BUILD_PAIR_UNSIGNED("bytesAdded", mf_result_get_bytes_added(result)),
-                                 SD_JSON_BUILD_PAIR_UNSIGNED("bytesFreed", mf_result_get_bytes_freed(result)),
-                                 SD_JSON_BUILD_PAIR_VARIANT("warnings", warnings))));
+    return sd_varlink_reply(link, reply);
 }
 
 /**
@@ -487,40 +340,17 @@ static void
 mfd_service_on_progress(const MfProgress *progress, gpointer user_data)
 {
     sd_varlink *link = user_data;
-    const MfItemProgress *item = mf_progress_get_item(progress);
-    const char *action = item != NULL ? mf_action_to_string(mf_item_progress_get_action(item)) : NULL;
-    const char *subject = item != NULL ? mf_item_progress_get_subject(item) : NULL;
-    const char *version = item != NULL ? mf_item_progress_get_version(item) : NULL;
-    double item_percent = item != NULL ? mf_item_progress_get_percent(item) : 0;
-    uint64_t bytes_done = item != NULL ? mf_item_progress_get_bytes_done(item) : 0;
-    uint64_t bytes_total = item != NULL ? mf_item_progress_get_bytes_total(item) : 0;
+    g_autoptr(sd_json_variant) description = NULL;
+    int r;
 
     /* NOTE: The operation blocks the event loop, so we never wait for a caller that does
      * not read its progress. We drop the progress while the socket of the caller is full. */
     if (!mfd_varlink_can_write(link))
         return;
 
-    int r = sd_varlink_notifybo(
-        link,
-        SD_JSON_BUILD_PAIR("progress",
-                           SD_JSON_BUILD_OBJECT(
-                               SD_JSON_BUILD_PAIR_REAL("percent", mf_progress_get_percent(progress)),
-                               SD_JSON_BUILD_PAIR_CONDITION(
-                                   item != NULL,
-                                   "item",
-                                   SD_JSON_BUILD_OBJECT(
-                                       SD_JSON_BUILD_PAIR_STRING("action", action),
-                                       SD_JSON_BUILD_PAIR_STRING("subject", subject),
-                                       SD_JSON_BUILD_PAIR_CONDITION(version != NULL,
-                                                                    "version",
-                                                                    SD_JSON_BUILD_STRING(version)),
-                                       SD_JSON_BUILD_PAIR_REAL("percent", item_percent),
-                                       SD_JSON_BUILD_PAIR_CONDITION(bytes_total > 0,
-                                                                    "bytesDone",
-                                                                    SD_JSON_BUILD_UNSIGNED(bytes_done)),
-                                       SD_JSON_BUILD_PAIR_CONDITION(bytes_total > 0,
-                                                                    "bytesTotal",
-                                                                    SD_JSON_BUILD_UNSIGNED(bytes_total)))))));
+    r = mf_progress_to_json(progress, &description);
+    if (r >= 0)
+        r = sd_varlink_notifybo(link, SD_JSON_BUILD_PAIR_VARIANT("progress", description));
     /* sd-varlink only queues the notification, and we are busy, so we write it out now */
     if (r >= 0)
         r = sd_varlink_flush(link);
@@ -714,7 +544,7 @@ mfd_service_mark(MfdService *service, MfdRequest *request)
         mfd_service_reply_error(request->link, error);
         return 0;
     }
-    if ((r = mfd_varlink_build_components_array(marked, &components)) < 0)
+    if ((r = mf_component_array_to_json(marked, &components)) < 0)
         return r;
 
     return sd_varlink_replybo(

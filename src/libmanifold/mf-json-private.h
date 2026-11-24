@@ -56,6 +56,8 @@ MF_INTERNAL_VISIBLE
 const char *mf_json_get_string(sd_json_variant *object,
                                const char      *key);
 
+int         mf_json_ensure_array(sd_json_variant **array);
+
 MF_INTERNAL_VISIBLE
 gboolean mf_json_write_file(const char      *path,
                             sd_json_variant *json,
