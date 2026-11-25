@@ -33,6 +33,9 @@ void    mft_write_file(const char *path,
 char   *mft_read_file(const char *path);
 void    mft_write_bytes(const char *path,
                         GBytes     *bytes);
+char   *mft_str_replace(const char *text,
+                        const char *old,
+                        const char *new);
 void    mft_replace_in_file(const char *path,
                             const char *old,
                             const char *new);

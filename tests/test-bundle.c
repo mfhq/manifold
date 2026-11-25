@@ -355,12 +355,7 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
                                              &(BundleFlaws){});
     g_autoptr(GError) error = NULL;
     g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-    g_autofree char *expected_sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, f->app.data);
-    g_autofree char *expected_blake3 = mft_blake3_hex(g_bytes_get_data(f->app.data, NULL),
-                                                      g_bytes_get_size(f->app.data));
-    g_autofree char *expected_verity = mft_fake_hash(expected_sha256);
     g_autofree char *kit_identity = mft_fake_hash(TEST_KIT_ID);
-    const MfBaseReference *base;
     g_autofree char *media_copy = g_build_filename(f->dir, "screenshot.jxl", NULL);
     g_autofree char *media_data = NULL;
     g_auto(GStrv) media = NULL;
@@ -375,29 +370,9 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
 
     MfBundleImage *app = mft_find_image(bundle, TEST_APP_ID);
     MfManifest *manifest = mf_bundle_image_get_manifest(app);
-    g_assert_cmpint(mf_manifest_get_kind(manifest), ==, MF_COMPONENT_KIND_APP);
     g_assert_cmpstr(mf_manifest_get_version(manifest), ==, "0.1.0");
-    g_assert_cmpuint(mf_manifest_get_revision(manifest), ==, 22931700);
-    g_assert_cmpstr(mf_manifest_get_architecture(manifest), ==, "x86_64");
-    g_assert_cmpstr(mf_manifest_get_command(manifest), ==, "app");
     g_assert_cmpstr(mf_bundle_image_get_manifest_name(app), ==, TEST_APP_ID "_0.1.0.manifold.json");
-    g_assert_cmpstr(mf_manifest_get_image_file(manifest), ==, TEST_APP_ID "_0.1.0.raw");
-    g_assert_cmpuint(mf_manifest_get_image_size(manifest), ==, 12288);
-    g_assert_cmpstr(mf_manifest_get_image_checksum(manifest, MF_CHECKSUM_KIND_SHA256), ==, expected_sha256);
-    g_assert_cmpstr(mf_manifest_get_image_checksum(manifest, MF_CHECKSUM_KIND_BLAKE3), ==, expected_blake3);
-    g_assert_cmpstr(mf_manifest_get_verity_hash(manifest), ==, expected_verity);
-    g_assert_cmpuint(mf_manifest_get_data_offset(manifest), ==, 20480);
-    g_assert_cmpuint(mf_manifest_get_hash_offset(manifest), ==, 24576);
-    base = mf_manifest_get_base(manifest);
-    g_assert_cmpstr(base->id, ==, TEST_KIT_ID);
-    g_assert_cmpint(base->kind, ==, MF_COMPONENT_KIND_KIT);
-    g_assert_cmpstr(base->version, ==, "20260112T0238");
-    g_assert_cmpuint(base->revision, ==, 22910051);
-    g_assert_cmpstr(base->identity, ==, kit_identity);
-    g_assert_cmpstr(base->content_hash, ==, kit_identity);
-    g_assert_false(base->exact);
-    g_assert_null(mf_manifest_get_base_sdk(manifest));
-    g_assert_false(mf_manifest_is_sdk(manifest));
+    g_assert_cmpstr(mf_manifest_get_base(manifest)->id, ==, TEST_KIT_ID);
     g_assert_cmpstr(mf_manifest_get_base(mft_find_manifest(bundle, TEST_KIT_ID))->id, ==, TEST_CORE_ID);
 
     /* the app's base is found in the bundle by its identity */

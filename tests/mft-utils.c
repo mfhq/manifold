@@ -69,12 +69,25 @@ mft_write_bytes(const char *path, GBytes *bytes)
     g_assert_true(g_file_set_contents(path, g_bytes_get_data(bytes, NULL), g_bytes_get_size(bytes), NULL));
 }
 
+/**
+ * mft_str_replace:
+ *
+ * Returns: (transfer full): @text with every @old replaced by @new. The text has to contain @old.
+ */
+char *
+mft_str_replace(const char *text, const char *old, const char *new)
+{
+    g_auto(GStrv) parts = g_strsplit(text, old, -1);
+
+    g_assert_cmpuint(g_strv_length(parts), >, 1);
+    return g_strjoinv(new, parts);
+}
+
 void
 mft_replace_in_file(const char *path, const char *old, const char *new)
 {
     g_autofree char *content = mft_read_file(path);
-    g_auto(GStrv) parts = g_strsplit(content, old, -1);
-    g_autofree char *replaced = g_strjoinv(new, parts);
+    g_autofree char *replaced = mft_str_replace(content, old, new);
 
     mft_write_file(path, replaced);
 }

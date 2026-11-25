@@ -110,12 +110,6 @@ test_privileged(void)
     g_assert_false(mf_manifest_is_privileged(unit));
     g_assert_false(mf_manifest_has_permission(unit, MF_PERMISSION_SYSTEM_SERVICES));
 
-    g_assert_true(mf_permission_is_privileged(MF_PERMISSION_SYSTEM_SERVICES));
-    g_assert_true(mf_permission_is_privileged(MF_PERMISSION_UDEV_RULES));
-    g_assert_false(mf_permission_is_privileged(MF_PERMISSION_HOST_COMMANDS));
-    g_assert_false(mf_permission_is_privileged(MF_PERMISSION_UNKNOWN));
-    g_assert_false(mf_permission_is_privileged(MF_PERMISSION_LAST));
-
     g_assert_true(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_SYSTEMD_UNIT_SYSTEM));
     g_assert_true(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_UDEV_RULE));
     g_assert_false(mf_integration_kind_is_privileged(MF_INTEGRATION_KIND_SYSTEMD_UNIT_USER));
@@ -562,34 +556,6 @@ test_check_component(void)
 }
 
 static void
-test_manifest_messages(void)
-{
-    MftTestManifest manifests[] = {
-        mft_app_manifest(NULL),
-        mft_app_manifest(NULL),
-        mft_app_manifest(NULL),
-        mft_app_manifest(NULL),
-    };
-
-    manifests[0].kind = "\\u001b[2J";
-    manifests[1].command = "\\u001b[2J";
-    manifests[2].architecture = "\\u001b[2J";
-    manifests[3].base_kind = "\\u001b[2J";
-
-    /* a manifest must not be able to control the terminal of the admin */
-    for (size_t i = 0; i < G_N_ELEMENTS(manifests); i++) {
-        g_autofree char *json = mft_manifest_json(&manifests[i]);
-        g_autoptr(GError) error = NULL;
-        g_autoptr(MfManifest) manifest = mf_manifest_new_from_data(json, -1, &error);
-
-        g_assert_null(manifest);
-        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
-        g_test_message("%s", error->message);
-        g_assert_null(strchr(error->message, '\033'));
-    }
-}
-
-static void
 test_check_messages(void)
 {
     static const char *const sections[] = {
@@ -611,84 +577,6 @@ test_check_messages(void)
         g_test_message("%s", error->message);
         g_assert_null(strchr(error->message, '\033'));
     }
-}
-
-static void
-test_permissions(void)
-{
-    MftTestManifest app = mft_app_manifest(NULL);
-    MftTestManifest core = {.component_id = "net.example.core", .kind = "core", .version = "1"};
-    g_autofree char *json = NULL;
-    g_autofree char *unknown_json = NULL;
-    g_autofree char *implied_json = NULL;
-    g_autofree char *core_json = NULL;
-    g_autofree char *malformed_json = NULL;
-    g_autoptr(MfManifest) plain = mft_app_manifest_new(NULL, NULL);
-    g_autoptr(MfManifest) manifest = NULL;
-    g_autoptr(MfManifest) unknown = NULL;
-    g_autoptr(MfManifest) implied = NULL;
-    g_autoptr(MfManifest) on_core = NULL;
-    g_autoptr(GError) error = NULL;
-
-    for (MfPermission permission = MF_PERMISSION_UNKNOWN + 1; permission < MF_PERMISSION_LAST; permission++)
-        g_assert_cmpint(mf_permission_from_string(mf_permission_to_string(permission)), ==, permission);
-    g_assert_cmpstr(mf_permission_to_string(MF_PERMISSION_LAST), ==, "unknown");
-    g_assert_cmpint(mf_permission_from_string("unknown"), ==, MF_PERMISSION_UNKNOWN);
-    g_assert_cmpint(mf_permission_from_string(NULL), ==, MF_PERMISSION_UNKNOWN);
-    g_assert_false(mf_permission_is_implied(MF_PERMISSION_HOST_COMMANDS));
-    g_assert_false(mf_permission_is_implied(MF_PERMISSION_HOST_TMP));
-    g_assert_true(mf_permission_is_implied(MF_PERMISSION_SYSTEM_SERVICES));
-    g_assert_true(mf_permission_is_implied(MF_PERMISSION_UDEV_RULES));
-
-    g_assert_false(mf_manifest_has_permission(plain, MF_PERMISSION_HOST_COMMANDS));
-    g_assert_false(mf_manifest_is_privileged(plain));
-    g_assert_true(mf_manifest_check_permissions(plain, &error));
-    g_assert_no_error(error);
-
-    app.permissions = "[\"host-commands\"]";
-    json = mft_manifest_json(&app);
-    manifest = mf_manifest_new_from_data(json, -1, &error);
-    g_assert_no_error(error);
-    g_assert_true(mf_manifest_has_permission(manifest, MF_PERMISSION_HOST_COMMANDS));
-    g_assert_false(mf_manifest_has_permission(manifest, MF_PERMISSION_HOST_TMP));
-    g_assert_true(mf_manifest_check_permissions(manifest, &error));
-    g_assert_no_error(error);
-
-    /* a permission we do not know is only refused by the check, and can not control the terminal */
-    app.permissions = "[\"host-tmp\", \"\\u001b[2J\"]";
-    unknown_json = mft_manifest_json(&app);
-    unknown = mf_manifest_new_from_data(unknown_json, -1, &error);
-    g_assert_no_error(error);
-    g_assert_true(mf_manifest_has_permission(unknown, MF_PERMISSION_HOST_TMP));
-    g_assert_false(mf_manifest_check_permissions(unknown, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
-    g_assert_null(strchr(error->message, '\033'));
-    g_clear_error(&error);
-
-    /* a manifest can not request a permission that its integration section implies */
-    app.permissions = "[\"udev-rules\"]";
-    implied_json = mft_manifest_json(&app);
-    implied = mf_manifest_new_from_data(implied_json, -1, &error);
-    g_assert_no_error(error);
-    g_assert_false(mf_manifest_has_permission(implied, MF_PERMISSION_UDEV_RULES));
-    g_assert_false(mf_manifest_is_privileged(implied));
-    g_assert_false(mf_manifest_check_permissions(implied, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
-    g_clear_error(&error);
-
-    /* only applications are launched */
-    core.permissions = "[\"host-commands\"]";
-    core_json = mft_manifest_json(&core);
-    on_core = mf_manifest_new_from_data(core_json, -1, &error);
-    g_assert_no_error(error);
-    g_assert_false(mf_manifest_check_permissions(on_core, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
-    g_clear_error(&error);
-
-    app.permissions = "\"host-commands\"";
-    malformed_json = mft_manifest_json(&app);
-    g_assert_null(mf_manifest_new_from_data(malformed_json, -1, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
 }
 
 /**
@@ -1373,7 +1261,6 @@ main(int argc, char **argv)
     g_test_add_func("/integration/export-paths", test_export_paths);
     g_test_add_func("/integration/section", test_section);
     g_test_add_func("/integration/no-section", test_no_section);
-    g_test_add_func("/integration/permissions", test_permissions);
     g_test_add_func("/integration/malformed-section", test_malformed_section);
     g_test_add_func("/integration/check-file-paths", test_check_file_paths);
     g_test_add_func("/integration/check-aliases", test_check_aliases);
@@ -1381,7 +1268,6 @@ main(int argc, char **argv)
     g_test_add_func("/integration/check-section", test_check_section);
     g_test_add_func("/integration/check-component", test_check_component);
     g_test_add_func("/integration/check-messages", test_check_messages);
-    g_test_add_func("/integration/manifest-messages", test_manifest_messages);
     g_test_add_func("/integration/desktop-entries", test_desktop_entries);
     g_test_add_func("/integration/desktop-entries-refused", test_desktop_entries_refused);
     g_test_add_func("/integration/text-size-limit", test_text_size_limit);

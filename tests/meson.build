@@ -49,6 +49,16 @@ test('utils',
     suite: 'unit',
 )
 
+test('manifest',
+    executable('test-manifest',
+        ['test-manifest.c'],
+        include_directories: [root_inc_dir],
+        dependencies: [manifold_dep, mft_test_utils_dep],
+    ),
+    env: {'G_TEST_SRCDIR': meson.current_source_dir()},
+    suite: 'unit',
+)
+
 test('bundle',
     executable('test-bundle',
         ['test-bundle.c'],

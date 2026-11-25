@@ -430,21 +430,11 @@ test_manifest_must_be_sound(Fixture *f, gconstpointer user_data)
                                                           NULL);
     g_autofree char *expected = NULL;
 
-    expected = g_strdup_printf("%s: image: the hash partition is placed before the data", manifest);
-    mft_replace_in_file(manifest, "\"hash-offset\": 22528", "\"hash-offset\": 1");
-    mft_assert_read_fails(f, TEST_APP_ID, MF_ERROR_INVALID_MANIFEST, expected);
-
-    /* a manifest without the image section is invalid */
-    g_free(expected);
-    expected = g_strdup_printf("%s: image is missing or not an object", manifest);
-    mft_replace_in_file(manifest, "\"image\": {", "\"no-image\": {");
-    mft_assert_read_fails(f, TEST_APP_ID, MF_ERROR_INVALID_MANIFEST, expected);
-
+    /* a manifest that can not be parsed */
     mft_write_file(manifest, "not json");
     mft_assert_read_fails(f, TEST_APP_ID, MF_ERROR_INVALID_MANIFEST, NULL);
 
     /* a manifest whose component ID differs from the component of its directory */
-    g_free(expected);
     expected = g_strdup_printf("%s describes a different component (expected: " TEST_PLATFORM_ID "/13.8)",
                                platform_manifest);
     mft_replace_in_file(platform_manifest,
