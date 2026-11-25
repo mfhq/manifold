@@ -720,7 +720,6 @@ test_update_gains_privileges(void)
     other = mft_manifest_new(&other_with_rule);
 
     mft_install_usual();
-    mft_reload_store();
 
     /* an update without privileged files */
     mfd_install_set_add(set, plain, "app", "example-main");
@@ -734,7 +733,6 @@ test_update_gains_privileges(void)
     /* once a version with the rule is installed, an update that has it needs no approval */
     app_with_rule.version = "0.1.5";
     mft_install(&app_with_rule, NULL, MF_INSTALL_MODE_AUTO);
-    mft_reload_store();
     set = mfd_install_set_new();
     mfd_install_set_add(set, with_rule, "app", "example-main");
     g_assert_false(mfd_manager_install_set_gains_privileges(manager, set));

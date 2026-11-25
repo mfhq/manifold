@@ -13,7 +13,6 @@ Usage: test-fetch.py --helper manifold-fetch
 """
 
 import argparse
-import json
 import os
 import shutil
 import socket
@@ -23,7 +22,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mftest import EXIT_SKIPPED, HttpsServer  # noqa: E402
+from mftest import EXIT_SKIPPED, HttpsServer, call_more  # noqa: E402
 
 FETCH = 'org.freedesktop.manifold.fetch.Fetch'
 
@@ -40,25 +39,8 @@ class Helper:
         theirs.close()
 
     def fetch(self, requests, fds):
-        """Call Fetch with the 'more' flag, and return all replies. An error reply is
-        returned unchanged, no exception is raised for it."""
-        call = {'method': FETCH, 'parameters': {'requests': requests}, 'more': True}
-        socket.send_fds(self.sock, [json.dumps(call).encode() + b'\0'], fds)
-        replies = []
-        received = b''
-        while True:
-            while b'\0' not in received:
-                data = self.sock.recv(65536)
-                if not data:
-                    raise RuntimeError('the helper closed the connection without replying')
-                received += data
-            message, _, received = received.partition(b'\0')
-            reply = json.loads(message)
-            if 'error' in reply:
-                return reply
-            replies.append(reply['parameters'])
-            if not reply.get('continues', False):
-                return replies
+        """Call Fetch, and return the list of replies or the error reply."""
+        return call_more(self.sock, FETCH, {'requests': requests}, fds)
 
     def close(self):
         self.sock.close()

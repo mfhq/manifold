@@ -69,13 +69,13 @@ mft_write_capture(const char *name, const char *dirs_json, const char *targets_j
     return dir;
 }
 
-/* the tests share no state; every one starts afresh */
-typedef struct {
-    gpointer unused;
-} Fixture;
-
+/**
+ * mft_reset_captures:
+ *
+ * Remove all captures.
+ */
 static void
-mft_setup(Fixture *fixture, gconstpointer user_data)
+mft_reset_captures(void)
 {
     mft_rm_rf(TEST_CAPTURES_DIR);
     mft_make_dirs(TEST_CAPTURES_DIR);
@@ -85,28 +85,38 @@ mft_setup(Fixture *fixture, gconstpointer user_data)
  * test_check_all:
  */
 static void
-test_check_all(Fixture *fixture, gconstpointer user_data)
+test_check_all(void)
 {
     g_autofree char *usr_lib = mft_dir_entry("/usr/lib");
     g_autofree char *fresh_dirs = g_strdup_printf("[%s]", usr_lib);
-    g_autofree char *fresh = mft_write_capture("fresh", fresh_dirs, "[]");
-    g_autofree char *stale_dir = mft_write_capture("stale-dir",
-                                                   "[{\"path\": \"/usr/lib\", \"mtime\": 1}]",
-                                                   "[]");
-    g_autofree char *stale_target = mft_write_capture(
+    g_autofree char *fresh = NULL;
+    g_autofree char *stale_dir = NULL;
+    g_autofree char *stale_target = NULL;
+    g_autofree char *gone_target = NULL;
+    g_autofree char *no_stamp = NULL;
+    g_autofree char *no_stamp_path = NULL;
+    g_autofree char *not_a_stamp = NULL;
+    g_autofree char *not_a_stamp_path = NULL;
+    g_autofree char *unfinished = g_build_filename(TEST_CAPTURES_DIR, ".tmp-unfinished", NULL);
+    g_autofree char *moved_aside = NULL;
+
+    mft_reset_captures();
+
+    fresh = mft_write_capture("fresh", fresh_dirs, "[]");
+    stale_dir = mft_write_capture("stale-dir", "[{\"path\": \"/usr/lib\", \"mtime\": 1}]", "[]");
+    stale_target = mft_write_capture(
         "stale-target",
         fresh_dirs,
         "[{\"path\": \"/usr/lib/does-not-exist.so\", \"size\": 1, \"mtime\": 1}]");
-    g_autofree char *gone_target = mft_write_capture(
+    gone_target = mft_write_capture(
         "gone-target",
         fresh_dirs,
         "[{\"path\": \"/usr/lib/does-not-exist.so\", \"size\": 1, \"mtime\": 0}]");
-    g_autofree char *no_stamp = mft_write_capture("no-stamp", "[]", "[]");
-    g_autofree char *no_stamp_path = g_build_filename(no_stamp, "stamp", NULL);
-    g_autofree char *not_a_stamp = mft_write_capture("not-a-stamp", "[]", "[]");
-    g_autofree char *not_a_stamp_path = g_build_filename(not_a_stamp, "stamp", NULL);
-    g_autofree char *unfinished = g_build_filename(TEST_CAPTURES_DIR, ".tmp-unfinished", NULL);
-    g_autofree char *moved_aside = mft_write_capture(".stale-moved-aside", fresh_dirs, "[]");
+    no_stamp = mft_write_capture("no-stamp", "[]", "[]");
+    no_stamp_path = g_build_filename(no_stamp, "stamp", NULL);
+    not_a_stamp = mft_write_capture("not-a-stamp", "[]", "[]");
+    not_a_stamp_path = g_build_filename(not_a_stamp, "stamp", NULL);
+    moved_aside = mft_write_capture(".stale-moved-aside", fresh_dirs, "[]");
 
     g_assert_cmpint(g_unlink(no_stamp_path), ==, 0);
     mft_write_file(not_a_stamp_path, "{\"id\": \"x\"}");
@@ -135,16 +145,21 @@ test_check_all(Fixture *fixture, gconstpointer user_data)
  * The captures that were moved aside are deleted when the daemon starts.
  */
 static void
-test_discard_all(Fixture *fixture, gconstpointer user_data)
+test_discard_all(void)
 {
     g_autofree char *usr_lib = mft_dir_entry("/usr/lib");
     g_autofree char *dirs = g_strdup_printf("[%s]", usr_lib);
-    g_autofree char *one = mft_write_capture("one", dirs, "[]");
-    g_autofree char *two = mft_write_capture("two", dirs, "[]");
+    g_autofree char *one = NULL;
+    g_autofree char *two = NULL;
     g_autofree char *one_aside = g_build_filename(TEST_CAPTURES_DIR, ".stale-one", NULL);
     g_autofree char *two_aside = g_build_filename(TEST_CAPTURES_DIR, ".stale-two", NULL);
     g_autoptr(MfrCaptures) captures = mfr_captures_new();
     g_autoptr(GError) error = NULL;
+
+    mft_reset_captures();
+
+    one = mft_write_capture("one", dirs, "[]");
+    two = mft_write_capture("two", dirs, "[]");
 
     g_assert_true(mfr_captures_discard_all(captures, &error));
     g_assert_no_error(error);
@@ -168,10 +183,8 @@ main(int argc, char **argv)
     mft_sandbox_enter();
     g_test_init(&argc, &argv, NULL);
 
-#define add_test(name, func) g_test_add("/capture/" name, Fixture, NULL, mft_setup, func, NULL)
-    add_test("check-all", test_check_all);
-    add_test("discard-all", test_discard_all);
-#undef add_test
+    g_test_add_func("/capture/check-all", test_check_all);
+    g_test_add_func("/capture/discard-all", test_discard_all);
 
     return g_test_run();
 }

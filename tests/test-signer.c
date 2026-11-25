@@ -76,11 +76,8 @@ mft_teardown(Fixture *fixture, gconstpointer user_data)
 {
     g_autofree char *key_dir = mf_signer_build_key_dir();
 
-    g_unsetenv("SSH_AUTH_SOCK");
-    g_unsetenv(MF_SIGNING_KEY_ENV);
     mft_rm_rf(fixture->dir);
-    if (g_file_test(key_dir, G_FILE_TEST_EXISTS))
-        mft_rm_rf(key_dir);
+    mft_rm_rf(key_dir);
     g_free(fixture->dir);
 }
 

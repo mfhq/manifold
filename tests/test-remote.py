@@ -38,11 +38,13 @@ from mftest import (  # noqa: E402
     RUNTIME_DIR,
     STORE,
     Daemon,
+    DaemonTestCase,
     HttpsServer,
     Image,
     Repository,
     VarlinkError,
     host_architecture,
+    installed_components,
     zstd_available,
     zstd_compress,
 )
@@ -82,7 +84,7 @@ def fingerprint(path):
     return result.stdout.split()[1]
 
 
-class RemoteTest(unittest.TestCase):
+class RemoteTest(DaemonTestCase):
     @classmethod
     def setUpClass(cls):
         cls.work = tempfile.mkdtemp()
@@ -93,6 +95,12 @@ class RemoteTest(unittest.TestCase):
         cls.kit = Image(CORE_ID + '.7d225c1fe79b1c5e', 'kit', '20260114T0238', base=cls.core)
         cls.app = Image(APP_ID, 'app', '0.1.0', base=cls.kit)
         cls.app2 = Image(APP_ID, 'app', '0.2.0', base=cls.kit)
+        cls.daemon = Daemon(
+            ARGS.daemon,
+            f'{RUNTIME_DIR}/test-manifoldd.sock',
+            os.path.join(cls.work, 'manifoldd.log'),
+            ['--fetch-helper', ARGS.fetch_helper, '--fetch-ca-file', cls.server.cert],
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -109,27 +117,10 @@ class RemoteTest(unittest.TestCase):
                     os.unlink(full)
         self.server.reset()
         self.repo = Repository(self.server, 'example', self.key, ARGS.zchunk_tool)
-        self.daemon = Daemon(
-            ARGS.daemon,
-            f'{RUNTIME_DIR}/test-manifoldd.sock',
-            os.path.join(self.work, 'manifoldd.log'),
-            ['--fetch-helper', ARGS.fetch_helper, '--fetch-ca-file', self.server.cert],
-        )
         self.daemon.start()
 
     def tearDown(self):
         self.daemon.stop()
-
-    def run(self, result=None):
-        """Run a test. If the test fails, print the messages that the daemon logged during the
-        test."""
-        result = result if result is not None else self.defaultTestResult()
-        problems = len(result.failures) + len(result.errors)
-        super().run(result)
-        if len(result.failures) + len(result.errors) > problems:
-            with open(os.path.join(self.work, 'manifoldd.log'), encoding='utf-8') as f:
-                sys.stderr.write(f'--- the daemon logged:\n{f.read()}---\n')
-        return result
 
     def configure_remote(self, remote_id='example', channels=None, key=None, vendor=False):
         """
@@ -262,21 +253,8 @@ class RemoteTest(unittest.TestCase):
         return rows
 
     def installed(self):
-        """Return the installed components with their version, install mode and origin,
-        as read from the store."""
-        found = []
-        for subdir in ('apps', 'plugins', 'runtimes'):
-            for component_id in os.listdir(f'{STORE}/{subdir}'):
-                for name in os.listdir(f'{STORE}/{subdir}/{component_id}'):
-                    version_dir = f'{STORE}/{subdir}/{component_id}/{name}'
-                    if name.startswith('.') or os.path.islink(version_dir):
-                        continue
-                    with open(f'{version_dir}/mode', encoding='utf-8') as f:
-                        mode = f.read().strip()
-                    with open(f'{version_dir}/origin', encoding='utf-8') as f:
-                        origin = f.read().strip()
-                    found.append((component_id, name.rsplit('-', 1)[0], mode, origin))
-        return sorted(found)
+        """Return the (ID, version, install mode, origin) of the installed components."""
+        return installed_components(with_origin=True)
 
     def publish_app(self, channels=('main',)):
         """Publish the application and the kit and core it builds on, and refresh."""

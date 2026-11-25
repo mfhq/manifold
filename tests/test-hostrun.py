@@ -31,7 +31,7 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mftest import APP_ID, EXIT_SKIPPED  # noqa: E402
+from mftest import APP_ID, EXIT_SKIPPED, call_more  # noqa: E402
 
 INTERFACE = 'org.freedesktop.manifold.host'
 
@@ -41,28 +41,6 @@ MS_REC = 0x4000
 MS_PRIVATE = 1 << 18
 
 ARGS = None
-
-
-def call_run(sock, parameters, fds):
-    """Call Run with the 'more' flag, and return all replies. An error reply is
-    returned unchanged, no exception is raised for it."""
-    call = {'method': f'{INTERFACE}.Run', 'parameters': parameters, 'more': True}
-    socket.send_fds(sock, [json.dumps(call).encode() + b'\0'], fds)
-    replies = []
-    received = b''
-    while True:
-        while b'\0' not in received:
-            data = sock.recv(65536)
-            if not data:
-                raise RuntimeError('the runner closed the connection without replying')
-            received += data
-        message, _, received = received.partition(b'\0')
-        reply = json.loads(message)
-        if 'error' in reply:
-            return reply
-        replies.append(reply['parameters'])
-        if not reply.get('continues', False):
-            return replies
 
 
 def run_as_application(socket_path, permissions):
@@ -109,8 +87,9 @@ def run_as_application(socket_path, permissions):
     cwd_fd = os.open('/', os.O_PATH)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
         sock.connect(socket_path)
-        result = call_run(
+        result = call_more(
             sock,
+            f'{INTERFACE}.Run',
             {
                 'argv': ['sh', '-c', script],
                 'workingDirectory': '/',
@@ -174,8 +153,9 @@ class HostRunTest(unittest.TestCase):
         os.write(stdin_write, stdin)
         os.close(stdin_write)
         with self.connect() as sock:
-            result = call_run(
+            result = call_more(
                 sock,
+                f'{INTERFACE}.Run',
                 {
                     'argv': argv,
                     'workingDirectory': cwd,

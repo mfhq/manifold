@@ -25,11 +25,19 @@ import signal
 import socket
 import ssl
 import subprocess
+import sys
 import sysconfig
 import tempfile
 import threading
 import time
+import unittest
 import zipfile
+
+# Python has a zstd module since version 3.14, with older versions we need the zstd tool
+try:
+    from compression import zstd
+except ImportError:
+    zstd = None
 
 # the exit status that Meson treats as "skipped"
 EXIT_SKIPPED = 77
@@ -90,8 +98,8 @@ class VarlinkError(Exception):
 class Daemon:
     """A Manifold daemon that listens on the given socket path.
 
-    The daemon logs to a file. We do not use a pipe for its output, as nothing reads the
-    pipe while the tests run, so the pipe would fill up and block the daemon."""
+    The daemon logs to a file, as a pipe that nobody reads while the tests run would fill
+    up and block the daemon. The log is kept when the daemon is restarted."""
 
     def __init__(self, exe, socket_path, log_path, args=()):
         self.exe = exe
@@ -99,11 +107,16 @@ class Daemon:
         self.log_path = log_path
         self.args = list(args)
         self.process = None
+        self.log_start = 0
+        # start with an empty log
+        open(self.log_path, 'wb').close()
 
     def start(self):
         if os.path.exists(self.socket_path):
             os.unlink(self.socket_path)
-        with open(self.log_path, 'wb') as log:
+        # the log of earlier starts is kept, remember where the new log begins
+        self.log_start = self.log_size()
+        with open(self.log_path, 'ab') as log:
             self.process = subprocess.Popen(
                 [self.exe, '--socket', self.socket_path, '--verbose', *self.args],
                 stdout=log,
@@ -113,7 +126,7 @@ class Daemon:
             if os.path.exists(self.socket_path):
                 return
             if self.process.poll() is not None:
-                raise RuntimeError(f'{self.exe} exited early:\n{self.read_log()}')
+                raise RuntimeError(f'{self.exe} exited early:\n{self.read_log(self.log_start)}')
             time.sleep(0.05)
         raise RuntimeError(f'{self.exe} did not start listening')
 
@@ -127,7 +140,7 @@ class Daemon:
             return f.read().decode(errors='replace')
 
     def stop(self):
-        """Stop the daemon, and return its log. It is safe to stop the daemon twice."""
+        """Stop the daemon if it is still running, and return the log since its last start."""
         if self.process.poll() is None:
             self.process.send_signal(signal.SIGTERM)
             try:
@@ -135,11 +148,10 @@ class Daemon:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
+        log = self.read_log(self.log_start)
         if self.process.returncode != 0:
-            raise RuntimeError(
-                f'{self.exe} exited with status {self.process.returncode}:\n{self.read_log()}'
-            )
-        return self.read_log()
+            raise RuntimeError(f'{self.exe} exited with status {self.process.returncode}:\n{log}')
+        return log
 
     def call(self, method, parameters=None, more=False, fd=None):
         """
@@ -204,6 +216,66 @@ class Daemon:
                 if not reply.get('continues', False):
                     break
         return replies if more else replies[0]
+
+
+class DaemonTestCase(unittest.TestCase):
+    """Base class for tests that need a daemon. A subclass has to create the Daemon in
+    setUpClass(), and store it in the `daemon` attribute of the class."""
+
+    def run(self, result=None):
+        """Run a test. If the test fails, print the messages that the daemon logged during the
+        test."""
+        result = result if result is not None else self.defaultTestResult()
+        start = self.daemon.log_size()
+        problems = len(result.failures) + len(result.errors)
+        super().run(result)
+        if len(result.failures) + len(result.errors) > problems:
+            sys.stderr.write(f'--- the daemon logged:\n{self.daemon.read_log(start)}---\n')
+        return result
+
+
+def call_more(sock, method, parameters, fds):
+    """Call a Varlink method on a connected socket with the 'more' flag, and pass the file
+    descriptors along. Returns the list of replies, or the error reply if the method failed."""
+    call = {'method': method, 'parameters': parameters, 'more': True}
+    socket.send_fds(sock, [json.dumps(call).encode() + b'\0'], fds)
+    replies = []
+    received = b''
+    while True:
+        while b'\0' not in received:
+            data = sock.recv(65536)
+            if not data:
+                raise RuntimeError(f'the connection was closed without a reply to {method}')
+            received += data
+        message, _, received = received.partition(b'\0')
+        reply = json.loads(message)
+        if 'error' in reply:
+            return reply
+        replies.append(reply['parameters'])
+        if not reply.get('continues', False):
+            return replies
+
+
+def installed_components(with_origin=False):
+    """Return the installed components as a sorted list of (ID, version, install mode).
+    If `with_origin` is set, each entry also has the origin of the component.
+
+    We read the components from the store directory, as the daemon has no method to list
+    the installed components."""
+    found = []
+    for subdir in ('apps', 'plugins', 'runtimes'):
+        for component_id in os.listdir(f'{STORE}/{subdir}'):
+            for name in os.listdir(f'{STORE}/{subdir}/{component_id}'):
+                version_dir = f'{STORE}/{subdir}/{component_id}/{name}'
+                if name.startswith('.') or os.path.islink(version_dir):
+                    continue
+                with open(f'{version_dir}/mode', encoding='utf-8') as f:
+                    entry = (component_id, name.rsplit('-', 1)[0], f.read().strip())
+                if with_origin:
+                    with open(f'{version_dir}/origin', encoding='utf-8') as f:
+                        entry += (f.read().strip(),)
+                found.append(entry)
+    return sorted(found)
 
 
 def make_erofs(files):
@@ -335,6 +407,16 @@ class Image:
         return m
 
 
+def file_entry(data):
+    """Return the size and the hashes of a file, as recorded in the index of a bundle or
+    a repository."""
+    return {
+        'size': len(data),
+        'sha256': hashlib.sha256(data).hexdigest(),
+        'blake3': blake3_hex(data),
+    }
+
+
 # the start of a JPEG XL codestream
 JXL_DATA = b'\xff\x0afake'
 
@@ -374,15 +456,7 @@ def write_bundle(path, images, signed=True, corrupt_image=None, catalog_ids=None
     ).encode()
     index = {
         'format': 1,
-        'files': [
-            {
-                'name': name,
-                'size': len(data),
-                'sha256': hashlib.sha256(data).hexdigest(),
-                'blake3': blake3_hex(data),
-            }
-            for name, data in sorted(files.items())
-        ],
+        'files': [{'name': name, **file_entry(data)} for name, data in sorted(files.items())],
     }
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_STORED) as bundle:
         for image in images:
@@ -400,9 +474,7 @@ def write_bundle(path, images, signed=True, corrupt_image=None, catalog_ids=None
 
 def zstd_compress(data):
     """Compress data with zstd. Repositories serve their metadata in this format."""
-    try:
-        from compression import zstd
-    except ImportError:
+    if zstd is None:
         return subprocess.run(
             ['zstd', '-q', '-c'], input=data, capture_output=True, check=True
         ).stdout
@@ -410,22 +482,8 @@ def zstd_compress(data):
 
 
 def zstd_available():
-    """Check if we can compress data with zstd. Python has a zstd module since version 3.14,
-    with older versions we need the zstd tool."""
-    try:
-        from compression import zstd  # noqa: F401
-    except ImportError:
-        return shutil.which('zstd') is not None
-    return True
-
-
-def file_entry(data):
-    """Return the index entry for a file of a repository, with its size and hashes."""
-    return {
-        'size': len(data),
-        'sha256': hashlib.sha256(data).hexdigest(),
-        'blake3': blake3_hex(data),
-    }
+    """Check if we can compress data with zstd."""
+    return zstd is not None or shutil.which('zstd') is not None
 
 
 class _HttpsHandler(http.server.BaseHTTPRequestHandler):

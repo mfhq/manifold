@@ -69,13 +69,13 @@ mft_assert_load_fails(const char *component_id, GQuark domain, int code, const c
         g_assert_cmpstr(error->message, ==, message);
 }
 
-/* the tests share no state; every one starts afresh */
-typedef struct {
-    gpointer unused;
-} Fixture;
-
+/**
+ * mft_reset_store:
+ *
+ * Replace the contents of the store with the usual store of the tests.
+ */
 static void
-mft_setup(Fixture *fixture, gconstpointer user_data)
+mft_reset_store(void)
 {
     mft_clear_store();
     mft_write_usual_store();
@@ -85,14 +85,17 @@ mft_setup(Fixture *fixture, gconstpointer user_data)
  * test_load:
  */
 static void
-test_load(Fixture *fixture, gconstpointer user_data)
+test_load(void)
 {
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfrApp) app = mfr_app_load(TEST_APP_ID, &error);
+    g_autoptr(MfrApp) app = NULL;
     g_autofree char *app_hash = mft_fake_hash(TEST_APP_ID);
     g_autofree char *core_hash = mft_fake_hash(TEST_CORE_ID);
     const MfrLayer *layer;
 
+    mft_reset_store();
+
+    app = mfr_app_load(TEST_APP_ID, &error);
     g_assert_no_error(error);
     g_assert_cmpstr(app->component_id, ==, TEST_APP_ID);
     g_assert_cmpstr(app->version, ==, "0.1.0");
@@ -117,10 +120,12 @@ test_load(Fixture *fixture, gconstpointer user_data)
  * test_without_platform:
  */
 static void
-test_without_platform(Fixture *fixture, gconstpointer user_data)
+test_without_platform(void)
 {
     g_autoptr(GError) error = NULL;
     g_autoptr(MfrApp) app = NULL;
+
+    mft_reset_store();
 
     /* a kit may sit directly on the core */
     mft_replace_link("../../../runtimes/" TEST_CORE_ID "/current",
@@ -136,8 +141,10 @@ test_without_platform(Fixture *fixture, gconstpointer user_data)
  * test_not_installed:
  */
 static void
-test_not_installed(Fixture *fixture, gconstpointer user_data)
+test_not_installed(void)
 {
+    mft_reset_store();
+
     mft_assert_load_fails("org.example.nothing",
                           MF_ERROR,
                           MF_ERROR_NOT_FOUND,
@@ -150,8 +157,10 @@ test_not_installed(Fixture *fixture, gconstpointer user_data)
  * test_revoked:
  */
 static void
-test_revoked(Fixture *fixture, gconstpointer user_data)
+test_revoked(void)
 {
+    mft_reset_store();
+
     mft_write_file(MF_STORE_APPS_DIR "/" TEST_APP_ID "/revoked", "");
     mft_assert_load_fails(TEST_APP_ID, MF_ERROR, MF_ERROR_REVOKED, TEST_APP_ID " was revoked");
 }
@@ -163,8 +172,10 @@ test_revoked(Fixture *fixture, gconstpointer user_data)
  * not installed, or if its `base` link does not exist.
  */
 static void
-test_missing_base(Fixture *fixture, gconstpointer user_data)
+test_missing_base(void)
 {
+    mft_reset_store();
+
     mft_replace_link("../../../runtimes/org.example.gone/current",
                      MF_STORE_APPS_DIR "/" TEST_APP_ID "/0.1.0-1/base");
     mft_assert_load_fails(TEST_APP_ID, MF_ERROR, MF_ERROR_MISSING_BASE, NULL);
@@ -180,8 +191,10 @@ test_missing_base(Fixture *fixture, gconstpointer user_data)
  * to fail then, instead of following `base` links forever.
  */
 static void
-test_layers_must_be_in_order(Fixture *fixture, gconstpointer user_data)
+test_layers_must_be_in_order(void)
 {
+    mft_reset_store();
+
     /* make the kit its own base, so that a kit is below a kit */
     mft_replace_link("../../../runtimes/" TEST_PLATFORM_KIT_ID "/current",
                      MF_STORE_RUNTIMES_DIR "/" TEST_PLATFORM_KIT_ID "/20260114T0238-1/base");
@@ -199,8 +212,10 @@ test_layers_must_be_in_order(Fixture *fixture, gconstpointer user_data)
  * application is not supported yet.
  */
 static void
-test_sdk_is_not_supported_yet(Fixture *fixture, gconstpointer user_data)
+test_sdk_is_not_supported_yet(void)
 {
+    mft_reset_store();
+
     mft_write_version(MF_STORAGE_DIR,
                       MF_STORE_RUNTIMES_SUBDIR,
                       &(MftTestManifest){.component_id = TEST_PLATFORM_KIT_ID ".sdk",
@@ -228,15 +243,13 @@ main(int argc, char **argv)
     mft_sandbox_enter();
     g_test_init(&argc, &argv, NULL);
 
-#define add_test(name, func) g_test_add("/run-app/" name, Fixture, NULL, mft_setup, func, NULL)
-    add_test("load", test_load);
-    add_test("without-platform", test_without_platform);
-    add_test("not-installed", test_not_installed);
-    add_test("revoked", test_revoked);
-    add_test("missing-base", test_missing_base);
-    add_test("layers-must-be-in-order", test_layers_must_be_in_order);
-    add_test("sdk-is-not-supported-yet", test_sdk_is_not_supported_yet);
-#undef add_test
+    g_test_add_func("/compose/load", test_load);
+    g_test_add_func("/compose/without-platform", test_without_platform);
+    g_test_add_func("/compose/not-installed", test_not_installed);
+    g_test_add_func("/compose/revoked", test_revoked);
+    g_test_add_func("/compose/missing-base", test_missing_base);
+    g_test_add_func("/compose/layers-must-be-in-order", test_layers_must_be_in_order);
+    g_test_add_func("/compose/sdk-is-not-supported-yet", test_sdk_is_not_supported_yet);
 
     return g_test_run();
 }

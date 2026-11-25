@@ -33,9 +33,11 @@ from mftest import (  # noqa: E402
     RUNTIME_DIR,
     STORE,
     Daemon,
+    DaemonTestCase,
     Image,
     VarlinkError,
     host_architecture,
+    installed_components,
     write_bundle,
 )
 
@@ -74,7 +76,7 @@ def rebuild(image, base=None):
     )
 
 
-class InstallerTestCase(unittest.TestCase):
+class InstallerTestCase(DaemonTestCase):
     """The base class of all tests: every class of tests gets its own daemon, and every
     test starts with an empty store."""
 
@@ -138,17 +140,6 @@ class InstallerTestCase(unittest.TestCase):
         path = mock.patch.dict(os.environ, {'PATH': stubs + os.pathsep + os.environ['PATH']})
         path.start()
         cls.addClassCleanup(path.stop)
-
-    def run(self, result=None):
-        """Run a test. If the test fails, print the messages that the daemon logged during the
-        test."""
-        result = result if result is not None else self.defaultTestResult()
-        start = self.daemon.log_size()
-        problems = len(result.failures) + len(result.errors)
-        super().run(result)
-        if len(result.failures) + len(result.errors) > problems:
-            sys.stderr.write(f'--- the daemon logged:\n{self.daemon.read_log(start)}---\n')
-        return result
 
     def setUp(self):
         """Empty the store and the directories for units and udev rules."""
@@ -271,19 +262,8 @@ class InstallerTestCase(unittest.TestCase):
         )
 
     def installed(self):
-        """Read the installed components from the store on disk, as the daemon has no
-        method to list them. Returns a sorted list of (ID, version, mode)."""
-        found = []
-        for subdir in ('apps', 'plugins', 'runtimes'):
-            for component_id in os.listdir(f'{STORE}/{subdir}'):
-                for name in os.listdir(f'{STORE}/{subdir}/{component_id}'):
-                    version_dir = f'{STORE}/{subdir}/{component_id}/{name}'
-                    if name.startswith('.') or os.path.islink(version_dir):
-                        continue
-                    with open(f'{version_dir}/mode', encoding='utf-8') as f:
-                        mode = f.read().strip()
-                    found.append((component_id, name.rsplit('-', 1)[0], mode))
-        return sorted(found)
+        """Return the (ID, version, install mode) of the installed components."""
+        return installed_components()
 
     def version_dirs(self, subdir, component_id):
         """Return the names of the version directories of a component."""
