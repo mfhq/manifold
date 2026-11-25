@@ -58,6 +58,12 @@ echo "arg=$1"
 echo "cwd=$(pwd)"
 echo "var=$MF_TEST_VAR"
 echo "unset=${MF_TEST_UNSET-absent}"
+echo "prepended=$MF_TEST_PATH"
+echo "default=$MF_TEST_DEFAULT"
+echo "alternate=$MF_TEST_ALTERNATE"
+echo "later=$MF_TEST_LATER"
+echo "expanded-to-nothing=${MF_TEST_NOTHING-absent}"
+echo "literal=$MF_TEST_LITERAL"
 echo "uid=$(id -u)"
 '''
 
@@ -147,7 +153,19 @@ class FakeService(threading.Thread):
             'parameters': {
                 'mountFileDescriptor': 0,
                 'executable': '/app/bin/probe',
-                'environment': ['MF_TEST_VAR=hello', 'MF_TEST_UNSET='],
+                'environment': [
+                    'MF_TEST_VAR=hello',
+                    'MF_TEST_UNSET=',
+                    # values can refer to the environment of the caller
+                    'MF_TEST_PATH=/app/first:${MF_TEST_PATH}',
+                    'MF_TEST_DEFAULT=/app/data:${MF_TEST_MISSING:-/usr/local/share:${MF_TEST_VAR}}',
+                    'MF_TEST_ALTERNATE=/app/lib${MF_TEST_MISSING:+:${MF_TEST_MISSING}}'
+                    '${MF_TEST_PATH:+:${MF_TEST_PATH}}',
+                    # and to the variables that were set before them
+                    'MF_TEST_LATER=${MF_TEST_VAR} again',
+                    'MF_TEST_NOTHING=${MF_TEST_MISSING}',
+                    'MF_TEST_LITERAL=$HOME ${} ${MF_TEST_VAR:?} ${MF_TEST_VAR',
+                ],
             }
         }
         if component_id == HOST_APP_ID:
@@ -174,7 +192,14 @@ class RunnerTest(unittest.TestCase):
         argv = [ARGS.runner, '--socket', self.socket_path, *args]
         if self.without_capabilities:
             argv = ['setpriv', '--bounding-set=-all', '--inh-caps=-all', *argv]
-        environment = dict(os.environ, MF_TEST_UNSET='from the caller', HOME='/home')
+        environment = dict(
+            os.environ,
+            MF_TEST_UNSET='from the caller',
+            MF_TEST_PATH='/caller',
+            MF_TEST_NOTHING='from the caller',
+            HOME='/home',
+        )
+        environment.pop('MF_TEST_MISSING', None)
         if search_path is not None:
             environment['PATH'] = search_path
         if runtime_dir is not None:
@@ -198,6 +223,13 @@ class RunnerTest(unittest.TestCase):
                 'cwd': expected_cwd,
                 'var': 'hello',
                 'unset': 'absent',
+                'prepended': '/app/first:/caller',
+                'default': '/app/data:/usr/local/share:hello',
+                # an earlier entry has changed MF_TEST_PATH by then
+                'alternate': '/app/lib:/app/first:/caller',
+                'later': 'hello again',
+                'expanded-to-nothing': 'absent',
+                'literal': '$HOME ${} ${MF_TEST_VAR:?} ${MF_TEST_VAR',
                 'uid': str(self.uid),
             },
             result.stderr,

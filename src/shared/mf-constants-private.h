@@ -19,6 +19,9 @@
 /* the file that describes how a mount tree was assembled, relative to the root of the tree */
 #define MF_TREE_ENVIRONMENT_RECORD "run/manifold/environment.json"
 
+/* the directory of a runtime with its environment files, relative to the root of the runtime */
+#define MF_TREE_ENVIRONMENT_DIR "usr/lib/manifold/environment.d"
+
 /* the directory in a mount tree with the links to the programs of the host */
 #define MF_HOST_BIN_DIR "/run/host-bin"
 

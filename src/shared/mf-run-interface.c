@@ -51,8 +51,10 @@ static SD_VARLINK_DEFINE_METHOD(
     SD_VARLINK_DEFINE_OUTPUT(mountFileDescriptor, SD_VARLINK_INT, 0),
     SD_VARLINK_FIELD_COMMENT("Absolute path of the program to execute, within the mount tree."),
     SD_VARLINK_DEFINE_OUTPUT(executable, SD_VARLINK_STRING, 0),
-    SD_VARLINK_FIELD_COMMENT("Environment variables to set for the application, as NAME=VALUE. "
-                             "A variable with an empty value must be unset."),
+    SD_VARLINK_FIELD_COMMENT("Environment variables to set for the application, as NAME=VALUE and in "
+                             "this order. A value can refer to the environment of the caller with "
+                             "${NAME}, ${NAME:-default} and ${NAME:+alternate}, which the caller has to "
+                             "expand. A variable with an empty value must be unset."),
     SD_VARLINK_DEFINE_OUTPUT(environment, SD_VARLINK_STRING, SD_VARLINK_ARRAY),
     SD_VARLINK_FIELD_COMMENT("Location of the links to the programs of the host in the mount tree. Only set for "
                              "an application with the host-commands permission."),

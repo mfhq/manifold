@@ -8,6 +8,7 @@
 
 #include "config.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -516,28 +517,172 @@ mfx_change_directory(const char *cwd)
         fprintf(stderr, "%s: Unable to change to the root of the tree: %s\n", PROGRAM_NAME, strerror(errno));
 }
 
+/* how deep the default of a reference can have references of its own */
+constexpr unsigned int MFX_EXPANSION_DEPTH_MAX = 8;
+
+/**
+ * MfxBuffer:
+ *
+ * A string that grows as text is appended to it.
+ */
+typedef struct {
+    char *data;
+    size_t length;
+    size_t capacity;
+    bool failed; /* we ran out of memory, and the text is incomplete */
+} MfxBuffer;
+
+static void
+mfx_buffer_append(MfxBuffer *buffer, const char *text, size_t length)
+{
+    if (buffer->failed)
+        return;
+    if (buffer->length + length + 1 > buffer->capacity) {
+        size_t capacity = buffer->capacity > 0 ? buffer->capacity : 128;
+        char *data;
+
+        while (capacity < buffer->length + length + 1)
+            capacity *= 2;
+        data = realloc(buffer->data, capacity);
+        if (data == nullptr) {
+            buffer->failed = true;
+            return;
+        }
+        buffer->data = data;
+        buffer->capacity = capacity;
+    }
+
+    memcpy(buffer->data + buffer->length, text, length);
+    buffer->length += length;
+    buffer->data[buffer->length] = '\0';
+}
+
+/**
+ * mfx_reference_length:
+ * @text: text that starts with "${"
+ *
+ * Returns: the length of the reference at the start of @text, with its
+ *     braces, or 0 if it is not closed
+ */
+static size_t
+mfx_reference_length(const char *text, size_t length)
+{
+    unsigned int depth = 0;
+
+    for (size_t i = 0; i < length; i++) {
+        if (text[i] == '$' && i + 1 < length && text[i + 1] == '{') {
+            depth++;
+            i++;
+        } else if (text[i] == '}' && --depth == 0) {
+            return i + 1;
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * mfx_expand:
+ *
+ * Append @text to @buffer, with its references to environment variables
+ * replaced by their values:
+ *
+ *   ${NAME}             the value of NAME, or nothing if it is not set
+ *   ${NAME:-default}    the value of NAME, or the default if it is not set or empty
+ *   ${NAME:+alternate}  the alternate if NAME is set and not empty, or nothing
+ *
+ * The default and the alternate can have references themselves. Anything
+ * else is taken as it is written, including a reference we do not understand.
+ */
+static void
+mfx_expand(MfxBuffer *buffer, const char *text, size_t length, unsigned int depth)
+{
+    size_t i = 0;
+
+    while (i < length) {
+        const char *reference = memmem(text + i, length - i, "${", 2);
+        size_t reference_length;
+        size_t name_length = 0;
+        char name[256];
+        const char *value;
+        const char *rest;
+        size_t rest_length;
+
+        if (reference == nullptr || depth >= MFX_EXPANSION_DEPTH_MAX)
+            break;
+        mfx_buffer_append(buffer, text + i, reference - (text + i));
+        i = reference - text;
+
+        reference_length = mfx_reference_length(reference, length - i);
+        while (2 + name_length < reference_length &&
+               (isalnum((unsigned char) reference[2 + name_length]) || reference[2 + name_length] == '_'))
+            name_length++;
+        rest = reference + 2 + name_length;
+        rest_length = reference_length > 0 ? reference_length - 2 - name_length - 1 : 0;
+        if (reference_length == 0 || name_length == 0 || name_length >= sizeof(name) ||
+            (rest_length > 0 && (rest_length < 2 || rest[0] != ':' || (rest[1] != '-' && rest[1] != '+')))) {
+            /* no reference after all */
+            mfx_buffer_append(buffer, "${", 2);
+            i += 2;
+            continue;
+        }
+
+        memcpy(name, reference + 2, name_length);
+        name[name_length] = '\0';
+        value = getenv(name);
+        if (value != nullptr && value[0] == '\0')
+            value = nullptr;
+
+        if (rest_length == 0 || rest[1] == '-') {
+            if (value != nullptr)
+                mfx_buffer_append(buffer, value, strlen(value));
+            else if (rest_length > 0)
+                mfx_expand(buffer, rest + 2, rest_length - 2, depth + 1);
+        } else if (value != nullptr) {
+            mfx_expand(buffer, rest + 2, rest_length - 2, depth + 1);
+        }
+        i += reference_length;
+    }
+
+    mfx_buffer_append(buffer, text + i, length - i);
+}
+
 /**
  * mfx_apply_environment:
  *
- * Apply the environment variables that the compose service sent. A variable
- * with an empty value is unset.
+ * Apply the environment variables that the compose service sent, in their
+ * order. Their values can refer to our environment, which is the one of the
+ * caller and the variables we have set so far. A variable with an empty
+ * value is unset.
+ *
+ * Returns: 0 on success, or a negative errno
  */
-static void
+static int
 mfx_apply_environment(char **environment)
 {
     if (environment == nullptr)
-        return;
+        return 0;
     for (char **e = environment; *e != nullptr; e++) {
         char *separator = strchr(*e, '=');
+        MfxBuffer value = {};
+        int r = 0;
 
         if (separator == nullptr)
             continue;
         *separator = '\0';
-        if (separator[1] == '\0')
+        mfx_expand(&value, separator + 1, strlen(separator + 1), 0);
+        if (value.failed)
+            r = -ENOMEM;
+        else if (value.length == 0)
             unsetenv(*e);
-        else
-            setenv(*e, separator + 1, 1);
+        else if (setenv(*e, value.data, 1) != 0)
+            r = -errno;
+        free(value.data);
+        if (r < 0)
+            return r;
     }
+
+    return 0;
 }
 
 /**
@@ -998,9 +1143,8 @@ main(int argc, char **argv)
     launch_data.mount_fd = -1;
 
     mfx_change_directory(cwd[0] != '\0' ? cwd : nullptr);
-    mfx_apply_environment(launch_data.environment);
-
-    if (mfx_set_search_path(caller_path, search_path, for_host_commands) < 0) {
+    if (mfx_apply_environment(launch_data.environment) < 0 ||
+        mfx_set_search_path(caller_path, search_path, for_host_commands) < 0) {
         fprintf(stderr, "%s: Out of memory\n", PROGRAM_NAME);
         mfx_launch_data_clear(&launch_data);
         return MFX_EXIT_FAILED;

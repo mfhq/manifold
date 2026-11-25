@@ -21,6 +21,7 @@
 
 #include "mf-constants-private.h"
 #include "mf-json-private.h"
+#include "mfr-environment.h"
 #include "mfr-host-bin.h"
 #include "mf-sdautoptr-private.h"
 
@@ -312,15 +313,26 @@ mfr_read_host_proc_options(GError **error)
  * Build the environment variables that are set for the application when it is launched.
  */
 static char **
-mfr_build_environment_vars(const MfrCapture *capture)
+mfr_build_environment_vars(const MfrTree *tree)
 {
     g_autoptr(GStrvBuilder) builder = g_strv_builder_new();
+    g_autoptr(GPtrArray) layer_roots = g_ptr_array_new();
+    g_auto(GStrv) runtime_vars = NULL;
 
     /* environment variables from our host capture */
-    g_strv_builder_addv(builder, (const char **) mfr_capture_get_environment(capture));
+    g_strv_builder_addv(builder, (const char **) mfr_capture_get_environment(tree->capture));
 
     /* make GLib and GTK use the desktop portals, which work better in a mount tree */
     g_strv_builder_add(builder, "GTK_USE_PORTAL=1");
+
+    /* what the runtimes ask for comes last, so they can refer to the variables above */
+    for (MfrLayerKind kind = MFR_LAYER_CORE; kind < MFR_LAYER_APP; kind++) {
+        if (tree->mounts[kind] != NULL)
+            g_ptr_array_add(layer_roots, (char *) mfr_image_mount_get_path(tree->mounts[kind]));
+    }
+    g_ptr_array_add(layer_roots, NULL);
+    runtime_vars = mfr_environment_load((const char *const *) layer_roots->pdata);
+    g_strv_builder_addv(builder, (const char **) runtime_vars);
 
     return g_strv_builder_end(builder);
 }
@@ -901,7 +913,7 @@ mfr_tree_assemble(MfrApp *app, MfrCaptures *captures, MfrImageMounts *img_mounts
     tree->key = mfr_make_tree_key(app, tree->capture);
     tree->mount_path = g_build_filename(MFR_TREES_MOUNT_DIR, tree->key, NULL);
     tree->cache_dir = g_build_filename(MFR_TREES_CACHE_DIR, tree->key, NULL);
-    tree->environment = mfr_build_environment_vars(tree->capture);
+    tree->environment = mfr_build_environment_vars(tree);
 
     g_info("Assembling tree %s for %s %s", tree->key, app->component_id, app->version);
     if (!mfr_tree_assemble_internal(tree, error)) {
