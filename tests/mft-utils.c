@@ -63,6 +63,17 @@ mft_read_file(const char *path)
     return content;
 }
 
+/**
+ * mft_read_sample:
+ *
+ * Returns: (transfer full): the text of a file in the samples directory
+ */
+char *
+mft_read_sample(const char *name)
+{
+    return mft_read_file(g_test_get_filename(G_TEST_DIST, "samples", name, NULL));
+}
+
 void
 mft_write_bytes(const char *path, GBytes *bytes)
 {
@@ -425,8 +436,6 @@ mft_manifest_new(const MftTestManifest *m)
 /**
  * mft_write_version:
  * @root: the store, e.g. %MF_STORAGE_DIR
- * @subdir: the subdirectory of the store for the component, %MF_STORE_APPS_SUBDIR, %MF_STORE_PLUGINS_SUBDIR
- *   or %MF_STORE_RUNTIMES_SUBDIR
  * @manifest: the manifest of the component
  * @base_version_dir: the version directory of the base that the `base` link points to,
  *   or %NULL for "current"
@@ -439,11 +448,12 @@ mft_manifest_new(const MftTestManifest *m)
  */
 void
 mft_write_version(const char *root,
-                  const char *subdir,
                   const MftTestManifest *manifest,
                   const char *base_version_dir,
                   const char *mode)
 {
+    const char *subdir = mf_store_subdir_for_kind(mf_component_kind_from_string(manifest->kind),
+                                                  manifest->sdk);
     g_autofree char *identity = mft_fake_hash(manifest->component_id);
     const char *hash = manifest->verity_root_hash != NULL ? manifest->verity_root_hash : identity;
     g_autofree char *component_dir = g_build_filename(root, subdir, manifest->component_id, NULL);

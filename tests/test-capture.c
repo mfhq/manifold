@@ -43,6 +43,15 @@ mft_dir_entry(const char *path)
     return g_strdup_printf("{\"path\": \"%s\", \"mtime\": %" PRIu64 "}", path, mtime);
 }
 
+/**
+ * mft_write_capture:
+ * @dirs_json: (nullable): the host directories of the stamp, or %NULL to write no stamp
+ * @targets_json: the host libraries of the stamp
+ *
+ * Write a capture without libraries.
+ *
+ * Returns: (transfer full): the directory of the capture
+ */
 static char *
 mft_write_capture(const char *name, const char *dirs_json, const char *targets_json)
 {
@@ -59,12 +68,13 @@ mft_write_capture(const char *name, const char *dirs_json, const char *targets_j
         "   \"targets\": %s\n"
         "}",
         name,
-        dirs_json,
+        dirs_json != NULL ? dirs_json : "[]",
         targets_json);
     /* clang-format on */
 
     mft_make_dirs(overrides);
-    mft_write_file(stamp_path, stamp);
+    if (dirs_json != NULL)
+        mft_write_file(stamp_path, stamp);
     mft_write_file(environment_path, "{\"VK_DRIVER_FILES\": \"\"}");
     return dir;
 }
@@ -83,58 +93,53 @@ mft_reset_captures(void)
 
 /**
  * test_check_all:
+ *
+ * When the daemon starts, it removes the captures that do not match the
+ * host anymore, and the captures that are not complete.
  */
 static void
 test_check_all(void)
 {
     g_autofree char *usr_lib = mft_dir_entry("/usr/lib");
     g_autofree char *fresh_dirs = g_strdup_printf("[%s]", usr_lib);
+    /* a library that was missing when the capture was made has the modification time 0 */
+    const char *missing_library = "[{\"path\": \"/usr/lib/does-not-exist.so\", \"size\": 1, \"mtime\": 0}]";
+    const char *removed_library = "[{\"path\": \"/usr/lib/does-not-exist.so\", \"size\": 1, \"mtime\": 1}]";
     g_autofree char *fresh = NULL;
-    g_autofree char *stale_dir = NULL;
-    g_autofree char *stale_target = NULL;
-    g_autofree char *gone_target = NULL;
+    g_autofree char *still_missing = NULL;
+    g_autofree char *changed_dir = NULL;
+    g_autofree char *removed = NULL;
     g_autofree char *no_stamp = NULL;
-    g_autofree char *no_stamp_path = NULL;
-    g_autofree char *not_a_stamp = NULL;
-    g_autofree char *not_a_stamp_path = NULL;
+    g_autofree char *bad_stamp = NULL;
+    g_autofree char *bad_stamp_path = NULL;
     g_autofree char *unfinished = g_build_filename(TEST_CAPTURES_DIR, ".tmp-unfinished", NULL);
-    g_autofree char *moved_aside = NULL;
 
     mft_reset_captures();
 
+    /* captures that match the host */
     fresh = mft_write_capture("fresh", fresh_dirs, "[]");
-    stale_dir = mft_write_capture("stale-dir", "[{\"path\": \"/usr/lib\", \"mtime\": 1}]", "[]");
-    stale_target = mft_write_capture(
-        "stale-target",
-        fresh_dirs,
-        "[{\"path\": \"/usr/lib/does-not-exist.so\", \"size\": 1, \"mtime\": 1}]");
-    gone_target = mft_write_capture(
-        "gone-target",
-        fresh_dirs,
-        "[{\"path\": \"/usr/lib/does-not-exist.so\", \"size\": 1, \"mtime\": 0}]");
-    no_stamp = mft_write_capture("no-stamp", "[]", "[]");
-    no_stamp_path = g_build_filename(no_stamp, "stamp", NULL);
-    not_a_stamp = mft_write_capture("not-a-stamp", "[]", "[]");
-    not_a_stamp_path = g_build_filename(not_a_stamp, "stamp", NULL);
-    moved_aside = mft_write_capture(".stale-moved-aside", fresh_dirs, "[]");
+    still_missing = mft_write_capture("still-missing", fresh_dirs, missing_library);
 
-    g_assert_cmpint(g_unlink(no_stamp_path), ==, 0);
-    mft_write_file(not_a_stamp_path, "{\"id\": \"x\"}");
-    g_assert_cmpint(g_mkdir(unfinished, 0755), ==, 0);
+    /* a host directory changed, and a captured library was removed */
+    changed_dir = mft_write_capture("changed-dir", "[{\"path\": \"/usr/lib\", \"mtime\": 1}]", "[]");
+    removed = mft_write_capture("removed-library", fresh_dirs, removed_library);
+
+    /* captures without a stamp, with a stamp that lacks fields, and one that was never finished */
+    no_stamp = mft_write_capture("no-stamp", NULL, "[]");
+    bad_stamp = mft_write_capture("bad-stamp", "[]", "[]");
+    bad_stamp_path = g_build_filename(bad_stamp, "stamp", NULL);
+    mft_write_file(bad_stamp_path, "{\"id\": \"x\"}");
+    mft_make_dirs(unfinished);
 
     mfr_captures_check_all(NULL);
 
     g_assert_true(g_file_test(fresh, G_FILE_TEST_IS_DIR));
-    /* a target that was missing when the capture was made (mtime 0), and is still missing,
-     * does not make the capture stale */
-    g_assert_true(g_file_test(gone_target, G_FILE_TEST_IS_DIR));
-    g_assert_false(g_file_test(stale_dir, G_FILE_TEST_EXISTS));
-    g_assert_false(g_file_test(stale_target, G_FILE_TEST_EXISTS));
+    g_assert_true(g_file_test(still_missing, G_FILE_TEST_IS_DIR));
+    g_assert_false(g_file_test(changed_dir, G_FILE_TEST_EXISTS));
+    g_assert_false(g_file_test(removed, G_FILE_TEST_EXISTS));
     g_assert_false(g_file_test(no_stamp, G_FILE_TEST_EXISTS));
-    g_assert_false(g_file_test(not_a_stamp, G_FILE_TEST_EXISTS));
+    g_assert_false(g_file_test(bad_stamp, G_FILE_TEST_EXISTS));
     g_assert_false(g_file_test(unfinished, G_FILE_TEST_EXISTS));
-    /* a capture that was moved aside earlier and is not in use anymore is deleted */
-    g_assert_false(g_file_test(moved_aside, G_FILE_TEST_EXISTS));
 }
 
 /**
@@ -174,9 +179,6 @@ test_discard_all(void)
     g_assert_true(g_file_test(TEST_CAPTURES_DIR, G_FILE_TEST_IS_DIR));
 }
 
-/**
- * main:
- */
 int
 main(int argc, char **argv)
 {

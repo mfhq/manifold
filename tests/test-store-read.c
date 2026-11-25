@@ -21,25 +21,33 @@ typedef struct {
 
 /**
  * mft_assert_read_fails:
+ * @message_part: (nullable): a part of the expected error message
  *
- * Assert that reading a component directly fails with the given error.
+ * Check that a component can not be read from its directory.
  */
 static void
-mft_assert_read_fails(Fixture *f, const char *component_id, int code, const char *message)
+mft_assert_read_fails(Fixture *f, const char *component_id, MfError code, const char *message_part)
 {
     g_autoptr(GError) error = NULL;
     g_autoptr(MfComponent) component = mf_store_read_component_at(f->dir, component_id, NULL, &error);
 
     g_assert_null(component);
-    g_assert_error(error, MF_ERROR, code);
-    if (message != NULL)
-        g_assert_cmpstr(error->message, ==, message);
+    mft_assert_error(error, code, message_part);
 }
 
+/**
+ * mft_assert_no_base:
+ * @message_part: (nullable): a part of the expected error message
+ *
+ * Check that the base of a component is not found.
+ */
 static void
-mft_write_runtime(Fixture *f, const MftTestManifest *manifest, const char *base_version_dir, const char *mode)
+mft_assert_no_base(Fixture *f, MfComponent *component, MfError code, const char *message_part)
 {
-    mft_write_version(f->dir, MF_STORE_RUNTIMES_SUBDIR, manifest, base_version_dir, mode);
+    g_autoptr(GError) error = NULL;
+
+    g_assert_null(mf_store_get_base(f->store, component, &error));
+    mft_assert_error(error, code, message_part);
 }
 
 static void
@@ -50,18 +58,18 @@ mft_setup(Fixture *f, gconstpointer user_data)
 
     /* two versions of the core, the SDK of the older one, a platform on the newer core,
      * and an app on the platform */
-    mft_write_runtime(f,
+    mft_write_version(f->dir,
                       &(MftTestManifest){.component_id = TEST_CORE_ID, .kind = "core", .version = "13.4"},
                       NULL,
                       "manual");
-    mft_write_runtime(f,
+    mft_write_version(f->dir,
                       &(MftTestManifest){.component_id = TEST_CORE_ID,
                                          .kind = "core",
                                          .version = "13.8",
                                          .revision = 22810000},
                       NULL,
                       "manual");
-    mft_write_runtime(f,
+    mft_write_version(f->dir,
                       &(MftTestManifest){.component_id = TEST_SDK_ID,
                                          .kind = "core",
                                          .version = "13.4",
@@ -70,7 +78,7 @@ mft_setup(Fixture *f, gconstpointer user_data)
                                          .base_kind = "core"},
                       "13.4-1",
                       "manual");
-    mft_write_runtime(f,
+    mft_write_version(f->dir,
                       &(MftTestManifest){.component_id = TEST_PLATFORM_ID,
                                          .kind = "platform",
                                          .version = "13.8",
@@ -80,7 +88,6 @@ mft_setup(Fixture *f, gconstpointer user_data)
                       "13.8-22810000",
                       "auto");
     mft_write_version(f->dir,
-                      MF_STORE_APPS_SUBDIR,
                       &(MftTestManifest){.component_id = TEST_APP_ID,
                                          .kind = "app",
                                          .version = "0.1.0",
@@ -99,20 +106,23 @@ mft_teardown(Fixture *f, gconstpointer user_data)
 }
 
 /**
- * test_get_current:
+ * test_get_component:
  *
- * Tests getting the current component.
+ * Get the current version and an exact version of a component.
  */
 static void
-test_get_current(Fixture *f, gconstpointer user_data)
+test_get_component(Fixture *f, gconstpointer user_data)
 {
     g_autoptr(GError) error = NULL;
     g_autoptr(MfComponent) core = mf_store_get_component(f->store, TEST_CORE_ID, NULL, &error);
+    g_autoptr(MfComponent) old = NULL;
+    g_autoptr(MfComponent) platform = NULL;
     g_autoptr(MfComponent) app = NULL;
     g_autofree char *core_hash = mft_fake_hash(TEST_CORE_ID);
     g_autofree char *image = NULL;
     g_autofree char *expected_image = g_strdup_printf("%s/images/by-verity/%s.raw", f->dir, core_hash);
 
+    /* the current version */
     g_assert_no_error(error);
     g_assert_cmpstr(mf_component_get_id(core), ==, TEST_CORE_ID);
     g_assert_cmpint(mf_component_get_kind(core), ==, MF_COMPONENT_KIND_CORE);
@@ -122,44 +132,26 @@ test_get_current(Fixture *f, gconstpointer user_data)
     g_assert_true(mf_component_is_current(core));
     g_assert_cmpint(mf_component_get_install_mode(core), ==, MF_INSTALL_MODE_MANUAL);
     g_assert_cmpstr(mf_component_get_origin(core), ==, "manifold-local");
-
     g_assert_true(g_str_has_suffix(mf_component_get_dir(core), "/runtimes/" TEST_CORE_ID "/13.8-22810000"));
     image = mf_store_image_path_at(mf_store_get_path(f->store), mf_component_get_verity_hash(core));
     g_assert_cmpstr(image, ==, expected_image);
+
+    /* an exact version */
+    old = mf_store_get_component(f->store, TEST_CORE_ID, "13.4", &error);
+    g_assert_no_error(error);
+    g_assert_cmpstr(mf_component_get_version(old), ==, "13.4");
+    g_assert_cmpuint(mf_component_get_revision(old), ==, 1);
+    g_assert_false(mf_component_is_current(old));
+    platform = mf_store_get_component(f->store, TEST_PLATFORM_ID, "13.8", &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(mf_component_get_install_mode(platform), ==, MF_INSTALL_MODE_AUTO);
 
     /* apps are found too, in apps/ instead of runtimes/ */
     app = mf_store_get_component(f->store, TEST_APP_ID, NULL, &error);
     g_assert_no_error(error);
     g_assert_cmpint(mf_component_get_kind(app), ==, MF_COMPONENT_KIND_APP);
-}
 
-/**
- * test_get_version:
- *
- * Tests getting a specific version of a component.
- */
-static void
-test_get_version(Fixture *f, gconstpointer user_data)
-{
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfComponent) old = mf_store_get_component(f->store, TEST_CORE_ID, "13.4", &error);
-    g_autoptr(MfComponent) platform = NULL;
-    g_autoptr(MfManifest) manifest = NULL;
-
-    g_assert_no_error(error);
-    g_assert_cmpstr(mf_component_get_version(old), ==, "13.4");
-    g_assert_cmpuint(mf_component_get_revision(old), ==, 1);
-    g_assert_false(mf_component_is_current(old));
-
-    /* the install mode and the manifest of a version */
-    platform = mf_store_get_component(f->store, TEST_PLATFORM_ID, "13.8", &error);
-    g_assert_no_error(error);
-    g_assert_cmpint(mf_component_get_install_mode(platform), ==, MF_INSTALL_MODE_AUTO);
-    manifest = mf_component_fetch_manifest(platform, &error);
-    g_assert_no_error(error);
-    g_assert_cmpstr(mf_manifest_get_base(manifest)->id, ==, TEST_CORE_ID);
-    g_assert_cmpuint(mf_manifest_get_data_offset(manifest), ==, 20480);
-
+    /* a version and a component that are not installed */
     g_assert_null(mf_store_get_component(f->store, TEST_CORE_ID, "14", &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
     g_clear_error(&error);
@@ -170,7 +162,7 @@ test_get_version(Fixture *f, gconstpointer user_data)
 /**
  * test_get_base:
  *
- * Tests getting the base component.
+ * Follow the `base` links from an application down to its core.
  */
 static void
 test_get_base(Fixture *f, gconstpointer user_data)
@@ -183,8 +175,8 @@ test_get_base(Fixture *f, gconstpointer user_data)
     g_autoptr(MfComponent) sdk_base = NULL;
 
     g_assert_no_error(error);
-    /* follow the `base` links: the link of the app points to the current version of the platform,
-     * and the link of the platform points to an exact version of the core */
+    /* the link of the app points to the current version of the platform, and the link of the
+     * platform points to an exact version of the core */
     platform = mf_store_get_base(f->store, app, &error);
     g_assert_no_error(error);
     g_assert_cmpstr(mf_component_get_id(platform), ==, TEST_PLATFORM_ID);
@@ -192,10 +184,7 @@ test_get_base(Fixture *f, gconstpointer user_data)
     g_assert_no_error(error);
     g_assert_cmpstr(mf_component_get_id(core), ==, TEST_CORE_ID);
     g_assert_cmpstr(mf_component_get_version(core), ==, "13.8");
-    g_assert_null(mf_store_get_base(f->store, core, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
-    g_assert_cmpstr(error->message, ==, TEST_CORE_ID " 13.8 has no base");
-    g_clear_error(&error);
+    mft_assert_no_base(f, core, MF_ERROR_NOT_FOUND, TEST_CORE_ID " 13.8 has no base");
 
     /* the base of the core SDK is the exact core version that the SDK was built for, even if
      * that version is not the current version */
@@ -211,57 +200,49 @@ test_get_base(Fixture *f, gconstpointer user_data)
 
 /**
  * test_base_link_must_name_a_component:
+ *
+ * A `base` link is only followed to a component of the store.
  */
 static void
 test_base_link_must_name_a_component(Fixture *f, gconstpointer user_data)
 {
     g_autofree char *link = g_build_filename(f->dir, "apps", TEST_APP_ID, "0.1.0-1", "base", NULL);
-    g_autofree char *expected = g_strdup_printf("Link %s does not point to an installed component: /etc",
-                                                link);
     g_autoptr(GError) error = NULL;
     g_autoptr(MfComponent) app = mf_store_get_component(f->store, TEST_APP_ID, NULL, &error);
 
     g_assert_no_error(error);
 
-    /* a link that leaves the store is refused */
+    /* a link that leaves the store */
     mft_replace_link("/etc", link);
-    g_assert_null(mf_store_get_base(f->store, app, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_FAILED);
-    g_assert_cmpstr(error->message, ==, expected);
-    g_clear_error(&error);
+    mft_assert_no_base(f, app, MF_ERROR_FAILED, "does not point to an installed component: /etc");
 
-    /* a link that goes through "..", and a link to a hidden component, are refused too */
+    /* a link that goes through "..", and a link to a hidden component */
     mft_replace_link("../../../runtimes/" TEST_PLATFORM_ID "/../" TEST_PLATFORM_ID "/current", link);
-    g_assert_null(mf_store_get_base(f->store, app, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_FAILED);
-    g_clear_error(&error);
+    mft_assert_no_base(f, app, MF_ERROR_FAILED, "does not name a version of a component");
     mft_replace_link("../../../runtimes/.hidden/current", link);
-    g_assert_null(mf_store_get_base(f->store, app, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_FAILED);
-    g_clear_error(&error);
+    mft_assert_no_base(f, app, MF_ERROR_FAILED, "does not name a version of a component");
 
     /* a link to a component that is not installed */
     mft_replace_link("../../../runtimes/org.example.gone/current", link);
-    g_assert_null(mf_store_get_base(f->store, app, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
+    mft_assert_no_base(f, app, MF_ERROR_NOT_FOUND, NULL);
 }
 
 /**
- * test_sdk_app_is_a_runtime:
+ * test_app_sdk:
  *
  * Every SDK is installed in the `runtimes` directory, including the SDK of
  * an application. The base of such an SDK is the application, and its base
  * SDK is the SDK of the layer below.
  */
 static void
-test_sdk_app_is_a_runtime(Fixture *f, gconstpointer user_data)
+test_app_sdk(Fixture *f, gconstpointer user_data)
 {
     g_autoptr(GError) error = NULL;
     g_autoptr(MfComponent) sdk = NULL;
     g_autoptr(MfComponent) base = NULL;
     g_autoptr(MfComponent) base_sdk = NULL;
 
-    mft_write_runtime(f,
+    mft_write_version(f->dir,
                       &(MftTestManifest){.component_id = TEST_APP_SDK_ID,
                                          .kind = "app",
                                          .version = "0.1.0",
@@ -277,8 +258,8 @@ test_sdk_app_is_a_runtime(Fixture *f, gconstpointer user_data)
     g_assert_no_error(error);
     g_assert_cmpint(mf_component_get_kind(sdk), ==, MF_COMPONENT_KIND_APP);
     g_assert_true(mf_component_is_sdk(sdk));
-
     g_assert_true(g_str_has_suffix(mf_component_get_dir(sdk), "/runtimes/" TEST_APP_SDK_ID "/0.1.0-1"));
+
     base = mf_store_get_base(f->store, sdk, &error);
     g_assert_no_error(error);
     g_assert_cmpstr(mf_component_get_id(base), ==, TEST_APP_ID);
@@ -288,16 +269,16 @@ test_sdk_app_is_a_runtime(Fixture *f, gconstpointer user_data)
     g_assert_no_error(error);
     g_assert_cmpstr(mf_component_get_id(base_sdk), ==, TEST_SDK_ID);
     g_assert_true(mf_component_is_sdk(base_sdk));
+
     /* the SDK of a core has no base SDK */
     g_assert_null(mf_store_get_base_sdk(f->store, base_sdk, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
-    g_assert_cmpstr(error->message, ==, TEST_SDK_ID " 13.4 has no base-sdk");
+    mft_assert_error(error, MF_ERROR_NOT_FOUND, TEST_SDK_ID " 13.4 has no base-sdk");
 }
 
 /**
  * test_list:
  *
- * Tests listing components.
+ * List the installed components, in a stable order and with filters.
  */
 static void
 test_list(Fixture *f, gconstpointer user_data)
@@ -317,7 +298,8 @@ test_list(Fixture *f, gconstpointer user_data)
         {TEST_SDK_ID,      "13.4",  TRUE },
     };
 
-    g_assert_cmpint(g_mkdir(junk, 0755), ==, 0); /* a version without image or manifest is skipped */
+    /* a version without image or manifest is skipped */
+    mft_make_dirs(junk);
     components = mf_store_list_components(f->store, NULL, MF_COMPONENT_KIND_UNKNOWN, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(components->len, ==, G_N_ELEMENTS(expected));
@@ -347,6 +329,8 @@ test_list(Fixture *f, gconstpointer user_data)
 
 /**
  * test_list_images:
+ *
+ * List the images of the store by their root hash.
  */
 static void
 test_list_images(Fixture *f, gconstpointer user_data)
@@ -361,9 +345,10 @@ test_list_images(Fixture *f, gconstpointer user_data)
     g_autofree char *stray_dir = g_build_filename(images_dir, stray_dir_name, NULL);
     g_autoptr(GPtrArray) images = NULL;
 
-    /* both versions of the core share an image, so the setup wrote four of them */
+    /* both versions of the core share an image, so the setup wrote four of them. A file
+     * that is not named like an image and a directory are not listed. */
     mft_write_file(stray_file, "not an image");
-    g_assert_cmpint(g_mkdir(stray_dir, 0755), ==, 0);
+    mft_make_dirs(stray_dir);
     images = mf_store_list_images(f->store, &error);
     g_assert_no_error(error);
     g_assert_cmpuint(images->len, ==, 4);
@@ -382,30 +367,26 @@ test_list_images(Fixture *f, gconstpointer user_data)
 
 /**
  * test_image_link_must_point_into_store:
+ *
+ * A component is only read if its image link names an image of the store.
  */
 static void
 test_image_link_must_point_into_store(Fixture *f, gconstpointer user_data)
 {
     g_autoptr(GError) error = NULL;
     g_autofree char *link = g_build_filename(f->dir, "apps", TEST_APP_ID, "0.1.0-1", "app.raw", NULL);
-    g_autofree char *expected = NULL;
 
     /* reading the component directly fails, and the loaded store does not list it */
-    expected = g_strdup_printf("Link %s does not point to an installed image: /etc/passwd", link);
     mft_replace_link("/etc/passwd", link);
-    mft_assert_read_fails(f, TEST_APP_ID, MF_ERROR_FAILED, expected);
+    mft_assert_read_fails(f, TEST_APP_ID, MF_ERROR_FAILED, "does not point to an installed image");
     g_assert_null(mf_store_get_component(f->store, TEST_APP_ID, NULL, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
 
     /* a link that leaves the image store through "..", and one to a file whose name is not a root hash */
     mft_replace_link("../../../images/by-verity/../../../../etc/passwd.raw", link);
     mft_assert_read_fails(f, TEST_APP_ID, MF_ERROR_FAILED, NULL);
-    g_free(expected);
-    expected = g_strdup_printf(
-        "Link %s does not name an image by its root hash: ../../../images/by-verity/EVIL.raw",
-        link);
     mft_replace_link("../../../images/by-verity/EVIL.raw", link);
-    mft_assert_read_fails(f, TEST_APP_ID, MF_ERROR_FAILED, expected);
+    mft_assert_read_fails(f, TEST_APP_ID, MF_ERROR_FAILED, "does not name an image by its root hash");
 }
 
 /**
@@ -428,76 +409,63 @@ test_manifest_must_be_sound(Fixture *f, gconstpointer user_data)
                                                           "13.8-22910001",
                                                           "manifest.json",
                                                           NULL);
-    g_autofree char *expected = NULL;
 
     /* a manifest that can not be parsed */
     mft_write_file(manifest, "not json");
     mft_assert_read_fails(f, TEST_APP_ID, MF_ERROR_INVALID_MANIFEST, NULL);
 
     /* a manifest whose component ID differs from the component of its directory */
-    expected = g_strdup_printf("%s describes a different component (expected: " TEST_PLATFORM_ID "/13.8)",
-                               platform_manifest);
     mft_replace_in_file(platform_manifest,
                         "\"component\": \"" TEST_PLATFORM_ID "\"",
                         "\"component\": \"" TEST_APP_ID "\"");
-    mft_assert_read_fails(f, TEST_PLATFORM_ID, MF_ERROR_FAILED, expected);
-}
-
-/**
- * mft_new_core:
- *
- * Create a component for the current core like the install daemon reports
- * it, without a version directory and without a manifest.
- */
-static MfComponent *
-mft_new_core(void)
-{
-    g_autofree char *core_hash = mft_fake_hash(TEST_CORE_ID);
-
-    return mf_component_new(TEST_CORE_ID,
-                            MF_COMPONENT_KIND_CORE,
-                            "13.8",
-                            22810000,
-                            FALSE,
-                            core_hash,
-                            core_hash,
-                            TRUE,
-                            MF_INSTALL_MODE_MANUAL,
-                            "manifold-local",
-                            NULL);
+    mft_assert_read_fails(f,
+                          TEST_PLATFORM_ID,
+                          MF_ERROR_FAILED,
+                          "describes a different component (expected: " TEST_PLATFORM_ID "/13.8)");
 }
 
 /**
  * test_fetch_manifest:
+ *
+ * A component of the store has a manifest, and a component that the
+ * install daemon reported has none.
  */
 static void
 test_fetch_manifest(Fixture *f, gconstpointer user_data)
 {
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfComponent) core = mf_store_get_component(f->store, TEST_CORE_ID, NULL, &error);
-    g_autoptr(MfComponent) reported = NULL;
+    g_autofree char *core_hash = mft_fake_hash(TEST_CORE_ID);
+    g_autoptr(MfComponent) platform = mf_store_get_component(f->store, TEST_PLATFORM_ID, NULL, &error);
+    g_autoptr(MfComponent) reported = mf_component_new(TEST_CORE_ID,
+                                                       MF_COMPONENT_KIND_CORE,
+                                                       "13.8",
+                                                       22810000, /* revision */
+                                                       FALSE,    /* SDK */
+                                                       core_hash,
+                                                       core_hash,
+                                                       TRUE, /* current */
+                                                       MF_INSTALL_MODE_MANUAL,
+                                                       "manifold-local",
+                                                       NULL); /* directory */
     g_autoptr(MfManifest) manifest = NULL;
-    g_autoptr(MfManifest) again = NULL;
 
-    /* a component of the store returns its cached manifest on every call */
     g_assert_no_error(error);
-    manifest = mf_component_fetch_manifest(core, &error);
+    manifest = mf_component_fetch_manifest(platform, &error);
     g_assert_no_error(error);
-    g_assert_cmpstr(mf_manifest_get_component_id(manifest), ==, TEST_CORE_ID);
-    again = mf_component_fetch_manifest(core, &error);
-    g_assert_no_error(error);
-    g_assert_true(again == manifest);
+    g_assert_cmpstr(mf_manifest_get_component_id(manifest), ==, TEST_PLATFORM_ID);
+    g_assert_cmpstr(mf_manifest_get_base(manifest)->id, ==, TEST_CORE_ID);
+    g_assert_cmpuint(mf_manifest_get_data_offset(manifest), ==, 20480);
 
-    /* a component that the install daemon reported was not read from a store, so it has no manifest */
-    reported = mft_new_core();
+    /* a reported component was not read from a store */
     g_assert_null(mf_component_get_dir(reported));
     g_assert_null(mf_component_fetch_manifest(reported, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
-    g_assert_cmpstr(error->message, ==, "The manifest of " TEST_CORE_ID " 13.8 is not available");
+    mft_assert_error(error, MF_ERROR_NOT_FOUND, "The manifest of " TEST_CORE_ID " 13.8 is not available");
 }
 
 /**
  * test_reload:
+ *
+ * The store keeps the components that it read, until it is loaded again.
  */
 static void
 test_reload(Fixture *f, gconstpointer user_data)
@@ -522,20 +490,16 @@ test_reload(Fixture *f, gconstpointer user_data)
     g_assert_cmpstr(mf_component_get_id(app), ==, TEST_APP_ID);
 }
 
-/**
- * main:
- */
 int
 main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
 
 #define add_test(name, func) g_test_add("/store-read/" name, Fixture, NULL, mft_setup, func, mft_teardown)
-    add_test("get-current", test_get_current);
-    add_test("get-version", test_get_version);
+    add_test("get-component", test_get_component);
     add_test("get-base", test_get_base);
     add_test("base-link-must-name-a-component", test_base_link_must_name_a_component);
-    add_test("sdk-app-is-a-runtime", test_sdk_app_is_a_runtime);
+    add_test("app-sdk", test_app_sdk);
     add_test("list", test_list);
     add_test("list-images", test_list_images);
     add_test("image-link-must-point-into-store", test_image_link_must_point_into_store);

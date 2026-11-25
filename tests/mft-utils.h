@@ -31,6 +31,7 @@ void    mft_replace_link(const char *target,
 void    mft_write_file(const char *path,
                        const char *content);
 char   *mft_read_file(const char *path);
+char   *mft_read_sample(const char *name);
 void    mft_write_bytes(const char *path,
                         GBytes     *bytes);
 char   *mft_str_replace(const char *text,
@@ -114,7 +115,6 @@ char       *mft_manifest_json(const MftTestManifest *manifest);
 MfManifest *mft_manifest_new(const MftTestManifest *manifest);
 
 void        mft_write_version(const char            *root,
-                              const char            *subdir,
                               const MftTestManifest *manifest,
                               const char            *base_version_dir,
                               const char            *mode);

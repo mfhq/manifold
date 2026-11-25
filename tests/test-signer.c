@@ -43,23 +43,37 @@ mft_fingerprint_of(const char *path)
 }
 
 /**
+ * mft_some_data:
+ *
+ * Returns: (transfer full): data to sign
+ */
+static GBytes *
+mft_some_data(void)
+{
+    return g_bytes_new_static("some data\n", strlen("some data\n"));
+}
+
+/**
  * mft_sign_and_check:
  *
- * Sign some data with @signer, and check the signature.
+ * Sign some data with @signer, and check the signature with ssh-keygen.
  */
 static void
-mft_sign_and_check(Fixture *fixture, MfSigner *signer)
+mft_sign_and_check(Fixture *fixture, MfSigner *signer, MfSignatureScope scope)
 {
-    g_autoptr(GBytes) data = g_bytes_new_static("some data\n", 10);
+    g_autoptr(GBytes) data = mft_some_data();
     g_autoptr(GBytes) signature = NULL;
     g_autoptr(GError) error = NULL;
 
     g_assert_true(mf_signer_check_key(signer, &error));
     g_assert_no_error(error);
-    signature = mf_signer_sign(signer, MF_SIGNATURE_SCOPE_BUNDLE, data, &error);
+    signature = mf_signer_sign(signer, scope, data, &error);
     g_assert_no_error(error);
     g_assert_nonnull(signature);
-    mft_check_signature(fixture->dir, "manifold.bundle", data, signature);
+    mft_check_signature(fixture->dir,
+                        scope == MF_SIGNATURE_SCOPE_BUNDLE ? "manifold.bundle" : "manifold.repo",
+                        data,
+                        signature);
 }
 
 static void
@@ -81,6 +95,11 @@ mft_teardown(Fixture *fixture, gconstpointer user_data)
     g_free(fixture->dir);
 }
 
+/**
+ * test_key_file:
+ *
+ * Sign with a key file, for both scopes of a signature.
+ */
 static void
 test_key_file(Fixture *fixture, gconstpointer user_data)
 {
@@ -89,9 +108,6 @@ test_key_file(Fixture *fixture, gconstpointer user_data)
     g_autofree char *public_key = NULL;
     g_autofree char *fingerprint = NULL;
     g_autoptr(MfSigner) signer = NULL;
-    g_autoptr(GBytes) data = g_bytes_new_static("some data\n", 10);
-    g_autoptr(GBytes) signature = NULL;
-    g_autoptr(GError) error = NULL;
 
     key = mft_make_key(fixture->dir, "key");
     public_key_file = g_strconcat(key, ".pub", NULL);
@@ -102,13 +118,15 @@ test_key_file(Fixture *fixture, gconstpointer user_data)
     g_assert_cmpstr(mf_signer_get_name(signer), ==, key);
     g_assert_cmpstr(mf_signer_get_public_key(signer), ==, public_key);
     g_assert_cmpstr(mf_signer_get_fingerprint(signer), ==, fingerprint);
-    mft_sign_and_check(fixture, signer);
-
-    signature = mf_signer_sign(signer, MF_SIGNATURE_SCOPE_REPO, data, &error);
-    g_assert_no_error(error);
-    mft_check_signature(fixture->dir, "manifold.repo", data, signature);
+    mft_sign_and_check(fixture, signer, MF_SIGNATURE_SCOPE_BUNDLE);
+    mft_sign_and_check(fixture, signer, MF_SIGNATURE_SCOPE_REPO);
 }
 
+/**
+ * test_key_data:
+ *
+ * Sign with a private key that is not in a file.
+ */
 static void
 test_key_data(Fixture *fixture, gconstpointer user_data)
 {
@@ -123,9 +141,14 @@ test_key_data(Fixture *fixture, gconstpointer user_data)
     signer = mf_signer_new_for_key_data(private_key);
     g_assert_null(mf_signer_get_name(signer));
     g_assert_null(mf_signer_get_fingerprint(signer));
-    mft_sign_and_check(fixture, signer);
+    mft_sign_and_check(fixture, signer, MF_SIGNATURE_SCOPE_BUNDLE);
 }
 
+/**
+ * test_bad_key:
+ *
+ * Signing fails with a key file that holds no key, and the key check fails for a missing key file.
+ */
 static void
 test_bad_key(Fixture *fixture, gconstpointer user_data)
 {
@@ -154,9 +177,15 @@ test_bad_key(Fixture *fixture, gconstpointer user_data)
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
 }
 
+/**
+ * test_key_selection:
+ *
+ * Find the key to sign with: the default key, a key by its name or path, or the key of the environment.
+ */
 static void
 test_key_selection(Fixture *fixture, gconstpointer user_data)
 {
+    static const char *const missing[] = {"missing", "./missing", "SHA256:nope"};
     g_autofree char *key_dir = mf_signer_build_key_dir();
     g_autofree char *default_key = NULL;
     g_autofree char *other_key = NULL;
@@ -164,7 +193,6 @@ test_key_selection(Fixture *fixture, gconstpointer user_data)
     g_autoptr(GPtrArray) keys = NULL;
     g_autoptr(GError) error = NULL;
     MfSigner *signer;
-
 
     /* nothing is selected yet */
     signer = mf_signer_new_default(&error);
@@ -190,7 +218,7 @@ test_key_selection(Fixture *fixture, gconstpointer user_data)
     signer = mf_signer_new_default(&error);
     g_assert_no_error(error);
     g_assert_cmpstr(mf_signer_get_name(signer), ==, MF_SIGNING_KEY_DEFAULT_NAME);
-    mft_sign_and_check(fixture, signer);
+    mft_sign_and_check(fixture, signer, MF_SIGNATURE_SCOPE_BUNDLE);
     g_object_unref(signer);
 
     signer = mf_signer_new_for_key("other", &error);
@@ -209,24 +237,22 @@ test_key_selection(Fixture *fixture, gconstpointer user_data)
     signer = mf_signer_new_default(&error);
     g_assert_no_error(error);
     g_assert_cmpstr(mf_signer_get_name(signer), ==, "$" MF_SIGNING_KEY_ENV);
-    mft_sign_and_check(fixture, signer);
+    mft_sign_and_check(fixture, signer, MF_SIGNATURE_SCOPE_BUNDLE);
     g_object_unref(signer);
 
-    signer = mf_signer_new_for_key("missing", &error);
-    g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
-    g_assert_null(signer);
-    g_clear_error(&error);
-
-    signer = mf_signer_new_for_key("./missing", &error);
-    g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
-    g_assert_null(signer);
-    g_clear_error(&error);
-
-    signer = mf_signer_new_for_key("SHA256:nope", &error);
-    g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
-    g_assert_null(signer);
+    /* a name, a path and a fingerprint that match no key */
+    for (size_t i = 0; i < G_N_ELEMENTS(missing); i++) {
+        g_assert_null(mf_signer_new_for_key(missing[i], &error));
+        g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
+        g_clear_error(&error);
+    }
 }
 
+/**
+ * test_agent:
+ *
+ * A key that only the ssh-agent holds is selected by its fingerprint.
+ */
 static void
 test_agent(Fixture *fixture, gconstpointer user_data)
 {
@@ -276,7 +302,7 @@ test_agent(Fixture *fixture, gconstpointer user_data)
     signer = mf_signer_new_for_key(fingerprint, &error);
     g_assert_no_error(error);
     g_assert_cmpstr(mf_signer_get_name(signer), ==, fingerprint);
-    mft_sign_and_check(fixture, signer);
+    mft_sign_and_check(fixture, signer, MF_SIGNATURE_SCOPE_BUNDLE);
 
     g_subprocess_force_exit(agent);
     g_subprocess_wait(agent, NULL, NULL);
@@ -296,40 +322,33 @@ mft_check_untrusted(MfTrustedKeys *keys, MfSignatureScope scope, GBytes *data, G
     g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
 }
 
+/**
+ * test_verify:
+ *
+ * A signature is valid if a trusted key made it, for the same scope and the same data.
+ */
 static void
 test_verify(Fixture *fixture, gconstpointer user_data)
 {
-    g_autofree char *key = NULL;
-    g_autofree char *other_key = NULL;
+    g_autofree char *key = mft_make_key(fixture->dir, "key");
+    g_autofree char *other_key = mft_make_key(fixture->dir, "other");
     g_autofree char *public_key_file = NULL;
     g_autofree char *public_key = NULL;
     g_autofree char *fingerprint = NULL;
-    g_autoptr(MfSigner) signer = NULL;
-    g_autoptr(MfSigner) other_signer = NULL;
-    g_autoptr(MfTrustedKeys) keys = NULL;
-    g_autoptr(GBytes) data = g_bytes_new_static("some data\n", 10);
+    g_autoptr(MfSigner) signer = mf_signer_new_for_key_file(key);
+    g_autoptr(MfTrustedKeys) keys = mf_trusted_keys_new();
+    g_autoptr(GBytes) data = mft_some_data();
     g_autoptr(GBytes) changed_data = g_bytes_new_static("some date\n", 10);
-    g_autoptr(GBytes) signature = NULL;
-    g_autoptr(GBytes) other_signature = NULL;
-    g_autoptr(GBytes) repo_signature = NULL;
+    g_autoptr(GBytes) signature = mft_sign(key, MF_SIGNATURE_SCOPE_BUNDLE, data);
+    g_autoptr(GBytes) other_signature = mft_sign(other_key, MF_SIGNATURE_SCOPE_BUNDLE, data);
+    g_autoptr(GBytes) repo_signature = mft_sign(key, MF_SIGNATURE_SCOPE_REPO, data);
     g_autoptr(GError) error = NULL;
 
-    key = mft_make_key(fixture->dir, "key");
-    other_key = mft_make_key(fixture->dir, "other");
-    signer = mf_signer_new_for_key_file(key);
-    other_signer = mf_signer_new_for_key_file(other_key);
-    signature = mf_signer_sign(signer, MF_SIGNATURE_SCOPE_BUNDLE, data, &error);
-    g_assert_no_error(error);
-    other_signature = mf_signer_sign(other_signer, MF_SIGNATURE_SCOPE_BUNDLE, data, &error);
-    g_assert_no_error(error);
-    repo_signature = mf_signer_sign(signer, MF_SIGNATURE_SCOPE_REPO, data, &error);
-    g_assert_no_error(error);
-
     /* without trusted keys, no signature is valid */
-    keys = mf_trusted_keys_new();
     g_assert_true(mf_trusted_keys_is_empty(keys));
     mft_check_untrusted(keys, MF_SIGNATURE_SCOPE_BUNDLE, data, signature);
 
+    /* a key is one line */
     g_assert_false(mf_trusted_keys_add_key(keys, "ssh-ed25519 AAAA\nssh-ed25519 AAAA", &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_FAILED);
     g_clear_error(&error);
@@ -350,6 +369,11 @@ test_verify(Fixture *fixture, gconstpointer user_data)
     mft_check_untrusted(keys, MF_SIGNATURE_SCOPE_BUNDLE, changed_data, signature);
 }
 
+/**
+ * test_public_key_normalize:
+ *
+ * Only the key type and the key data of a public key are kept.
+ */
 static void
 test_public_key_normalize(Fixture *fixture, gconstpointer user_data)
 {
@@ -366,14 +390,13 @@ test_public_key_normalize(Fixture *fixture, gconstpointer user_data)
         "ssh-ed25519 AAAAB3NzaC1yc2F4eA==",
     };
 
-    /* only the key type and the key data are kept */
-    for (size_t i = 0; i < 2; i++) {
-        g_autofree char *line = i == 0 ? g_strconcat(valid, " repo@example.org\n", NULL)
-                                       : g_strconcat("  ", valid, "  ", NULL);
-        g_autofree char *key = mf_public_key_normalize(line);
+    g_autofree char *with_comment = g_strconcat(valid, " repo@example.org\n", NULL);
+    g_autofree char *with_blanks = g_strconcat("  ", valid, "  ", NULL);
+    g_autofree char *without_comment = mf_public_key_normalize(with_comment);
+    g_autofree char *without_blanks = mf_public_key_normalize(with_blanks);
 
-        g_assert_cmpstr(key, ==, valid);
-    }
+    g_assert_cmpstr(without_comment, ==, valid);
+    g_assert_cmpstr(without_blanks, ==, valid);
 
     for (size_t i = 0; i < G_N_ELEMENTS(invalid); i++) {
         g_autofree char *key = mf_public_key_normalize(invalid[i]);
@@ -382,36 +405,31 @@ test_public_key_normalize(Fixture *fixture, gconstpointer user_data)
     }
 }
 
+/**
+ * test_trusted_key_dirs:
+ *
+ * Trusted keys are read from directories. A key of a later directory
+ * replaces the key of the same name, and a link to /dev/null masks it.
+ */
 static void
 test_trusted_key_dirs(Fixture *fixture, gconstpointer user_data)
 {
     g_autofree char *vendor_dir = NULL;
     g_autofree char *admin_dir = NULL;
     g_autofree char *missing_dir = NULL;
-    g_autofree char *key = NULL;
-    g_autofree char *other_key = NULL;
-    g_autofree char *public_key = NULL;
-    g_autofree char *other_public_key = NULL;
+    g_autofree char *key = mft_make_key(fixture->dir, "key");
+    g_autofree char *other_key = mft_make_key(fixture->dir, "other");
+    g_autofree char *public_key_file = g_strconcat(key, ".pub", NULL);
+    g_autofree char *other_public_key_file = g_strconcat(other_key, ".pub", NULL);
+    g_autofree char *public_key = mft_read_file(public_key_file);
+    g_autofree char *other_public_key = mft_read_file(other_public_key_file);
     g_autofree char *path = NULL;
     g_autofree char *broken = NULL;
-    g_autoptr(MfSigner) signer = NULL;
-    g_autoptr(MfSigner) other_signer = NULL;
     g_autoptr(MfTrustedKeys) keys = NULL;
-    g_autoptr(GBytes) data = g_bytes_new_static("some data\n", 10);
-    g_autoptr(GBytes) signature = NULL;
-    g_autoptr(GBytes) other_signature = NULL;
+    g_autoptr(GBytes) data = mft_some_data();
+    g_autoptr(GBytes) signature = mft_sign(key, MF_SIGNATURE_SCOPE_REPO, data);
+    g_autoptr(GBytes) other_signature = mft_sign(other_key, MF_SIGNATURE_SCOPE_REPO, data);
     g_autoptr(GError) error = NULL;
-
-    key = mft_make_key(fixture->dir, "key");
-    other_key = mft_make_key(fixture->dir, "other");
-    signer = mf_signer_new_for_key_file(key);
-    other_signer = mf_signer_new_for_key_file(other_key);
-    signature = mf_signer_sign(signer, MF_SIGNATURE_SCOPE_REPO, data, &error);
-    g_assert_no_error(error);
-    other_signature = mf_signer_sign(other_signer, MF_SIGNATURE_SCOPE_REPO, data, &error);
-    g_assert_no_error(error);
-    public_key = g_strconcat(mf_signer_get_public_key(signer), "\n", NULL);
-    other_public_key = g_strconcat(mf_signer_get_public_key(other_signer), "\n", NULL);
 
     /* the vendor directory has the first key, and a file that is not a key file is ignored */
     vendor_dir = g_build_filename(fixture->dir, "vendor", NULL);

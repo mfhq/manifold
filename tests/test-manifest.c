@@ -16,17 +16,6 @@
     digit digit digit digit digit digit digit digit digit digit digit digit digit digit digit digit
 
 /**
- * mft_read_sample:
- *
- * Returns: (transfer full): the text of a file in the samples directory
- */
-static char *
-mft_read_sample(const char *name)
-{
-    return mft_read_file(g_test_get_filename(G_TEST_DIST, "samples", name, NULL));
-}
-
-/**
  * mft_read_manifest:
  *
  * Returns: (transfer full): the parsed manifest of a file in the samples directory

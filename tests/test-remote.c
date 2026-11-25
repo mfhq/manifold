@@ -88,24 +88,15 @@ mft_check_trusted(MfTrustedKeys *keys, const char *key_path, gboolean trusted)
 }
 
 /**
- * test_vendor_and_admin:
+ * test_config_override:
  *
- * The administrator's remote.conf replaces the vendor's, and the keys of
- * both are trusted, unless the administrator masks one.
+ * The remote.conf of the administrator replaces the remote.conf of the vendor.
  */
 static void
-test_vendor_and_admin(Fixture *f, gconstpointer user_data)
+test_config_override(Fixture *f, gconstpointer user_data)
 {
     g_autoptr(GError) error = NULL;
     g_autoptr(MfRemote) remote = NULL;
-    g_autoptr(MfTrustedKeys) keys = NULL;
-    g_autofree char *vendor_keys = g_build_filename(f->vendor_dir, "example", "keys", NULL);
-    g_autofree char *admin_keys = g_build_filename(f->admin_dir, "example", "keys", NULL);
-    g_autofree char *work = g_build_filename(f->dir, "work", NULL);
-    g_autofree char *vendor_key = NULL;
-    g_autofree char *masked_key = NULL;
-    g_autofree char *admin_key = NULL;
-    g_autofree char *link = NULL;
 
     /* without Channels, the remote has the main channel, and the URL loses its trailing slash */
     mft_write_remote(f->vendor_dir, "example", "[Remote]\nURL=https://example.org/repo/\n");
@@ -123,17 +114,36 @@ test_vendor_and_admin(Fixture *f, gconstpointer user_data)
     g_assert_no_error(error);
     g_assert_cmpstr(mf_remote_get_url(remote), ==, "https://mirror.example.org/repo");
     g_assert_cmpstrv(mf_remote_get_channels(remote), ((const char *[]){"main", "beta", NULL}));
+}
 
-    /* the vendor ships two keys, the administrator masks one and adds another */
-    vendor_key = mft_make_key(work, "vendor");
-    masked_key = mft_make_key(work, "masked");
-    admin_key = mft_make_key(work, "admin");
+/**
+ * test_trusted_keys:
+ *
+ * A remote trusts the keys of the vendor and of the administrator, and
+ * the administrator can mask a key of the vendor.
+ */
+static void
+test_trusted_keys(Fixture *f, gconstpointer user_data)
+{
+    g_autofree char *vendor_keys = g_build_filename(f->vendor_dir, "example", "keys", NULL);
+    g_autofree char *admin_keys = g_build_filename(f->admin_dir, "example", "keys", NULL);
+    g_autofree char *mask = g_build_filename(admin_keys, "masked.pub", NULL);
+    g_autofree char *work = g_build_filename(f->dir, "work", NULL);
+    g_autofree char *vendor_key = mft_make_key(work, "vendor");
+    g_autofree char *masked_key = mft_make_key(work, "masked");
+    g_autofree char *admin_key = mft_make_key(work, "admin");
+    g_autoptr(MfRemote) remote = NULL;
+    g_autoptr(MfTrustedKeys) keys = NULL;
+    g_autoptr(GError) error = NULL;
+
+    mft_write_remote(f->vendor_dir, "example", "[Remote]\nURL=https://example.org/repo\n");
     mft_install_key(vendor_keys, vendor_key);
     mft_install_key(vendor_keys, masked_key);
     mft_install_key(admin_keys, admin_key);
-    link = g_build_filename(admin_keys, "masked.pub", NULL);
-    mft_make_link("/dev/null", link);
+    mft_make_link("/dev/null", mask);
 
+    remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, NULL, "example", &error);
+    g_assert_no_error(error);
     keys = mf_remote_load_trusted_keys(remote, &error);
     g_assert_no_error(error);
     mft_check_trusted(keys, vendor_key, TRUE);
@@ -149,11 +159,18 @@ test_vendor_and_admin(Fixture *f, gconstpointer user_data)
 static void
 test_state(Fixture *f, gconstpointer user_data)
 {
+    /* clang-format off */
     const char *json =
-        "{\"id\": \"example\", \"summary\": \"Example applications\", "
-        "\"publisher\": {\"name\": \"Example Inc.\", \"email\": \"repo@example.org\"}, "
-        "\"serial\": 1, \"date\": \"2026-11-02T18:00:00Z\", "
-        "\"valid-until\": \"2027-05-04T14:57:58Z\", \"channels\": {}}";
+        "{"
+        "  \"id\": \"example\","
+        "  \"summary\": \"Example applications\","
+        "  \"publisher\": {\"name\": \"Example Inc.\", \"email\": \"repo@example.org\"},"
+        "  \"serial\": 1,"
+        "  \"date\": \"2026-11-02T18:00:00Z\","
+        "  \"valid-until\": \"2027-05-04T14:57:58Z\","
+        "  \"channels\": {}"
+        "}";
+    /* clang-format on */
     g_autofree char *state_dir = g_build_filename(f->dir, "var-lib", NULL);
     g_autofree char *remote_state = g_build_filename(state_dir, "example", NULL);
     g_autofree char *index_path = g_build_filename(remote_state, "repo-index.json.zst", NULL);
@@ -242,12 +259,15 @@ static void
 test_invalid(Fixture *f, gconstpointer user_data)
 {
     static const char *const configs[] = {
+        /* no URL */
         "[Remote]\n",
+        /* a URL that is not a plain https URL with a host */
         "[Remote]\nURL=http://example.org/repo\n",
         "[Remote]\nURL=https://example.org/repo?tag=1\n",
         "[Remote]\nURL=https://example.org/repo#top\n",
         "[Remote]\nURL=https://user@example.org/repo\n",
         "[Remote]\nURL=https:///repo\n",
+        /* the reserved channel name, an invalid name, a channel twice, and no channel */
         "[Remote]\nURL=https://example.org\nChannels=local;\n",
         "[Remote]\nURL=https://example.org\nChannels=Beta;\n",
         "[Remote]\nURL=https://example.org\nChannels=main;main;\n",
@@ -275,6 +295,7 @@ test_invalid(Fixture *f, gconstpointer user_data)
         g_assert_cmpuint(remotes->len, ==, 0);
     }
 
+    /* an ID that is not a valid name for a remote */
     for (size_t i = 0; i < G_N_ELEMENTS(ids); i++) {
         g_autoptr(GError) error = NULL;
         g_autoptr(MfRemote)
@@ -291,7 +312,8 @@ main(int argc, char **argv)
     g_test_init(&argc, &argv, NULL);
 
 #define add_test(name, func) g_test_add("/remote/" name, Fixture, NULL, mft_setup, func, mft_teardown)
-    add_test("vendor-and-admin", test_vendor_and_admin);
+    add_test("config-override", test_config_override);
+    add_test("trusted-keys", test_trusted_keys);
     add_test("state", test_state);
     add_test("list", test_list);
     add_test("invalid", test_invalid);

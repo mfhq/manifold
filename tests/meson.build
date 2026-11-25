@@ -96,6 +96,7 @@ test('repo',
         include_directories: [root_inc_dir],
         dependencies: [manifold_dep, mft_test_utils_dep],
     ),
+    env: {'G_TEST_SRCDIR': meson.current_source_dir()},
     suite: 'unit',
 )
 

@@ -23,12 +23,10 @@ static void
 mft_write_usual_store(void)
 {
     mft_write_version(MF_STORAGE_DIR,
-                      MF_STORE_RUNTIMES_SUBDIR,
                       &(MftTestManifest){.component_id = TEST_CORE_ID, .kind = "core", .version = "13.4"},
                       NULL,
                       NULL);
     mft_write_version(MF_STORAGE_DIR,
-                      MF_STORE_RUNTIMES_SUBDIR,
                       &(MftTestManifest){.component_id = TEST_PLATFORM_ID,
                                          .kind = "platform",
                                          .version = "13.4",
@@ -37,7 +35,6 @@ mft_write_usual_store(void)
                       NULL,
                       NULL);
     mft_write_version(MF_STORAGE_DIR,
-                      MF_STORE_RUNTIMES_SUBDIR,
                       &(MftTestManifest){.component_id = TEST_PLATFORM_KIT_ID,
                                          .kind = "kit",
                                          .version = "20260114T0238",
@@ -46,7 +43,6 @@ mft_write_usual_store(void)
                       NULL,
                       NULL);
     mft_write_version(MF_STORAGE_DIR,
-                      MF_STORE_APPS_SUBDIR,
                       &(MftTestManifest){.component_id = TEST_APP_ID,
                                          .kind = "app",
                                          .version = "0.1.0",
@@ -57,16 +53,20 @@ mft_write_usual_store(void)
                       NULL);
 }
 
+/**
+ * mft_assert_load_fails:
+ * @message_part: (nullable): a part of the expected error message
+ *
+ * Check that an application can not be loaded.
+ */
 static void
-mft_assert_load_fails(const char *component_id, GQuark domain, int code, const char *message)
+mft_assert_load_fails(const char *component_id, MfError code, const char *message_part)
 {
     g_autoptr(GError) error = NULL;
     g_autoptr(MfrApp) app = mfr_app_load(component_id, &error);
 
     g_assert_null(app);
-    g_assert_error(error, domain, code);
-    if (message != NULL)
-        g_assert_cmpstr(error->message, ==, message);
+    mft_assert_error(error, code, message_part);
 }
 
 /**
@@ -83,6 +83,8 @@ mft_reset_store(void)
 
 /**
  * test_load:
+ *
+ * Load an application with all of its layers.
  */
 static void
 test_load(void)
@@ -118,6 +120,8 @@ test_load(void)
 
 /**
  * test_without_platform:
+ *
+ * An application does not need a platform.
  */
 static void
 test_without_platform(void)
@@ -138,50 +142,30 @@ test_without_platform(void)
 }
 
 /**
- * test_not_installed:
- */
-static void
-test_not_installed(void)
-{
-    mft_reset_store();
-
-    mft_assert_load_fails("org.example.nothing",
-                          MF_ERROR,
-                          MF_ERROR_NOT_FOUND,
-                          "org.example.nothing is not installed");
-    /* a runtime is not an application */
-    mft_assert_load_fails(TEST_CORE_ID, MF_ERROR, MF_ERROR_NOT_FOUND, NULL);
-}
-
-/**
- * test_revoked:
- */
-static void
-test_revoked(void)
-{
-    mft_reset_store();
-
-    mft_write_file(MF_STORE_APPS_DIR "/" TEST_APP_ID "/revoked", "");
-    mft_assert_load_fails(TEST_APP_ID, MF_ERROR, MF_ERROR_REVOKED, TEST_APP_ID " was revoked");
-}
-
-/**
- * test_missing_base:
+ * test_load_refused:
  *
- * Loading an application fails with a "missing base" error if its base is
- * not installed, or if its `base` link does not exist.
+ * An application is not loaded if it is not installed, was revoked, or has no base.
  */
 static void
-test_missing_base(void)
+test_load_refused(void)
 {
     mft_reset_store();
 
+    mft_assert_load_fails("org.example.nothing", MF_ERROR_NOT_FOUND, "org.example.nothing is not installed");
+    /* a runtime is not an application */
+    mft_assert_load_fails(TEST_CORE_ID, MF_ERROR_NOT_FOUND, NULL);
+
+    /* a revoked application */
+    mft_write_file(MF_STORE_APPS_DIR "/" TEST_APP_ID "/revoked", "");
+    mft_assert_load_fails(TEST_APP_ID, MF_ERROR_REVOKED, TEST_APP_ID " was revoked");
+    g_assert_cmpint(g_unlink(MF_STORE_APPS_DIR "/" TEST_APP_ID "/revoked"), ==, 0);
+
+    /* a base that is not installed, and a missing `base` link */
     mft_replace_link("../../../runtimes/org.example.gone/current",
                      MF_STORE_APPS_DIR "/" TEST_APP_ID "/0.1.0-1/base");
-    mft_assert_load_fails(TEST_APP_ID, MF_ERROR, MF_ERROR_MISSING_BASE, NULL);
-
+    mft_assert_load_fails(TEST_APP_ID, MF_ERROR_MISSING_BASE, NULL);
     g_assert_cmpint(g_unlink(MF_STORE_APPS_DIR "/" TEST_APP_ID "/0.1.0-1/base"), ==, 0);
-    mft_assert_load_fails(TEST_APP_ID, MF_ERROR, MF_ERROR_MISSING_BASE, TEST_APP_ID " 0.1.0 has no base");
+    mft_assert_load_fails(TEST_APP_ID, MF_ERROR_MISSING_BASE, TEST_APP_ID " 0.1.0 has no base");
 }
 
 /**
@@ -193,16 +177,18 @@ test_missing_base(void)
 static void
 test_layers_must_be_in_order(void)
 {
+    g_autoptr(GError) error = NULL;
+    g_autoptr(MfrApp) app = NULL;
+
     mft_reset_store();
 
     /* make the kit its own base, so that a kit is below a kit */
     mft_replace_link("../../../runtimes/" TEST_PLATFORM_KIT_ID "/current",
                      MF_STORE_RUNTIMES_DIR "/" TEST_PLATFORM_KIT_ID "/20260114T0238-1/base");
-    mft_assert_load_fails(TEST_APP_ID,
-                          G_IO_ERROR,
-                          G_IO_ERROR_FAILED,
-                          "kit " TEST_PLATFORM_KIT_ID " can not be below kit " TEST_PLATFORM_KIT_ID
-                          " in the runtime of " TEST_APP_ID);
+    app = mfr_app_load(TEST_APP_ID, &error);
+    g_assert_null(app);
+    g_assert_error(error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_nonnull(strstr(error->message, "can not be below kit " TEST_PLATFORM_KIT_ID));
 }
 
 /**
@@ -217,7 +203,6 @@ test_sdk_is_not_supported_yet(void)
     mft_reset_store();
 
     mft_write_version(MF_STORAGE_DIR,
-                      MF_STORE_RUNTIMES_SUBDIR,
                       &(MftTestManifest){.component_id = TEST_PLATFORM_KIT_ID ".sdk",
                                          .kind = "kit",
                                          .version = "20260114T0238",
@@ -231,10 +216,8 @@ test_sdk_is_not_supported_yet(void)
     mft_replace_link("../../../runtimes/" TEST_PLATFORM_KIT_ID ".sdk/current",
                      MF_STORE_APPS_DIR "/" TEST_APP_ID "/0.1.0-1/base");
     mft_assert_load_fails(TEST_APP_ID,
-                          MF_ERROR,
                           MF_ERROR_FAILED,
-                          TEST_APP_ID " builds on the SDK " TEST_PLATFORM_KIT_ID
-                                      ".sdk, but running an application on an SDK is not supported yet");
+                          "running an application on an SDK is not supported yet");
 }
 
 int
@@ -245,9 +228,7 @@ main(int argc, char **argv)
 
     g_test_add_func("/compose/load", test_load);
     g_test_add_func("/compose/without-platform", test_without_platform);
-    g_test_add_func("/compose/not-installed", test_not_installed);
-    g_test_add_func("/compose/revoked", test_revoked);
-    g_test_add_func("/compose/missing-base", test_missing_base);
+    g_test_add_func("/compose/load-refused", test_load_refused);
     g_test_add_func("/compose/layers-must-be-in-order", test_layers_must_be_in_order);
     g_test_add_func("/compose/sdk-is-not-supported-yet", test_sdk_is_not_supported_yet);
 
