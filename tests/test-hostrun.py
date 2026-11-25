@@ -170,85 +170,36 @@ class HostRunTest(unittest.TestCase):
         with os.fdopen(stdout_read, 'rb') as out, os.fdopen(stderr_read, 'rb') as err:
             return result, out.read(), err.read()
 
-    def test_program_runs_with_the_files_of_the_caller(self):
-        result, out, err = self.run_program(
-            ['sh', '-c', 'cat; echo "$MF_TEST_VAR" >&2; exit 7'],
-            stdin=b'from the caller',
-            environment=['MF_TEST_VAR=hello'],
-        )
-        self.assertGreater(result[0]['pid'], 0)
-        self.assertEqual(result[-1], {'exitStatus': 7})
-        self.assertEqual(out, b'from the caller')
-        self.assertEqual(err, b'hello\n')
+    def read_reply(self, sock):
+        """Read one reply from a connection to the runner."""
+        return json.loads(sock.recv(65536).rstrip(b'\0'))
 
-    def test_working_directory(self):
-        result, out, _ = self.run_program(['pwd'], cwd=self.work)
-        self.assertEqual(result[-1], {'exitStatus': 0})
-        self.assertEqual(out.decode().strip(), os.path.realpath(self.work))
-
-        # the working directory of the caller has the same path as a directory of the host,
-        # but it is a different directory
-        result, _, _ = self.run_program(['pwd'], cwd=self.work, cwd_fd_path=self.runtime_dir)
-        self.assertEqual(result['error'], f'{INTERFACE}.NoSuchWorkingDirectory')
-        self.assertEqual(result['parameters'], {'path': self.work})
-
-    def test_no_such_program(self):
-        result, _, _ = self.run_program(['mf-test-no-such-program'])
-        self.assertEqual(result['error'], f'{INTERFACE}.NoSuchProgram')
-        self.assertEqual(result['parameters'], {'program': 'mf-test-no-such-program'})
-
-    def test_signals_are_passed_on(self):
-        signal_read, signal_write = os.pipe()
-        cwd_fd = os.open('/', os.O_PATH)
+    def start_program(self, argv, signal_fd=None):
+        """Start a program on the host with /dev/null as its input and output, and do not
+        wait for it to end. Signals that are written to `signal_fd` are sent to the program.
+        Returns the connection, and the reply that reports the start of the program."""
         null_fd = os.open('/dev/null', os.O_RDWR)
-        with self.connect() as sock:
-            call = {
-                'method': f'{INTERFACE}.Run',
-                'more': True,
-                'parameters': {
-                    'argv': ['sleep', '100'],
-                    'workingDirectory': '/',
-                    'environment': [],
-                    'fileDescriptors': [0, 0, 0],
-                    'workingDirectoryFileDescriptor': 1,
-                    'signalFileDescriptor': 2,
-                },
-            }
-            socket.send_fds(
-                sock, [json.dumps(call).encode() + b'\0'], [null_fd, cwd_fd, signal_read]
-            )
-            started = json.loads(sock.recv(65536).rstrip(b'\0'))
-            self.assertTrue(started['continues'])
-            os.write(signal_write, bytes([signal.SIGUSR1]))
-            ended = json.loads(sock.recv(65536).rstrip(b'\0'))
-            self.assertEqual(ended['parameters'], {'signal': signal.SIGUSR1})
-        for fd in (signal_read, signal_write, cwd_fd, null_fd):
-            os.close(fd)
-
-    def test_program_ends_with_the_connection(self):
+        self.addCleanup(os.close, null_fd)
         cwd_fd = os.open('/', os.O_PATH)
-        null_fd = os.open('/dev/null', os.O_RDWR)
-        with self.connect() as sock:
-            call = {
-                'method': f'{INTERFACE}.Run',
-                'more': True,
-                'parameters': {
-                    'argv': ['sleep', '100'],
-                    'workingDirectory': '/',
-                    'environment': [],
-                    'fileDescriptors': [0, 0, 0],
-                    'workingDirectoryFileDescriptor': 1,
-                },
-            }
-            socket.send_fds(sock, [json.dumps(call).encode() + b'\0'], [null_fd, cwd_fd])
-            pid = json.loads(sock.recv(65536).rstrip(b'\0'))['parameters']['pid']
-        os.close(cwd_fd)
-        os.close(null_fd)
+        self.addCleanup(os.close, cwd_fd)
+        # the parameters name a file descriptor by its position in the list that we pass
+        fds = [null_fd, cwd_fd]
+        parameters = {
+            'argv': argv,
+            'workingDirectory': '/',
+            'environment': [],
+            'fileDescriptors': [0, 0, 0],
+            'workingDirectoryFileDescriptor': 1,
+        }
+        if signal_fd is not None:
+            parameters['signalFileDescriptor'] = len(fds)
+            fds.append(signal_fd)
 
-        deadline = time.monotonic() + 10
-        while self.is_running(pid):
-            self.assertLess(time.monotonic(), deadline, 'the program is still running')
-            time.sleep(0.05)
+        sock = self.connect()
+        self.addCleanup(sock.close)
+        call = {'method': f'{INTERFACE}.Run', 'more': True, 'parameters': parameters}
+        socket.send_fds(sock, [json.dumps(call).encode() + b'\0'], fds)
+        return sock, self.read_reply(sock)
 
     def is_running(self, pid):
         """Check if a process is still running. A zombie process does not count as running.
@@ -283,6 +234,53 @@ class HostRunTest(unittest.TestCase):
             self.skipTest(output.strip())
         self.assertEqual(application.returncode, 0, output)
         return json.loads(output)
+
+    def test_program_runs_with_the_files_of_the_caller(self):
+        result, out, err = self.run_program(
+            ['sh', '-c', 'cat; echo "$MF_TEST_VAR" >&2; exit 7'],
+            stdin=b'from the caller',
+            environment=['MF_TEST_VAR=hello'],
+        )
+        self.assertGreater(result[0]['pid'], 0)
+        self.assertEqual(result[-1], {'exitStatus': 7})
+        self.assertEqual(out, b'from the caller')
+        self.assertEqual(err, b'hello\n')
+
+    def test_working_directory(self):
+        result, out, _ = self.run_program(['pwd'], cwd=self.work)
+        self.assertEqual(result[-1], {'exitStatus': 0})
+        self.assertEqual(out.decode().strip(), os.path.realpath(self.work))
+
+        # the working directory of the caller has the same path as a directory of the host,
+        # but it is a different directory
+        result, _, _ = self.run_program(['pwd'], cwd=self.work, cwd_fd_path=self.runtime_dir)
+        self.assertEqual(result['error'], f'{INTERFACE}.NoSuchWorkingDirectory')
+        self.assertEqual(result['parameters'], {'path': self.work})
+
+    def test_no_such_program(self):
+        result, _, _ = self.run_program(['mf-test-no-such-program'])
+        self.assertEqual(result['error'], f'{INTERFACE}.NoSuchProgram')
+        self.assertEqual(result['parameters'], {'program': 'mf-test-no-such-program'})
+
+    def test_signals_are_passed_on(self):
+        signal_read, signal_write = os.pipe()
+        self.addCleanup(os.close, signal_read)
+        self.addCleanup(os.close, signal_write)
+
+        sock, started = self.start_program(['sleep', '100'], signal_fd=signal_read)
+        self.assertTrue(started['continues'])
+        os.write(signal_write, bytes([signal.SIGUSR1]))
+        self.assertEqual(self.read_reply(sock)['parameters'], {'signal': signal.SIGUSR1})
+
+    def test_program_ends_with_the_connection(self):
+        sock, started = self.start_program(['sleep', '100'])
+        pid = started['parameters']['pid']
+        sock.close()
+
+        deadline = time.monotonic() + 10
+        while self.is_running(pid):
+            self.assertLess(time.monotonic(), deadline, 'the program is still running')
+            time.sleep(0.05)
 
     def test_application_needs_the_permission(self):
         reply = self.call_as_application([])

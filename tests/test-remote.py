@@ -19,8 +19,8 @@ Usage: mf-test-sandbox test-remote.py --daemon manifoldd --fetch-helper manifold
 """
 
 import argparse
+import contextlib
 import hashlib
-import json
 import os
 import pty
 import shutil
@@ -84,7 +84,10 @@ def fingerprint(path):
     return result.stdout.split()[1]
 
 
-class RemoteTest(DaemonTestCase):
+class RemoteTestCase(DaemonTestCase):
+    """The base class of all tests: every class of tests gets its own HTTPS server, and
+    every test starts with an empty store, an empty repository and no remotes."""
+
     @classmethod
     def setUpClass(cls):
         cls.work = tempfile.mkdtemp()
@@ -95,6 +98,8 @@ class RemoteTest(DaemonTestCase):
         cls.kit = Image(CORE_ID + '.7d225c1fe79b1c5e', 'kit', '20260114T0238', base=cls.core)
         cls.app = Image(APP_ID, 'app', '0.1.0', base=cls.kit)
         cls.app2 = Image(APP_ID, 'app', '0.2.0', base=cls.kit)
+        cls.core2 = Image(CORE_ID, 'core', '13.5', seed='core 13.5')
+        cls.public_key = public_key(cls.key)
         cls.daemon = Daemon(
             ARGS.daemon,
             f'{RUNTIME_DIR}/test-manifoldd.sock',
@@ -183,46 +188,53 @@ class RemoteTest(DaemonTestCase):
         that the test refreshed explicitly."""
         return self.manifold('update', '--no-refresh', *component_ids, expect=expect)
 
-    def remote_add(self, key=None, channels=(), expect=0):
+    def remote_add(self, key=None, channels=(), expect=0, answer=None):
         """Run 'manifold remote add' for the repository, and trust the public key of the
-        private key file `key`. By default, `key` is the key that signs the repository."""
-        options = ['--key', f'{key or self.key}.pub']
+        private key file `key`. By default, `key` is the key that signs the repository.
+        If `key` is False, no key is given, and the tool asks whether to trust the key
+        that the repository serves."""
+        options = ['--key', f'{key or self.key}.pub'] if key is not False else []
         for channel in channels:
             options += ['--channel', channel]
-        return self.manifold('remote', 'add', *options, self.repo.url, expect=expect)
+        return self.manifold('remote', 'add', *options, self.repo.url, expect=expect, answer=answer)
 
     def remote_remove(self, remote_id, expect=0):
         """Run 'manifold remote remove'."""
         return self.manifold('remote', 'remove', remote_id, expect=expect)
 
-    def inspect(self, url, key=None):
+    def inspect(self, url=None, key=None):
         """Call InspectRemote directly, and return the description of the repository."""
-        parameters = {'url': url}
+        parameters = {'url': url or self.repo.url}
         if key is not None:
             parameters['publicKey'] = key
         return self.daemon.call(INSPECT_REMOTE, parameters)['remote']
 
-    def call_add_remote(self, url, key, channels=None, remote_id='example'):
-        """Call AddRemote directly, and return its result."""
-        parameters = {'remoteId': remote_id, 'url': url, 'publicKey': key}
+    def call_add_remote(self, key=None, channels=None, remote_id='example'):
+        """Call AddRemote directly for the repository, and return its result. By default,
+        the remote trusts the key that signs the repository."""
+        parameters = {
+            'remoteId': remote_id,
+            'url': self.repo.url,
+            'publicKey': key or self.public_key,
+        }
         if channels is not None:
             parameters['channels'] = channels
         return self.daemon.call(ADD_REMOTE, parameters)['result']
 
-    def refused(self, call, error, *args, **kwargs):
-        """Make a call that has to fail with `error`, and return the error message."""
+    @contextlib.contextmanager
+    def refused(self, error=None, parameter=None, message=None):
+        """Expect the call in the block to be refused: with the error `error`, because
+        the parameter `parameter` is invalid, or with `message` in its error message."""
         with self.assertRaises(VarlinkError) as refused:
-            call(*args, **kwargs)
-        self.assertIn(error, str(refused.exception))
-        return refused.exception.parameters.get('message', '')
-
-    def refused_parameter(self, call, parameter, *args, **kwargs):
-        """Make a call that has to be refused because `parameter` is invalid."""
-        with self.assertRaises(VarlinkError) as refused:
-            call(*args, **kwargs)
-        self.assertEqual(
-            refused.exception.parameters.get('parameter'), parameter, refused.exception
-        )
+            yield
+        if error is not None:
+            self.assertIn(error, str(refused.exception))
+        if parameter is not None:
+            self.assertEqual(
+                refused.exception.parameters.get('parameter'), parameter, refused.exception
+            )
+        if message is not None:
+            self.assertIn(message, refused.exception.parameters.get('message', ''))
 
     def listed(self, output, heading):
         """Return the (ID, version) of the components that the tool listed below a heading
@@ -256,14 +268,26 @@ class RemoteTest(DaemonTestCase):
         """Return the (ID, version, install mode, origin) of the installed components."""
         return installed_components(with_origin=True)
 
-    def publish_app(self, channels=('main',)):
-        """Publish the application and the kit and core it builds on, and refresh."""
+    def publish(self, *images, channels=('main',)):
+        """Publish images in the channels, configure the remote for the channels, and
+        refresh. Without images, the application and the kit and core it builds on are
+        published."""
         for channel in channels:
-            for image in (self.core, self.kit, self.app):
+            for image in images or (self.core, self.kit, self.app):
                 self.repo.add_image(channel, image)
         self.repo.publish()
         self.configure_remote(channels=list(channels))
         self.refresh()
+
+    def republish(self, *images, refresh=True):
+        """Publish a new state of the repository with more images in the main channel, and
+        refresh unless `refresh` is False."""
+        self.repo.serial += 1
+        for image in images:
+            self.repo.add_image('main', image)
+        self.repo.publish()
+        if refresh:
+            self.refresh()
 
     def image_requests(self, path):
         """Return the requests that the server received for zchunk files below `path`."""
@@ -276,42 +300,9 @@ class RemoteTest(DaemonTestCase):
         with open(os.path.join(STORE, path), 'rb') as f:
             return f.read()
 
-    def test_refresh_keeps_metadata_and_catalog(self):
-        arch = host_architecture()
-        self.repo.add_component('main', 'org.example.App', icon=JXL_DATA + b'app')
-        self.repo.add_component('main', 'org.example.Runtime')
-        self.repo.publish()
-        self.configure_remote()
-        self.refresh()
 
-        # the cached metadata is stored exactly as the repository serves it, so it can be verified
-        # again
-        for name in ('repo-index.json.zst', 'repo-index.sig'):
-            self.assertEqual(self.stored(f'remotes/example/{name}'), self.served(name))
-        for name in ('index.json.zst', 'icons.json.zst'):
-            self.assertEqual(
-                self.stored(f'remotes/example/main/{name}'), self.served(f'main/{arch}/{name}')
-            )
-        # the catalog is stored in the directory layout of AppStream, together with the icons of its
-        # origin
-        self.assertEqual(
-            self.stored('catalog/xml/example-main.xml.zst'),
-            self.served(f'main/{arch}/components.xml.zst'),
-        )
-        self.assertEqual(
-            self.stored('catalog/icons/example-main/64x64/org.example.App.jxl'), JXL_DATA + b'app'
-        )
-        self.assertEqual(
-            sorted(os.listdir(os.path.join(STORE, 'catalog', 'icons'))), ['example-main']
-        )
-
-        # refreshing again only downloads the root index, as nothing has changed
-        self.server.requests.clear()
-        self.refresh('example')
-        self.assertEqual(
-            sorted(self.server.requests),
-            ['/example/repo-index.json.zst', '/example/repo-index.sig'],
-        )
+class RemoteConfigTest(RemoteTestCase):
+    """Adding, inspecting, listing and removing remotes."""
 
     def test_inspect_remote(self):
         self.repo.publisher = {'name': 'Example Inc.', 'email': 'repo@example.org'}
@@ -328,7 +319,7 @@ class RemoteTest(DaemonTestCase):
         self.assertEqual(remote['publisherEmail'], 'repo@example.org')
         self.assertEqual(remote['validUntil'], '2099-06-01T12:00:00Z')
         self.assertEqual(remote['channels'], ['main', 'beta'])
-        self.assertEqual(remote['publicKey'], public_key(self.key))
+        self.assertEqual(remote['publicKey'], self.public_key)
         self.assertEqual(remote['fingerprint'], fingerprint(self.key))
         # inspecting a repository changes nothing
         self.assertEqual(os.listdir(ARGS.remotes_dir), [])
@@ -336,27 +327,34 @@ class RemoteTest(DaemonTestCase):
 
         # if the caller passes a key, the key has to verify the root index, and the repository
         # does not need to serve a key
-        self.refused(self.inspect, 'VerificationFailed', self.repo.url, public_key(self.other_key))
+        with self.refused('VerificationFailed'):
+            self.inspect(key=public_key(self.other_key))
         del self.server.files['/example/example_key.pub']
-        self.refused(self.inspect, 'DownloadFailed', self.repo.url)
-        self.assertEqual(self.inspect(self.repo.url, public_key(self.key))['id'], 'example')
+        with self.refused('DownloadFailed'):
+            self.inspect()
+        self.assertEqual(self.inspect(key=self.public_key)['id'], 'example')
 
         # the key that the repository serves has to be the key that signed its root index
         with open(f'{self.other_key}.pub', 'rb') as f:
             self.server.files['/example/example_key.pub'] = f.read()
-        self.refused(self.inspect, 'VerificationFailed', self.repo.url)
+        with self.refused('VerificationFailed'):
+            self.inspect()
         self.server.files['/example/example_key.pub'] = b'not a key\n'
-        self.refused(self.inspect, 'InvalidRepository', self.repo.url)
+        with self.refused('InvalidRepository'):
+            self.inspect()
 
         # a repository with expired metadata is refused, as no component could be installed from it
         self.repo.valid_until = '2020-01-01T00:00:00Z'
         self.repo.publish()
-        self.refused(self.inspect, 'Expired', self.repo.url)
+        with self.refused('Expired'):
+            self.inspect()
 
         # a malformed call is refused before anything is downloaded
         self.server.requests.clear()
-        self.refused_parameter(self.inspect, 'url', 'http://example.org')
-        self.refused_parameter(self.inspect, 'publicKey', self.repo.url, 'not a key')
+        with self.refused(parameter='url'):
+            self.inspect('http://example.org')
+        with self.refused(parameter='publicKey'):
+            self.inspect(key='not a key')
         self.assertEqual(self.server.requests, [])
 
     def test_add_remote(self):
@@ -365,14 +363,27 @@ class RemoteTest(DaemonTestCase):
         self.repo.add_component('beta', 'org.example.Other')
         self.repo.publish()
 
-        self.assertNotIn('Warning', self.remote_add())
+        # the key has to be the one that signed the repository, and the channels have to exist
+        self.assertIn('not made by a trusted key', self.remote_add(key=self.other_key, expect=1))
+        self.assertIn(
+            'Unable to read',
+            self.manifold('remote', 'add', '--key', 'missing.pub', self.repo.url, expect=3),
+        )
+        self.assertIn(
+            'has no channel extra for this system', self.remote_add(channels=['extra'], expect=1)
+        )
+
+        # the user is not asked to trust a key that is given with --key
+        out = self.remote_add()
+        self.assertNotIn('Warning', out)
+        self.assertNotIn('[y/N]', out)
         remote_dir = os.path.join(ARGS.remotes_dir, 'example')
         with open(os.path.join(remote_dir, 'remote.conf'), encoding='utf-8') as f:
             config = f.read()
         self.assertIn(f'URL={self.repo.url}\n', config)
         self.assertIn('Channels=main;\n', config)
         with open(os.path.join(remote_dir, 'keys', 'example.pub'), encoding='utf-8') as f:
-            self.assertEqual(f.read(), f'{public_key(self.key)}\n')
+            self.assertEqual(f.read(), f'{self.public_key}\n')
 
         # the remote is refreshed, so its components can be installed right away
         self.assertEqual(
@@ -384,6 +395,13 @@ class RemoteTest(DaemonTestCase):
         # a remote that is configured already is not added again
         self.assertIn('There is a remote example already', self.remote_add(expect=1))
 
+        # a remote that was removed can be added again, with other channels
+        self.remote_remove('example')
+        out = self.remote_add(channels=['main', 'beta'])
+        self.assertIn('Added the remote example, which installs from main, beta.', out)
+        with open(os.path.join(remote_dir, 'remote.conf'), encoding='utf-8') as f:
+            self.assertIn('Channels=main;beta;\n', f.read())
+
     def test_add_remote_refused(self):
         # the tool inspects the repository and checks most of this itself before it calls
         # AddRemote, so the checks of the daemon are only reached with a direct call
@@ -392,44 +410,24 @@ class RemoteTest(DaemonTestCase):
         self.repo.add_component('beta', 'org.example.App', version='2.0')
         self.repo.publish()
 
-        # the key has to verify the root index, and the repository has to have the channels
-        self.refused(
-            self.call_add_remote, 'VerificationFailed', self.repo.url, public_key(self.other_key)
-        )
-        # the repository has to have the ID that the user confirmed
-        message = self.refused(
-            self.call_add_remote,
-            'VerificationFailed',
-            self.repo.url,
-            public_key(self.key),
-            remote_id='other',
-        )
-        self.assertIn('has the ID example, not other', message)
-        self.refused_parameter(
-            self.call_add_remote,
-            'remoteId',
-            self.repo.url,
-            public_key(self.key),
-            remote_id='not/valid',
-        )
-        message = self.refused(
-            self.call_add_remote,
-            'NotFound',
-            self.repo.url,
-            public_key(self.key),
-            channels=['main', 'extra'],
-        )
-        self.assertIn(f'no channel extra for {arch}, only: main, beta', message)
-        self.refused_parameter(
-            self.call_add_remote, 'channels', self.repo.url, public_key(self.key), ['main', 'main']
-        )
+        # a key that did not sign the root index
+        with self.refused('VerificationFailed'):
+            self.call_add_remote(key=public_key(self.other_key))
+        # a repository with a different ID than the one that the user confirmed
+        with self.refused('VerificationFailed', message='has the ID example, not other'):
+            self.call_add_remote(remote_id='other')
+        with self.refused(parameter='remoteId'):
+            self.call_add_remote(remote_id='not/valid')
+        # a channel that the repository does not have, and a channel twice
+        with self.refused('NotFound', message=f'no channel extra for {arch}, only: main, beta'):
+            self.call_add_remote(channels=['main', 'extra'])
+        with self.refused(parameter='channels'):
+            self.call_add_remote(channels=['main', 'main'])
         self.assertEqual(os.listdir(ARGS.remotes_dir), [])
 
         # a remote that can not be refreshed stays, and the result says why
         del self.server.files[f'/example/beta/{arch}/index.json.zst']
-        result = self.call_add_remote(
-            self.repo.url, public_key(self.key), channels=['main', 'beta']
-        )
+        result = self.call_add_remote(channels=['main', 'beta'])
         self.assertTrue(
             any('example was added, but refreshing it failed' in w for w in result['warnings']),
             result,
@@ -437,8 +435,40 @@ class RemoteTest(DaemonTestCase):
         self.assertTrue(os.path.isfile(os.path.join(ARGS.remotes_dir, 'example', 'remote.conf')))
         self.assertFalse(os.path.exists(f'{STORE}/remotes/example'))
 
+        # a remote that is configured already is not replaced
+        with self.refused('RemoteExists'):
+            self.call_add_remote(channels=['main'])
+        with open(os.path.join(ARGS.remotes_dir, 'example', 'remote.conf'), encoding='utf-8') as f:
+            self.assertIn('Channels=main;beta;\n', f.read())
+
+    def test_remote_add_asks_before_it_trusts_a_key(self):
+        self.repo.publisher = {'name': 'Example Inc.', 'email': 'repo@example.org'}
+        self.repo.add_component('main', 'org.example.App')
+        self.repo.add_component('beta', 'org.example.App', version='2.0')
+        self.repo.publish()
+        config = os.path.join(ARGS.remotes_dir, 'example', 'remote.conf')
+
+        # without a terminal, the key has to be trusted with --yes, or given with --key
+        self.assertIn('--yes', self.remote_add(key=False, expect=2))
+        self.assertEqual(self.server.requests, [])
+
+        # the user is asked to trust the key that the repository serves, by its fingerprint
+        out = self.remote_add(key=False, answer='n', expect=1)
+        self.assertIn('example: Example applications', out)
+        self.assertIn('Publisher: Example Inc. <repo@example.org>', out)
+        # only the channels that would be enabled for the remote are listed
+        self.assertIn('Channels: main\n', out)
+        self.assertIn(f'Key: {fingerprint(self.key)}', out)
+        self.assertIn('Trust this key, and add the remote? [y/N]', out)
+        self.assertIn('Aborted.', out)
+        self.assertFalse(os.path.exists(config))
+
+        out = self.remote_add(key=False, answer='y')
+        self.assertIn('Added the remote example, which installs from main.', out)
+        self.assertTrue(os.path.exists(config))
+
     def test_remove_remote(self):
-        self.publish_app()
+        self.publish()
         self.install(APP_ID)
         installed = self.installed()
 
@@ -493,6 +523,45 @@ class RemoteTest(DaemonTestCase):
         # a remote can be named, and one that is not defined is an error
         self.refresh('example')
         self.assertIn('There is no remote other', self.refresh('other', expect=1))
+
+
+class RefreshTest(RemoteTestCase):
+    """Refreshing the cached metadata and the catalog of a remote."""
+
+    def test_refresh_stores_metadata_and_catalog(self):
+        arch = host_architecture()
+        self.repo.add_component('main', 'org.example.App', icon=JXL_DATA + b'app')
+        self.repo.add_component('main', 'org.example.Runtime')
+        self.repo.publish()
+        self.configure_remote()
+        self.refresh()
+
+        # cached metadata is stored as the repository serves it, so it can be verified again
+        for name in ('repo-index.json.zst', 'repo-index.sig'):
+            self.assertEqual(self.stored(f'remotes/example/{name}'), self.served(name))
+        for name in ('index.json.zst', 'icons.json.zst'):
+            self.assertEqual(
+                self.stored(f'remotes/example/main/{name}'), self.served(f'main/{arch}/{name}')
+            )
+        # the catalog and its icons are stored in the directory layout of AppStream
+        self.assertEqual(
+            self.stored('catalog/xml/example-main.xml.zst'),
+            self.served(f'main/{arch}/components.xml.zst'),
+        )
+        self.assertEqual(
+            self.stored('catalog/icons/example-main/64x64/org.example.App.jxl'), JXL_DATA + b'app'
+        )
+        self.assertEqual(
+            sorted(os.listdir(os.path.join(STORE, 'catalog', 'icons'))), ['example-main']
+        )
+
+        # refreshing again only downloads the root index, as nothing has changed
+        self.server.requests.clear()
+        self.refresh('example')
+        self.assertEqual(
+            sorted(self.server.requests),
+            ['/example/repo-index.json.zst', '/example/repo-index.sig'],
+        )
 
     def test_only_changed_icons_are_downloaded(self):
         self.repo.add_component('main', 'org.example.App', icon=JXL_DATA + b'app')
@@ -563,8 +632,7 @@ class RemoteTest(DaemonTestCase):
             sorted(os.listdir(xml_dir)), ['example-beta.xml.zst', 'example-main.xml.zst']
         )
 
-        # the cached metadata and catalog of a channel are removed once the channel is disabled for
-        # the remote
+        # a channel that is disabled for the remote loses its cached metadata and catalog
         self.configure_remote(channels=['main'])
         self.refresh()
         self.assertEqual(os.listdir(xml_dir), ['example-main.xml.zst'])
@@ -586,8 +654,12 @@ class RemoteTest(DaemonTestCase):
         self.assertEqual(os.listdir(os.path.join(STORE, 'catalog', 'icons')), [])
         self.assertEqual(os.listdir(os.path.join(STORE, 'remotes')), [])
 
+
+class InstallTest(RemoteTestCase):
+    """Installing components from a remote."""
+
     def test_install_with_bases(self):
-        self.publish_app()
+        self.publish()
         out = self.install(APP_ID)
 
         self.assertEqual(
@@ -625,11 +697,7 @@ class RemoteTest(DaemonTestCase):
             base=self.kit,
             base_sdk=sdk,
         )
-        for image in (self.core, sdk, self.kit, kit_sdk):
-            self.repo.add_image('main', image)
-        self.repo.publish()
-        self.configure_remote(channels=['main'])
-        self.refresh()
+        self.publish(self.core, sdk, self.kit, kit_sdk)
 
         # the SDK brings the kit it extends, and the SDK of the core for the layer below
         self.install(kit_sdk.component)
@@ -652,13 +720,8 @@ class RemoteTest(DaemonTestCase):
         )
 
     def test_exact_base_is_installed_next_to_a_newer_version(self):
-        newer_core = Image(CORE_ID, 'core', '13.5', seed='newer core')
         sdk = Image(CORE_ID + '.sdk', 'core', '13.4', sdk=True, base=self.core)
-        for image in (self.core, newer_core, sdk):
-            self.repo.add_image('main', image)
-        self.repo.publish()
-        self.configure_remote(channels=['main'])
-        self.refresh()
+        self.publish(self.core, self.core2, sdk)
         self.install(CORE_ID)
 
         # the newer core provides the same identity, but the SDK needs the core it was built on
@@ -666,13 +729,13 @@ class RemoteTest(DaemonTestCase):
         self.assertIn((CORE_ID, '13.4', 'auto', 'example-main'), self.installed())
         self.assertTrue(os.path.isdir(f'{STORE}/runtimes/{sdk.component}/13.4-{sdk.revision}/base'))
         self.assertEqual(
-            os.readlink(f'{STORE}/runtimes/{CORE_ID}/current'), f'13.5-{newer_core.revision}'
+            os.readlink(f'{STORE}/runtimes/{CORE_ID}/current'), f'13.5-{self.core2.revision}'
         )
 
     def test_install_from_the_external_location(self):
         self.repo.image_paths['main'] = '/releases/download/images'
         self.repo.pool_images = False
-        self.publish_app()
+        self.publish()
         self.server.requests.clear()
         self.install(APP_ID)
 
@@ -683,7 +746,7 @@ class RemoteTest(DaemonTestCase):
 
     def test_install_falls_back_to_the_repository(self):
         self.repo.image_paths['main'] = '/releases/download/images'
-        self.publish_app()
+        self.publish()
         # at the image-url-prefix, the file of the core is a different image, and the file of the
         # kit is missing
         self.server.files[f'/objects/{self.core.verity_hash}'] = self.repo.zchunk_file(self.app)[0]
@@ -698,7 +761,7 @@ class RemoteTest(DaemonTestCase):
         self.assertNotIn(f'/example/pool/{self.app.verity_hash}.raw.zck', fallbacks)
 
     def test_install_refreshes_once_when_the_repository_changed(self):
-        self.publish_app()
+        self.publish()
         # the repository replaces the application with a new version, and we do not refresh
         self.server.reset()
         self.repo.serial += 1
@@ -709,13 +772,9 @@ class RemoteTest(DaemonTestCase):
         self.assertIn((APP_ID, '0.2.0', 'auto', 'example-main'), self.installed())
         self.assertEqual(self.server.requests.count('/example/repo-index.json.zst'), 1)
 
-        # if a downloaded file does not match and the root index is unchanged, the download is not
-        # retried
+        # a download that does not match is not retried if the root index is unchanged
         app3 = Image(APP_ID, 'app', '0.3.0', base=self.kit)
-        self.repo.serial += 1
-        self.repo.add_image('main', app3)
-        self.repo.publish()
-        self.refresh()
+        self.republish(app3)
         path = f'/example/pool/{app3.verity_hash}.raw.zck'
         damaged = bytearray(self.server.files[path])
         damaged[-1] ^= 0xFF
@@ -726,7 +785,7 @@ class RemoteTest(DaemonTestCase):
         self.assertIn((APP_ID, '0.2.0', 'auto', 'example-main'), self.installed())
 
     def test_install_needs_one_origin(self):
-        self.publish_app(channels=('main', 'beta'))
+        self.publish(channels=('main', 'beta'))
         # several origins have the application, and the error says how to choose
         out = self.install(APP_ID, expect=1)
         self.assertIn('example-main, example-beta', out)
@@ -744,23 +803,55 @@ class RemoteTest(DaemonTestCase):
             self.install('org.example.Missing', expect=1),
         )
 
+    def test_install_tells_bundle_files_from_components(self):
+        self.publish()
+
+        # an argument that is not a file has to be a component, and only components have an origin
+        self.assertIn(
+            'not a valid component identifier', self.manifold('install', 'not/valid', expect=3)
+        )
+        self.manifold('install', '--origin', 'example-main', './app.manifold', expect=2)
+        # only a path that starts with ./ or / is a bundle file
+        self.assertIn(
+            'Unable to open ./app.manifold', self.manifold('install', './app.manifold', expect=3)
+        )
+        self.assertIn(
+            'No remote has the component app.manifold',
+            self.manifold('install', 'app.manifold', expect=1),
+        )
+
+        # we stop at the first component that fails, and name the ones that were not installed
+        out = self.manifold('install', 'org.example.Missing', APP_ID, expect=1)
+        self.assertIn(f'The remaining components were not installed: {APP_ID}', out)
+
+    def test_install_verifies_the_cached_metadata(self):
+        self.publish()
+
+        # the cached component index is not the one that the root index records
+        with open(f'{STORE}/remotes/example/main/index.json.zst', 'wb') as f:
+            f.write(zstd_compress(b'{"components": {}}'))
+        self.assertIn("run 'manifold refresh'", self.install(APP_ID, expect=1))
+        self.refresh()
+
+        # the key that signed the root index is not trusted anymore
+        self.configure_remote(key=self.other_key)
+        self.assertIn('Verification failed', self.install(APP_ID, origin='example-main', expect=1))
+        self.assertEqual(self.installed(), [])
+
+
+class UpdateTest(RemoteTestCase):
+    """Updating installed components from their remotes."""
+
     def test_update_reuses_chunks(self):
         old_data = incompressible_data('app', 64)
         new_data = bytearray(old_data)
         new_data[24 * BLOCK_SIZE : 25 * BLOCK_SIZE] = incompressible_data('changed', 1)
         app = Image(APP_ID, 'app', '0.1.0', base=self.kit, data=old_data)
         app2 = Image(APP_ID, 'app', '0.2.0', base=self.kit, data=bytes(new_data))
-        for image in (self.core, self.kit, app):
-            self.repo.add_image('main', image)
-        self.repo.publish()
-        self.configure_remote()
-        self.refresh()
+        self.publish(self.core, self.kit, app)
         self.install(APP_ID)
 
-        self.repo.serial += 1
-        self.repo.add_image('main', app2)
-        self.repo.publish()
-        self.refresh()
+        self.republish(app2)
         self.server.sent.clear()
         out = self.update()
 
@@ -787,19 +878,11 @@ class RemoteTest(DaemonTestCase):
 
     def test_update_dependencies(self):
         platform = Image(CORE_ID + '.qt6', 'platform', '6.8', base=self.core)
-        core2 = Image(CORE_ID, 'core', '13.5', seed='core 13.5')
-        for image in (self.core, self.kit, self.app, platform):
-            self.repo.add_image('main', image)
-        self.repo.publish()
-        self.configure_remote()
-        self.refresh()
+        self.publish(self.core, self.kit, self.app, platform)
         self.install(platform.component)
 
         # the platform has an exact base, so a newer core in the repository is not an update for it
-        self.repo.serial += 1
-        self.repo.add_image('main', core2)
-        self.repo.publish()
-        self.refresh()
+        self.republish(self.core2)
         self.assertIn('There are no updates.', self.update())
 
         # the kit of the application accepts any core with the same identity, so the core is updated
@@ -810,16 +893,11 @@ class RemoteTest(DaemonTestCase):
         self.assertTrue(os.readlink(f'{STORE}/runtimes/{CORE_ID}/current').startswith('13.5-'))
 
     def test_update_skips_failing_components(self):
-        self.publish_app()
+        self.publish()
         self.install(APP_ID)
 
         # a new core and a new application, but the manifest of the application is gone
-        core2 = Image(CORE_ID, 'core', '13.5', seed='core 13.5')
-        self.repo.serial += 1
-        self.repo.add_image('main', core2)
-        self.repo.add_image('main', self.app2)
-        self.repo.publish()
-        self.refresh()
+        self.republish(self.core2, self.app2)
         del self.server.files[f'/example/pool/{self.app2.verity_hash}.json.zst']
         self.server.requests.clear()
         out = self.update()
@@ -843,101 +921,13 @@ class RemoteTest(DaemonTestCase):
             'org.example.Missing is not installed', self.update('org.example.Missing', expect=1)
         )
 
-    def test_install_tells_bundle_files_from_components(self):
-        self.publish_app()
-
-        # an argument that is not a file has to be a component, and only components have an origin
-        self.assertIn(
-            'not a valid component identifier', self.manifold('install', 'not/valid', expect=3)
-        )
-        self.manifold('install', '--origin', 'example-main', './app.manifold', expect=2)
-        # only a path that starts with ./ or / is a bundle file
-        self.assertIn(
-            'Unable to open ./app.manifold', self.manifold('install', './app.manifold', expect=3)
-        )
-        self.assertIn(
-            'No remote has the component app.manifold',
-            self.manifold('install', 'app.manifold', expect=1),
-        )
-
-        # we stop at the first component that fails, and name the ones that were not installed
-        out = self.manifold('install', 'org.example.Missing', APP_ID, expect=1)
-        self.assertIn(f'The remaining components were not installed: {APP_ID}', out)
-
-    def test_remote_add_asks_before_it_trusts_a_key(self):
-        self.repo.publisher = {'name': 'Example Inc.', 'email': 'repo@example.org'}
-        self.repo.add_component('main', 'org.example.App')
-        self.repo.add_component('beta', 'org.example.App', version='2.0')
-        self.repo.publish()
-        config = os.path.join(ARGS.remotes_dir, 'example', 'remote.conf')
-
-        # without a terminal, the key has to be trusted with --yes, or given with --key
-        self.assertIn('--yes', self.manifold('remote', 'add', self.repo.url, expect=2))
-        self.assertEqual(self.server.requests, [])
-
-        # the user is shown the fingerprint of the key that the repository serves, and is asked to
-        # trust it
-        out = self.manifold('remote', 'add', self.repo.url, answer='n', expect=1)
-        self.assertIn('example: Example applications', out)
-        self.assertIn('Publisher: Example Inc. <repo@example.org>', out)
-        # only the channels that would be enabled for the remote are listed, not all channels of the
-        # repository
-        self.assertIn('Channels: main\n', out)
-        self.assertIn(f'Key: {fingerprint(self.key)}', out)
-        self.assertIn('Trust this key, and add the remote? [y/N]', out)
-        self.assertIn('Aborted.', out)
-        self.assertFalse(os.path.exists(config))
-        out = self.manifold('remote', 'add', self.repo.url, answer='y')
-        self.assertIn('Added the remote example, which installs from main.', out)
-        self.assertIn('Valid until: 2099-06-01', self.manifold('remote', 'list'))
-
-        # a remote is not added twice, and one that was removed can be added again
-        self.assertIn(
-            'There is a remote example already',
-            self.manifold('remote', 'add', '--yes', self.repo.url, expect=1),
-        )
-        self.assertIn('Removed the remote example.', self.manifold('remote', 'remove', 'example'))
-        self.assertFalse(os.path.exists(config))
-        self.assertIn(
-            'There is no remote example', self.manifold('remote', 'remove', 'example', expect=1)
-        )
-
-        # the user is not asked to trust a key given with --key, but the key has to be the one
-        # that signed the repository
-        self.assertIn(
-            'not made by a trusted key',
-            self.manifold(
-                'remote', 'add', '--key', f'{self.other_key}.pub', self.repo.url, expect=1
-            ),
-        )
-        self.assertIn(
-            'Unable to read',
-            self.manifold('remote', 'add', '--key', 'missing.pub', self.repo.url, expect=3),
-        )
-        key_option = ('--key', f'{self.key}.pub')
-        self.assertIn(
-            'has no channel extra for this system',
-            self.manifold(
-                'remote', 'add', *key_option, '--channel', 'extra', self.repo.url, expect=1
-            ),
-        )
-        out = self.manifold(
-            'remote', 'add', *key_option, '--channel', 'main', '--channel', 'beta', self.repo.url
-        )
-        self.assertIn('Added the remote example, which installs from main, beta.', out)
-        self.assertNotIn('[y/N]', out)
-        with open(config, encoding='utf-8') as f:
-            self.assertIn('Channels=main;beta;\n', f.read())
-
     def test_update_refreshes_first(self):
-        self.publish_app()
+        self.publish()
         self.install(APP_ID)
         self.assertIn('There are no updates.', self.manifold('update'))
 
         # without a refresh, we do not see the new version
-        self.repo.serial += 1
-        self.repo.add_image('main', self.app2)
-        self.repo.publish()
+        self.republish(self.app2, refresh=False)
         self.server.requests.clear()
         self.assertIn('There are no updates.', self.update())
         self.assertEqual(self.server.requests, [])
@@ -946,10 +936,7 @@ class RemoteTest(DaemonTestCase):
 
         # a remote that fails to refresh does not stop the update
         app3 = Image(APP_ID, 'app', '0.3.0', base=self.kit)
-        self.repo.serial += 1
-        self.repo.add_image('main', app3)
-        self.repo.publish()
-        self.refresh()
+        self.republish(app3)
         del self.server.files['/example/repo-index.json.zst']
         out = self.manifold('update')
         self.assertIn('Warning: Unable to refresh, updating from the cached metadata', out)
@@ -958,20 +945,6 @@ class RemoteTest(DaemonTestCase):
         self.assertIn(
             'not a valid component identifier', self.manifold('update', 'not/valid', expect=2)
         )
-
-    def test_install_verifies_the_cached_metadata(self):
-        self.publish_app()
-
-        # the cached component index is not the one that the root index records
-        with open(f'{STORE}/remotes/example/main/index.json.zst', 'wb') as f:
-            f.write(zstd_compress(b'{"components": {}}'))
-        self.assertIn("run 'manifold refresh'", self.install(APP_ID, expect=1))
-        self.refresh()
-
-        # the key that signed the root index is not trusted anymore
-        self.configure_remote(key=self.other_key)
-        self.assertIn('Verification failed', self.install(APP_ID, origin='example-main', expect=1))
-        self.assertEqual(self.installed(), [])
 
 
 if __name__ == '__main__':

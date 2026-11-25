@@ -74,14 +74,20 @@ class FetchTest(unittest.TestCase):
         self.addCleanup(os.close, fd)
         return fd
 
+    def request(self, path, max_size, ranges=None, fd=0):
+        """Return a request for a file of the server. `fd` is the position of the target
+        of the download in the list of file descriptors that are passed with the call."""
+        request = {'url': f'{self.url}{path}', 'fileDescriptor': fd, 'maxSize': max_size}
+        if ranges is not None:
+            request['ranges'] = ranges
+        return request
+
     def test_whole_file(self):
         data = os.urandom(3 * 1024 * 1024)
         self.server.files['/file'] = data
         fd = self.target()
 
-        replies = self.helper.fetch(
-            [{'url': f'{self.url}/file', 'fileDescriptor': 0, 'maxSize': len(data)}], [fd]
-        )
+        replies = self.helper.fetch([self.request('/file', len(data))], [fd])
         self.assertEqual(replies[-1]['results'], [{'size': len(data)}])
         self.assertEqual(os.pread(fd, len(data) + 1, 0), data)
         # progress is reported while the file is downloaded
@@ -99,17 +105,7 @@ class FetchTest(unittest.TestCase):
         ]
         fd = self.target()
 
-        replies = self.helper.fetch(
-            [
-                {
-                    'url': f'{self.url}/release/image',
-                    'fileDescriptor': 0,
-                    'maxSize': len(data),
-                    'ranges': ranges,
-                }
-            ],
-            [fd],
-        )
+        replies = self.helper.fetch([self.request('/release/image', len(data), ranges)], [fd])
         self.assertEqual(replies[-1]['results'], [{'size': 100 + 8192 + 5536}])
         for r in ranges:
             self.assertEqual(
@@ -131,17 +127,7 @@ class FetchTest(unittest.TestCase):
         ranges = [{'offset': 0, 'length': 1024}, {'offset': 8192, 'length': 1024}]
         fd = self.target()
 
-        replies = self.helper.fetch(
-            [
-                {
-                    'url': f'{self.url}/release/image',
-                    'fileDescriptor': 0,
-                    'maxSize': len(data),
-                    'ranges': ranges,
-                }
-            ],
-            [fd],
-        )
+        replies = self.helper.fetch([self.request('/release/image', len(data), ranges)], [fd])
         self.assertEqual(replies[-1]['results'], [{'size': 2048}])
         self.assertEqual(os.pread(fd, 1024, 8192), data[8192:9216])
         self.assertEqual(self.server.requests.count('/release/image'), 2)
@@ -153,61 +139,50 @@ class FetchTest(unittest.TestCase):
         self.server.no_ranges.add('/no-ranges')
         self.server.redirects['/to-http'] = 'http://127.0.0.1:1/file'
         requests = [
-            {'url': f'{self.url}/missing', 'fileDescriptor': 0, 'maxSize': 4096},
-            {'url': f'{self.url}/file', 'fileDescriptor': 1, 'maxSize': 1000},
-            {
-                'url': f'{self.url}/no-ranges',
-                'fileDescriptor': 2,
-                'maxSize': len(data),
-                'ranges': [{'offset': 0, 'length': 10}],
-            },
-            {'url': f'{self.url}/to-http', 'fileDescriptor': 3, 'maxSize': 4096},
-            {'url': f'{self.url}/file', 'fileDescriptor': 4, 'maxSize': 4096},
+            self.request('/missing', 4096, fd=0),
+            self.request('/file', 1000, fd=1),
+            self.request('/no-ranges', len(data), [{'offset': 0, 'length': 10}], fd=2),
+            self.request('/to-http', 4096, fd=3),
+            self.request('/file', 4096, fd=4),
         ]
         fds = [self.target() for _ in requests]
 
         results = self.helper.fetch(requests, fds)[-1]['results']
-        self.assertEqual(results[0]['failure'], 'http')
-        self.assertEqual(results[0]['httpStatus'], 404)
+        missing, too_large, no_ranges, to_http, good = results
+        # a file that the server does not have
+        self.assertEqual(missing['failure'], 'http')
+        self.assertEqual(missing['httpStatus'], 404)
         # a file that is larger than its maximum size is not written beyond that size
-        self.assertEqual(results[1]['failure'], 'tooLarge')
+        self.assertEqual(too_large['failure'], 'tooLarge')
         self.assertLessEqual(os.fstat(fds[1]).st_size, 1000)
         # the server sent the whole file instead of the requested range
-        self.assertEqual(results[2]['failure'], 'badResponse')
+        self.assertEqual(no_ranges['failure'], 'badResponse')
         # we never follow a redirect to plain http
-        self.assertEqual(results[3]['failure'], 'badResponse')
+        self.assertEqual(to_http['failure'], 'badResponse')
         # one request that fails does not stop the others
-        self.assertEqual(results[4], {'size': len(data)})
+        self.assertEqual(good, {'size': len(data)})
         self.assertEqual(os.pread(fds[4], 4097, 0), data)
 
-    def test_only_https(self):
+    def test_invalid_requests(self):
+        # only https
         reply = self.helper.fetch(
             [{'url': 'http://127.0.0.1/file', 'fileDescriptor': 0, 'maxSize': 1}], [self.target()]
         )
         self.assertEqual(reply['error'], 'org.varlink.service.InvalidParameter')
         self.assertEqual(reply['parameters'], {'parameter': 'url'})
 
-    def test_ranges_stay_below_the_largest_size(self):
+        # a range that ends behind the largest size of the file
         reply = self.helper.fetch(
-            [
-                {
-                    'url': f'{self.url}/file',
-                    'fileDescriptor': 0,
-                    'maxSize': 100,
-                    'ranges': [{'offset': 90, 'length': 11}],
-                }
-            ],
-            [self.target()],
+            [self.request('/file', 100, [{'offset': 90, 'length': 11}])], [self.target()]
         )
+        self.assertEqual(reply['error'], 'org.varlink.service.InvalidParameter')
         self.assertEqual(reply['parameters'], {'parameter': 'ranges'})
 
     def test_untrusted_certificate(self):
         self.server.files['/file'] = b'data'
         helper = Helper(None)
         try:
-            results = helper.fetch(
-                [{'url': f'{self.url}/file', 'fileDescriptor': 0, 'maxSize': 4}], [self.target()]
-            )
+            results = helper.fetch([self.request('/file', 4)], [self.target()])
         finally:
             self.assertEqual(helper.close(), 0)
         self.assertEqual(results[-1]['results'][0]['failure'], 'network')
