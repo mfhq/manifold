@@ -435,10 +435,8 @@ mfr_capture_unload(MfrCapture *capture)
  * mfr_capture_load:
  *
  * Load the stamp and the environment from the directory of the capture.
- * They replace the previously loaded stamp and environment.
  *
- * Returns: %FALSE if the capture in the directory is incomplete. The
- *   previously loaded data is kept in that case.
+ * Returns: %FALSE if the capture in the directory is incomplete
  */
 static gboolean
 mfr_capture_load(MfrCapture *capture, GError **error)
@@ -459,7 +457,6 @@ mfr_capture_load(MfrCapture *capture, GError **error)
     if (environment == NULL)
         return FALSE;
 
-    mfr_capture_unload(capture);
     capture->id = g_strdup(id);
     capture->environment = g_steal_pointer(&environment);
     capture->stamp = g_steal_pointer(&stamp);

@@ -513,9 +513,8 @@ mfr_bind_etc_files(const char *tree_path, const char *layer_dir, GError **error)
                 return FALSE;
             continue;
         }
-        /* never mount on a link, as the kernel would follow it to a path outside of the tree */
-        if (g_file_test(placeholder, G_FILE_TEST_IS_SYMLINK) ||
-            !g_file_test(placeholder, G_FILE_TEST_IS_REGULAR))
+        /* there is no placeholder if the host does not have the file */
+        if (!g_file_test(placeholder, G_FILE_TEST_IS_REGULAR))
             continue;
         if (!mfr_bind_mount(host_path, target, TRUE, error))
             return FALSE;

@@ -88,8 +88,7 @@ mfr_composer_dispose(GObject *object)
     MfrComposer *composer = MFR_COMPOSER(object);
 
     /* take all trees down, running applications keep their own clone of the tree */
-    if (composer->trees != NULL)
-        mfr_composer_drop_all_trees(composer);
+    mfr_composer_drop_all_trees(composer);
 
     G_OBJECT_CLASS(mfr_composer_parent_class)->dispose(object);
 }

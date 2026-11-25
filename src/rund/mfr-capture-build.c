@@ -1312,8 +1312,6 @@ mfr_capture_job_rewrite_icd_file(MfrCaptureJob *job,
         if (entry == NULL)
             return glnx_throw(error, "%s was not captured", library_path);
     } else if (plan->sonames->len > 0) {
-        /* we keep a SONAME, because the file is shared between architectures and
-         * ld.so.cache resolves the SONAME for the architecture of the loading program */
         entry = g_strdup(g_ptr_array_index(plan->sonames, 0));
     } else {
         return glnx_throw(error, "it does not refer to a library");
