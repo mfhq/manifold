@@ -803,7 +803,7 @@ mft_sign_file(const char *path, MfSigner *signer, GError **error)
 /**
  * test_sign_file:
  *
- * Sign a bundle in place, replace its signature, and remove it.
+ * Sign a bundle in place, then replace and remove its signature.
  */
 static void
 test_sign_file(Fixture *f, gconstpointer user_data)

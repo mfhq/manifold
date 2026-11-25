@@ -424,7 +424,7 @@ class InstallTest(InstallerTestCase):
         self.assertEqual(percents, sorted(percents))
         self.assertEqual(percents[-1], 100)
 
-        # the old revisions and their images are gone
+        # the old revisions and their images were removed
         self.assertEqual(self.version_dirs('apps', APP_ID), [f'0.1.0-{app.revision}'])
         self.assertEqual(
             self.version_dirs('runtimes', kit.component), [f'{kit.version}-{kit.revision}']
@@ -1458,6 +1458,7 @@ class SigningTest(InstallerTestCase):
 
         # a key name is checked before a key is written
         self.manifold('key', 'new', '--no-passphrase', '../key', expect=2)
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(key_dir), 'key')))
         self.assertEqual(
             sorted(os.listdir(key_dir)), ['ci-1.x', 'ci-1.x.pub', 'default', 'default.pub']
         )

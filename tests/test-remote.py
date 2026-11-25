@@ -223,8 +223,8 @@ class RemoteTestCase(DaemonTestCase):
 
     @contextlib.contextmanager
     def refused(self, error=None, parameter=None, message=None):
-        """Expect the call in the block to be refused: with the error `error`, because
-        the parameter `parameter` is invalid, or with `message` in its error message."""
+        """Expect the call in the block to be refused. The name of the error, the invalid
+        parameter and a part of the error message are checked if they are given."""
         with self.assertRaises(VarlinkError) as refused:
             yield
         if error is not None:
@@ -466,6 +466,12 @@ class RemoteConfigTest(RemoteTestCase):
         out = self.remote_add(key=False, answer='y')
         self.assertIn('Added the remote example, which installs from main.', out)
         self.assertTrue(os.path.exists(config))
+
+        # with --yes, the key is trusted without a question, and no terminal is needed
+        self.remote_remove('example')
+        out = self.manifold('remote', 'add', '--yes', self.repo.url)
+        self.assertIn('Added the remote example, which installs from main.', out)
+        self.assertNotIn('[y/N]', out)
 
     def test_remove_remote(self):
         self.publish()

@@ -387,7 +387,7 @@ test_install(void)
     mft_assert_file(RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1/mode", "auto\n");
     mft_assert_file(APPS "/" TEST_APP_ID "/0.1.0-1/mode", "auto\n");
 
-    /* the store reader finds all of them */
+    /* the store reader finds the four installed components */
     components = mft_list_components();
     g_assert_cmpuint(components->len, ==, 4);
     g_assert_cmpstr(mf_component_get_full_version(mft_find_component(components, TEST_CORE_ID, "13.4")),

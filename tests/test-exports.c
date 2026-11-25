@@ -150,7 +150,7 @@ mft_render(const char *kind, const char *path, const char *content, GError **err
  * mft_assert_renders:
  * @expected: the content of the file that is installed on the host
  *
- * Check that a file of an image is accepted, and what is installed for it.
+ * Check that a file of an image is accepted, and that the file installed on the host has the expected content.
  */
 static void
 mft_assert_renders(const char *kind, const char *path, const char *content, const char *expected)
@@ -505,7 +505,7 @@ test_check_component(void)
         g_assert_false(mft_passes_check(&m));
     }
 
-    /* only applications are launched */
+    /* only applications are launched, so the integration section of any other kind is refused */
     for (size_t i = 0; i < G_N_ELEMENTS(refused_kinds); i++) {
         m = mft_app_manifest("{}");
         m.kind = refused_kinds[i].kind;
@@ -514,7 +514,7 @@ test_check_component(void)
         g_assert_false(mft_passes_check(&m));
     }
 
-    /* the SDK of an application is not launched either */
+    /* the SDK of an application is never launched, so its integration section is refused */
     m = mft_app_manifest("{}");
     m.sdk = TRUE;
     g_assert_false(mft_passes_check(&m));
@@ -1262,7 +1262,7 @@ test_udev_rules_refused(void)
         /* rules that change something other than the matched device */
         "SYSCTL{kernel/core_pattern}=\"|/bin/evil\"\n",
         "ATTR{[block/sda]size}=\"1\"\n",
-        "ATTR{$env{X}}=\"1\"\n",
+        "ATTR{$kernel}=\"1\"\n",
         "ATTR{%k}=\"1\"\n",
 
         /* units that do not belong to the component */

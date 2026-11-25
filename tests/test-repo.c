@@ -159,6 +159,7 @@ test_root_index_refused(void)
     g_clear_error(&error);
     g_assert_null(mft_read_root_index(repo_key, valid, no_keys, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
+    g_clear_error(&error);
 
     /* the root index of a different repository */
     mft_assert_root_index_refused(other_id);
@@ -171,7 +172,8 @@ test_root_index_refused(void)
     }
 
     /* a root index that is too large is refused, even if it compresses well */
-    mft_assert_root_index_refused(huge);
+    g_assert_null(mft_read_root_index(repo_key, huge, repo_keys, &error));
+    mft_assert_error(error, MF_ERROR_INVALID_REPOSITORY, "is too large");
 }
 
 /**

@@ -40,140 +40,40 @@ test_zchunk_exe = executable('mf-test-zchunk',
 #
 # Unit tests
 #
-test('utils',
-    executable('test-utils',
-        ['test-utils.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_dep],
-    ),
-    suite: 'unit',
-)
+unit_tests = {
+    # tests of libmanifold
+    'utils': [manifold_dep],
+    'manifest': [manifold_dep, mft_test_utils_dep],
+    'exports': [manifold_dep, mft_test_utils_dep],
+    'bundle': [manifold_dep, mft_test_utils_dep, libzip_dep],
+    'signer': [manifold_dep, mft_test_utils_dep],
+    'remote': [manifold_dep, mft_test_utils_dep],
+    'repo': [manifold_dep, mft_test_utils_dep],
+    'zchunk': [manifold_dep, mft_test_utils_dep, zck_dep, zstd_dep],
+    'store-read': [manifold_dep, mft_test_utils_dep],
 
-test('manifest',
-    executable('test-manifest',
-        ['test-manifest.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_dep, mft_test_utils_dep],
-    ),
-    env: {'G_TEST_SRCDIR': meson.current_source_dir()},
-    suite: 'unit',
-)
+    # tests of manifoldd, the store test runs in the sandbox
+    'store': [manifoldd_static_dep, mft_test_utils_dep],
+    'image-reader': [manifoldd_static_dep, mft_test_utils_dep],
 
-test('bundle',
-    executable('test-bundle',
-        ['test-bundle.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [
-            manifold_dep,
-            mft_test_utils_dep,
-            libzip_dep,
-        ],
-    ),
-    suite: 'unit',
-)
+    # tests of manifold-rund, the compose and capture tests run in the sandbox
+    'compose': [manifold_rund_static_dep, mft_test_utils_dep],
+    'capture': [manifold_rund_static_dep, mft_test_utils_dep],
+    'host-bin': [manifold_rund_static_dep, mft_test_utils_dep],
+}
 
-test('signer',
-    executable('test-signer',
-        ['test-signer.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_dep, mft_test_utils_dep],
-    ),
-    suite: 'unit',
-)
-
-test('remote',
-    executable('test-remote',
-        ['test-remote.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_dep, mft_test_utils_dep],
-    ),
-    suite: 'unit',
-)
-
-test('repo',
-    executable('test-repo',
-        ['test-repo.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_dep, mft_test_utils_dep],
-    ),
-    env: {'G_TEST_SRCDIR': meson.current_source_dir()},
-    suite: 'unit',
-)
-
-test('zchunk',
-    executable('test-zchunk',
-        ['test-zchunk.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_dep, mft_test_utils_dep, zck_dep, zstd_dep],
-    ),
-    suite: 'unit',
-)
-
-test('store-read',
-    executable('test-store-read',
-        ['test-store-read.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_dep, mft_test_utils_dep],
-    ),
-    suite: 'unit',
-)
-
-test('exports',
-    executable('test-exports',
-        ['test-exports.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_dep, mft_test_utils_dep],
-    ),
-    suite: 'unit',
-)
-
-#
-# Unit tests that need a sandbox
-#
-test('store',
-    executable('test-store',
-        ['test-store.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifoldd_static_dep, mft_test_utils_dep],
-    ),
-    suite: 'unit',
-)
-
-test('image-reader',
-    executable('test-image-reader',
-        ['test-image-reader.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifoldd_static_dep, mft_test_utils_dep],
-    ),
-    suite: 'unit',
-)
-
-test('compose',
-    executable('test-run-compose',
-        ['test-compose.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_rund_static_dep, mft_test_utils_dep],
-    ),
-    suite: 'unit',
-)
-
-test('host-bin',
-    executable('test-host-bin',
-        ['test-host-bin.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_rund_static_dep, mft_test_utils_dep],
-    ),
-    suite: 'unit',
-)
-
-test('capture',
-    executable('test-capture',
-        ['test-capture.c'],
-        include_directories: [root_inc_dir],
-        dependencies: [manifold_rund_static_dep, mft_test_utils_dep],
-    ),
-    suite: 'unit',
-)
+foreach name, dependencies : unit_tests
+    test(name,
+        executable('test-' + name,
+            ['test-' + name + '.c'],
+            include_directories: [root_inc_dir],
+            dependencies: dependencies,
+        ),
+        # some tests read files from the samples directory
+        env: {'G_TEST_SRCDIR': meson.current_source_dir()},
+        suite: 'unit',
+    )
+endforeach
 
 #
 # End-to-end

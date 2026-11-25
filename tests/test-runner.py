@@ -184,7 +184,10 @@ class RunnerTest(unittest.TestCase):
             argv, capture_output=True, text=True, check=False, cwd=cwd, env=environment
         )
 
-    def assert_launched(self, result, cwd):
+    def assert_launched(self, *options, cwd, expected_cwd):
+        """Run the program of the application in the working directory `cwd`, with the
+        given options of the runner, and check what the program reports about itself."""
+        result = self.run_runner(*options, APP_ID, 'first', cwd=cwd)
         self.assertEqual(result.returncode, 0, result)
         lines = dict(line.split('=', 1) for line in result.stdout.splitlines())
         self.assertEqual(
@@ -193,7 +196,7 @@ class RunnerTest(unittest.TestCase):
                 'marker': 'in the tree',
                 'program': '/app/bin/probe',
                 'arg': 'first',
-                'cwd': cwd,
+                'cwd': expected_cwd,
                 'var': 'hello',
                 'unset': 'absent',
                 'uid': str(self.uid),
@@ -202,12 +205,12 @@ class RunnerTest(unittest.TestCase):
         )
 
     def test_launch(self):
-        self.assert_launched(self.run_runner(APP_ID, 'first', cwd='/usr/bin'), cwd='/usr/bin')
+        self.assert_launched(cwd='/usr/bin', expected_cwd='/usr/bin')
 
     def test_cwd_falls_back_to_home(self):
         """If the working directory does not exist in the tree, the program starts in the home
         directory."""
-        self.assert_launched(self.run_runner(APP_ID, 'first', cwd='/run'), cwd='/home')
+        self.assert_launched(cwd='/run', expected_cwd='/home')
 
     def test_other_command(self):
         """Any program in the tree can be run instead of the program of the component."""
@@ -216,10 +219,7 @@ class RunnerTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result)
         self.assertEqual(result.stdout, 'shell=sh\nin the tree')
-        self.assert_launched(
-            self.run_runner('--command=/app/bin/probe', APP_ID, 'first', cwd='/usr/bin'),
-            cwd='/usr/bin',
-        )
+        self.assert_launched('--command=/app/bin/probe', cwd='/usr/bin', expected_cwd='/usr/bin')
         result = self.run_runner('--command=no-such-program', APP_ID)
         self.assertEqual(result.returncode, 127, result)
         self.assertIn('no-such-program', result.stderr)
@@ -294,6 +294,7 @@ class RunnerTest(unittest.TestCase):
             search_path=search_path,
             runtime_dir=runtime_dir,
         )
+        self.assertEqual(result.returncode, 0, result)
         self.assertEqual(result.stdout, f'/app/bin:{search_path}\nabsent\n')
 
     def test_not_installed(self):

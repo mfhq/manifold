@@ -88,23 +88,23 @@ test_chunks(void)
 static MfManifest *
 mft_manifest_for(GBytes *image, const char *sha256)
 {
-    MfFileEntry entry;
+    g_autofree char *actual_sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, image);
+    g_autofree char *blake3 = mft_blake3_hex(g_bytes_get_data(image, NULL), g_bytes_get_size(image));
 
-    mf_file_entry_set_for_bytes(&entry, image);
     return mft_manifest_new(&(MftTestManifest){
         .component_id = TEST_CORE_ID,
         .kind = "core",
         .version = "1",
-        .image_size = entry.size,
-        .sha256 = sha256 != NULL ? sha256 : entry.sha256,
-        .blake3 = entry.blake3,
+        .image_size = g_bytes_get_size(image),
+        .sha256 = sha256 != NULL ? sha256 : actual_sha256,
+        .blake3 = blake3,
     });
 }
 
 /**
  * mft_open_with:
  *
- * Returns: a new file in @dir that holds @data, opened for reading and writing
+ * Returns: a file descriptor of a new file in @dir that holds @data, opened for reading and writing
  */
 static int
 mft_open_with(const char *dir, const char *name, GBytes *data)

@@ -11,6 +11,7 @@
 #include <inttypes.h>
 #include <unistd.h>
 #include <glib/gstdio.h>
+#include <blake3.h>
 #include <libglnx.h>
 #include <zstd.h>
 
@@ -83,7 +84,10 @@ mft_write_bytes(const char *path, GBytes *bytes)
 /**
  * mft_str_replace:
  *
- * Returns: (transfer full): @text with every @old replaced by @new. The text has to contain @old.
+ * Replace every occurrence of @old in @text with @new.
+ * The test fails if @text does not contain @old.
+ *
+ * Returns: (transfer full): the text with the replacements
  */
 char *
 mft_str_replace(const char *text, const char *old, const char *new)
@@ -225,11 +229,18 @@ mft_sign(const char *key_path, MfSignatureScope scope, GBytes *data)
 char *
 mft_blake3_hex(gconstpointer data, size_t size)
 {
-    g_autoptr(GBytes) bytes = g_bytes_new_static(data, size);
-    MfFileEntry entry;
+    GString *hex = g_string_new(NULL);
+    uint8_t hash[BLAKE3_OUT_LEN];
+    blake3_hasher hasher;
 
-    mf_file_entry_set_for_bytes(&entry, bytes);
-    return g_strdup(entry.blake3);
+    /* we hash with libblake3 directly, so the tests do not depend on the hashing code of the library */
+    blake3_hasher_init(&hasher);
+    blake3_hasher_update(&hasher, data, size);
+    blake3_hasher_finalize(&hasher, hash, sizeof(hash));
+    for (size_t i = 0; i < sizeof(hash); i++)
+        g_string_append_printf(hex, "%02x", hash[i]);
+
+    return g_string_free(hex, FALSE);
 }
 
 /**

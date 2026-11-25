@@ -8,6 +8,7 @@
 
 #include <manifold.h>
 
+#include "mf-component-private.h"
 #include "mf-utils-private.h"
 
 static void
@@ -166,6 +167,78 @@ test_text_is_valid(void)
     g_assert_false(mf_text_is_valid(not_utf8));
 }
 
+/**
+ * test_display_text_is_valid:
+ *
+ * A text that we print on a terminal is one line of printable characters.
+ */
+static void
+test_display_text_is_valid(void)
+{
+    g_autofree char *longest = g_strnfill(512, 'a');
+    g_autofree char *too_long = g_strnfill(513, 'a');
+
+    g_assert_true(mf_display_text_is_valid("Example applications"));
+    g_assert_true(mf_display_text_is_valid("Äpps für alle"));
+    g_assert_true(mf_display_text_is_valid(longest));
+    g_assert_false(mf_display_text_is_valid(""));
+    g_assert_false(mf_display_text_is_valid(too_long));
+    g_assert_false(mf_display_text_is_valid("two\nlines"));
+    g_assert_false(mf_display_text_is_valid("a\ttab"));
+    g_assert_false(mf_display_text_is_valid("\033[2J"));
+    g_assert_false(mf_display_text_is_valid("not \xff UTF-8"));
+    /* U+202E changes the text direction, and can make a text read differently */
+    g_assert_false(
+        mf_display_text_is_valid("a\xe2\x80\xae"
+                                 "b"));
+}
+
+/**
+ * test_component_kind_can_build_on:
+ *
+ * Test the layers that a component of a kind can build on.
+ */
+static void
+test_component_kind_can_build_on(void)
+{
+    const MfComponentKind core = MF_COMPONENT_KIND_CORE;
+    const MfComponentKind platform = MF_COMPONENT_KIND_PLATFORM;
+    const MfComponentKind kit = MF_COMPONENT_KIND_KIT;
+    const MfComponentKind app = MF_COMPONENT_KIND_APP;
+    const MfComponentKind plugin = MF_COMPONENT_KIND_PLUGIN;
+
+    /* a component builds on a lower layer */
+    g_assert_true(mf_component_kind_can_build_on(platform, FALSE, core, FALSE));
+    g_assert_true(mf_component_kind_can_build_on(kit, FALSE, core, FALSE));
+    g_assert_true(mf_component_kind_can_build_on(kit, FALSE, platform, FALSE));
+    g_assert_true(mf_component_kind_can_build_on(app, FALSE, core, FALSE));
+    g_assert_true(mf_component_kind_can_build_on(app, FALSE, platform, FALSE));
+    g_assert_true(mf_component_kind_can_build_on(app, FALSE, kit, FALSE));
+    g_assert_true(mf_component_kind_can_build_on(plugin, FALSE, app, FALSE));
+    g_assert_false(mf_component_kind_can_build_on(platform, FALSE, kit, FALSE));
+    g_assert_false(mf_component_kind_can_build_on(kit, FALSE, app, FALSE));
+    g_assert_false(mf_component_kind_can_build_on(plugin, FALSE, kit, FALSE));
+    g_assert_false(mf_component_kind_can_build_on(core, FALSE, platform, FALSE));
+
+    /* only an SDK builds on a component of its own kind, which is not an SDK itself */
+    g_assert_false(mf_component_kind_can_build_on(core, FALSE, core, FALSE));
+    g_assert_false(mf_component_kind_can_build_on(kit, FALSE, kit, FALSE));
+    g_assert_true(mf_component_kind_can_build_on(core, TRUE, core, FALSE));
+    g_assert_true(mf_component_kind_can_build_on(kit, TRUE, kit, FALSE));
+    g_assert_false(mf_component_kind_can_build_on(kit, TRUE, kit, TRUE));
+
+    /* the SDK of a runtime only extends its own layer */
+    g_assert_false(mf_component_kind_can_build_on(kit, TRUE, core, FALSE));
+    g_assert_false(mf_component_kind_can_build_on(platform, TRUE, core, FALSE));
+
+    /* an application and its SDK can build on an SDK, like a development tool does */
+    g_assert_true(mf_component_kind_can_build_on(app, FALSE, core, TRUE));
+    g_assert_true(mf_component_kind_can_build_on(app, TRUE, kit, TRUE));
+
+    g_assert_false(mf_component_kind_can_build_on(MF_COMPONENT_KIND_UNKNOWN, FALSE, core, FALSE));
+    g_assert_false(mf_component_kind_can_build_on(app, FALSE, MF_COMPONENT_KIND_UNKNOWN, FALSE));
+}
+
 static void
 test_architecture_is_valid(void)
 {
@@ -230,6 +303,8 @@ main(int argc, char **argv)
     g_test_add_func("/utils/component-id-is-valid", test_component_id_is_valid);
     g_test_add_func("/utils/program-name-is-valid", test_program_name_is_valid);
     g_test_add_func("/utils/text-is-valid", test_text_is_valid);
+    g_test_add_func("/utils/display-text-is-valid", test_display_text_is_valid);
+    g_test_add_func("/utils/component-kind-can-build-on", test_component_kind_can_build_on);
     g_test_add_func("/utils/architecture-is-valid", test_architecture_is_valid);
     g_test_add_func("/utils/signing-key-name-is-valid", test_signing_key_name_is_valid);
     g_test_add_func("/utils/component-kind-strings", test_component_kind_strings);
