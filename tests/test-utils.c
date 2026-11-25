@@ -121,6 +121,7 @@ test_program_name_is_valid(void)
     g_assert_false(mf_program_name_is_valid("a b"));
     g_assert_false(mf_program_name_is_valid("a\nb"));
     g_assert_false(mf_program_name_is_valid("a'b"));
+    g_assert_false(mf_program_name_is_valid("a;b"));
     g_assert_false(mf_program_name_is_valid("$(id)"));
     g_assert_false(mf_program_name_is_valid(too_long));
 }
@@ -141,6 +142,28 @@ test_signing_key_name_is_valid(void)
     g_assert_false(mf_signing_key_name_is_valid("a b"));
     g_assert_false(mf_signing_key_name_is_valid("SHA256:abc"));
     g_assert_false(mf_signing_key_name_is_valid("key.pub"));
+}
+
+static void
+test_text_is_valid(void)
+{
+    const size_t limit = 1024 * 1024;
+    g_autofree char *large = g_strnfill(limit + 1, 'x');
+    g_autoptr(GBytes) empty = g_bytes_new_static("", 0);
+    g_autoptr(GBytes) text = g_bytes_new_static("Name=Äpp\n", 10);
+    g_autoptr(GBytes) largest = g_bytes_new_static(large, limit);
+    g_autoptr(GBytes) too_large = g_bytes_new_static(large, limit + 1);
+    g_autoptr(GBytes) with_nul = g_bytes_new_static("a\n\0b\n", 5);
+    g_autoptr(GBytes) with_cr = g_bytes_new_static("a\rb\n", 4);
+    g_autoptr(GBytes) not_utf8 = g_bytes_new_static("a\xff\n", 3);
+
+    g_assert_true(mf_text_is_valid(empty));
+    g_assert_true(mf_text_is_valid(text));
+    g_assert_true(mf_text_is_valid(largest));
+    g_assert_false(mf_text_is_valid(too_large));
+    g_assert_false(mf_text_is_valid(with_nul));
+    g_assert_false(mf_text_is_valid(with_cr));
+    g_assert_false(mf_text_is_valid(not_utf8));
 }
 
 static void
@@ -206,6 +229,7 @@ main(int argc, char **argv)
     g_test_add_func("/utils/relative-path-is-valid", test_relative_path_is_valid);
     g_test_add_func("/utils/component-id-is-valid", test_component_id_is_valid);
     g_test_add_func("/utils/program-name-is-valid", test_program_name_is_valid);
+    g_test_add_func("/utils/text-is-valid", test_text_is_valid);
     g_test_add_func("/utils/architecture-is-valid", test_architecture_is_valid);
     g_test_add_func("/utils/signing-key-name-is-valid", test_signing_key_name_is_valid);
     g_test_add_func("/utils/component-kind-strings", test_component_kind_strings);

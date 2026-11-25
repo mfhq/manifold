@@ -76,6 +76,7 @@ gboolean mf_mime_type_is_valid(const char *type);
 gboolean mf_mime_glob_is_valid(const char *pattern);
 gboolean mf_mime_weight_is_valid(const char *weight);
 gboolean mf_mime_xml_name_is_valid(const char *name);
+MF_INTERNAL_VISIBLE
 gboolean mf_text_is_valid(GBytes *text);
 MF_INTERNAL_VISIBLE
 gboolean mf_display_text_is_valid(const char *text);
