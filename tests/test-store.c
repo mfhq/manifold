@@ -60,15 +60,12 @@ mft_catalog_of(const char *component_id)
 static void
 mft_install(const MftTestManifest *manifest, const char *base_version_dir, MfInstallMode mode)
 {
-    char *json = mft_manifest_json(manifest);
-    g_autoptr(GBytes) bytes = g_bytes_new_take(json, strlen(json));
     g_autoptr(GBytes) catalog = mft_catalog_of(manifest->component_id);
     g_autoptr(GHashTable) icons = g_hash_table_new(g_str_hash, g_str_equal);
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfManifest) parsed = mf_manifest_new_from_bytes(bytes, &error);
+    g_autoptr(MfManifest) parsed = mft_manifest_new(manifest);
     g_autoptr(MfBaseLink) base = NULL;
 
-    g_assert_no_error(error);
     if (manifest->base_id != NULL)
         base = mf_base_link_new(MF_STORE_RUNTIMES_SUBDIR, manifest->base_id, base_version_dir);
     g_assert_true(mfd_store_writer_install_component(writer,
@@ -901,17 +898,12 @@ test_writes_stay_below_their_directory(void)
 static MfManifest *
 mft_app_manifest_new(const char *version, const char *integration)
 {
-    g_autofree char *json = mft_manifest_json(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                                                 .kind = "app",
-                                                                 .version = version,
-                                                                 .base_id = TEST_KIT_ID,
-                                                                 .base_kind = "kit",
-                                                                 .integration = integration});
-    g_autoptr(GError) error = NULL;
-    MfManifest *manifest = mf_manifest_new_from_data(json, -1, &error);
-
-    g_assert_no_error(error);
-    return manifest;
+    return mft_manifest_new(&(MftTestManifest){.component_id = TEST_APP_ID,
+                                               .kind = "app",
+                                               .version = version,
+                                               .base_id = TEST_KIT_ID,
+                                               .base_kind = "kit",
+                                               .integration = integration});
 }
 
 static void
@@ -927,12 +919,6 @@ test_update_gains_privileges(Fixture *f, gconstpointer user_data)
     g_autofree char *with_rule_hash = mft_fake_hash("app with rule");
     g_autoptr(MfdInstallSet) set = mfd_install_set_new();
     g_autoptr(GError) error = NULL;
-    g_autofree char *other_json = mft_manifest_json(&(MftTestManifest){.component_id = "org.example.other",
-                                                                       .kind = "app",
-                                                                       .version = "1.0",
-                                                                       .base_id = TEST_KIT_ID,
-                                                                       .base_kind = "kit",
-                                                                       .integration = rule});
 
     mft_install_usual(f);
     g_assert_true(mf_store_load(store, &error));
@@ -965,8 +951,12 @@ test_update_gains_privileges(Fixture *f, gconstpointer user_data)
     g_assert_false(mfd_manager_install_set_gains_privileges(manager, set));
 
     /* a privileged component that is not installed at all needs approval */
-    other = mf_manifest_new_from_data(other_json, -1, &error);
-    g_assert_no_error(error);
+    other = mft_manifest_new(&(MftTestManifest){.component_id = "org.example.other",
+                                                .kind = "app",
+                                                .version = "1.0",
+                                                .base_id = TEST_KIT_ID,
+                                                .base_kind = "kit",
+                                                .integration = rule});
     mfd_install_set_add(set, other, "other", "example-main");
     g_assert_true(mfd_manager_install_set_gains_privileges(manager, set));
 }

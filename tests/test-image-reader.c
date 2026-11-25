@@ -8,7 +8,6 @@
 
 #include <string.h>
 #include <sys/stat.h>
-#include <blake3.h>
 #include <manifold.h>
 
 #include "mf-store-private.h"
@@ -133,38 +132,18 @@ mft_make_image_store(void)
 }
 
 /**
- * mft_blake3:
- *
- * Returns: (transfer full): the hex encoded hash of @size bytes of @data
- */
-static char *
-mft_blake3(const void *data, size_t size)
-{
-    uint8_t hash[BLAKE3_OUT_LEN];
-    blake3_hasher hasher;
-    GString *hex = g_string_new(NULL);
-
-    blake3_hasher_init(&hasher);
-    blake3_hasher_update(&hasher, data, size);
-    blake3_hasher_finalize(&hasher, hash, sizeof(hash));
-    for (size_t i = 0; i < sizeof(hash); i++)
-        g_string_append_printf(hex, "%02x", hash[i]);
-
-    return g_string_free(hex, FALSE);
-}
-
-/**
- * mft_manifest_new:
+ * mft_manifest_new_for_entries:
  * @entries: the entries of the desktop-entry list, as JSON
  * @verity_hash: the verity hash of the image that the manifest describes
  *
  * Returns: (transfer full): a manifest with the files of @entries
  */
 static MfManifest *
-mft_manifest_new(const char *entries, const char *verity_hash)
+mft_manifest_new_for_entries(const char *entries, const char *verity_hash)
 {
     g_autofree char *section = g_strdup_printf("{\"desktop-entry\": [%s]}", entries);
-    MftTestManifest m = {
+
+    return mft_manifest_new(&(MftTestManifest){
         .component_id = "com.example.app",
         .kind = "app",
         .version = "1.0",
@@ -173,13 +152,7 @@ mft_manifest_new(const char *entries, const char *verity_hash)
         .integration = section,
         .verity_root_hash = verity_hash,
         .data_offset = DATA_OFFSET,
-    };
-    g_autofree char *json = mft_manifest_json(&m);
-    g_autoptr(GError) error = NULL;
-    MfManifest *manifest = mf_manifest_new_from_data(json, -1, &error);
-
-    g_assert_no_error(error);
-    return manifest;
+    });
 }
 
 /**
@@ -193,7 +166,7 @@ static char *
 mft_entry_new(const char *path, const void *data, size_t size)
 {
     g_autofree char *sha256 = g_compute_checksum_for_data(G_CHECKSUM_SHA256, data, size);
-    g_autofree char *blake3 = mft_blake3(data, size);
+    g_autofree char *blake3 = mft_blake3_hex(data, size);
 
     return g_strdup_printf("{\"path\": \"%s\", \"sha256\": \"%s\", \"blake3\": \"%s\"}",
                            path,
@@ -210,7 +183,7 @@ mft_entry_new(const char *path, const void *data, size_t size)
 static GHashTable *
 mft_read(const char *entries, GError **error)
 {
-    g_autoptr(MfManifest) manifest = mft_manifest_new(entries, VERITY_HASH);
+    g_autoptr(MfManifest) manifest = mft_manifest_new_for_entries(entries, VERITY_HASH);
 
     return mfd_image_read_integration(store, manifest, error);
 }
@@ -293,7 +266,7 @@ test_read_nothing(void)
     /* a manifest without files needs neither dump.erofs nor an image in the store */
     {
         g_autofree char *other_image = mft_fake_hash("other image");
-        g_autoptr(MfManifest) manifest = mft_manifest_new("", other_image);
+        g_autoptr(MfManifest) manifest = mft_manifest_new_for_entries("", other_image);
 
         contents = mfd_image_read_integration(store, manifest, &error);
         g_assert_no_error(error);
@@ -306,7 +279,7 @@ test_read_not_in_store(void)
 {
     g_autofree char *entry = mft_entry_new(MAIN_ENTRY, MAIN_CONTENT, strlen(MAIN_CONTENT));
     g_autofree char *other_image = mft_fake_hash("other image");
-    g_autoptr(MfManifest) manifest = mft_manifest_new(entry, other_image);
+    g_autoptr(MfManifest) manifest = mft_manifest_new_for_entries(entry, other_image);
     g_autoptr(GHashTable) contents = NULL;
     g_autoptr(GError) error = NULL;
 

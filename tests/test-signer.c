@@ -65,12 +65,6 @@ mft_sign_and_check(Fixture *fixture, MfSigner *signer)
 static void
 mft_setup(Fixture *fixture, gconstpointer user_data)
 {
-    g_autofree char *ssh_keygen = g_find_program_in_path("ssh-keygen");
-
-    if (ssh_keygen == NULL) {
-        g_test_skip("ssh-keygen is not installed");
-        return;
-    }
     fixture->dir = mft_make_tmp_dir("signer");
     /* the tests must never use the keys of the user who runs them */
     g_unsetenv("SSH_AUTH_SOCK");
@@ -84,8 +78,7 @@ mft_teardown(Fixture *fixture, gconstpointer user_data)
 
     g_unsetenv("SSH_AUTH_SOCK");
     g_unsetenv(MF_SIGNING_KEY_ENV);
-    if (fixture->dir != NULL)
-        mft_rm_rf(fixture->dir);
+    mft_rm_rf(fixture->dir);
     if (g_file_test(key_dir, G_FILE_TEST_EXISTS))
         mft_rm_rf(key_dir);
     g_free(fixture->dir);
@@ -103,8 +96,6 @@ test_key_file(Fixture *fixture, gconstpointer user_data)
     g_autoptr(GBytes) signature = NULL;
     g_autoptr(GError) error = NULL;
 
-    if (fixture->dir == NULL)
-        return;
     key = mft_make_key(fixture->dir, "key");
     public_key_file = g_strconcat(key, ".pub", NULL);
     public_key = g_strstrip(mft_read_file(public_key_file));
@@ -128,8 +119,6 @@ test_key_data(Fixture *fixture, gconstpointer user_data)
     g_autofree char *private_key = NULL;
     g_autoptr(MfSigner) signer = NULL;
 
-    if (fixture->dir == NULL)
-        return;
     key = mft_make_key(fixture->dir, "key");
     /* environment variables often lose the final newline */
     private_key = g_strchomp(mft_read_file(key));
@@ -151,8 +140,6 @@ test_bad_key(Fixture *fixture, gconstpointer user_data)
     g_autoptr(GBytes) signature = NULL;
     g_autoptr(GError) error = NULL;
 
-    if (fixture->dir == NULL)
-        return;
     key = g_build_filename(fixture->dir, "key", NULL);
     g_assert_true(g_file_set_contents_full(key, "not a key\n", -1, G_FILE_SET_CONTENTS_NONE, 0600, NULL));
 
@@ -181,8 +168,6 @@ test_key_selection(Fixture *fixture, gconstpointer user_data)
     g_autoptr(GError) error = NULL;
     MfSigner *signer;
 
-    if (fixture->dir == NULL)
-        return;
 
     /* nothing is selected yet */
     signer = mf_signer_new_default(&error);
@@ -258,8 +243,6 @@ test_agent(Fixture *fixture, gconstpointer user_data)
     g_autoptr(MfSigner) signer = NULL;
     g_autoptr(GError) error = NULL;
 
-    if (fixture->dir == NULL)
-        return;
     ssh_agent = g_find_program_in_path("ssh-agent");
     if (ssh_agent == NULL) {
         g_test_skip("ssh-agent is not installed");
@@ -334,8 +317,6 @@ test_verify(Fixture *fixture, gconstpointer user_data)
     g_autoptr(GBytes) repo_signature = NULL;
     g_autoptr(GError) error = NULL;
 
-    if (fixture->dir == NULL)
-        return;
     key = mft_make_key(fixture->dir, "key");
     other_key = mft_make_key(fixture->dir, "other");
     signer = mf_signer_new_for_key_file(key);
@@ -424,8 +405,6 @@ test_trusted_key_dirs(Fixture *fixture, gconstpointer user_data)
     g_autoptr(GBytes) other_signature = NULL;
     g_autoptr(GError) error = NULL;
 
-    if (fixture->dir == NULL)
-        return;
     key = mft_make_key(fixture->dir, "key");
     other_key = mft_make_key(fixture->dir, "other");
     signer = mf_signer_new_for_key_file(key);

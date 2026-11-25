@@ -7,7 +7,6 @@
 #include "config.h"
 
 #include <glib/gstdio.h>
-#include <zstd.h>
 #include <manifold.h>
 
 #include "mf-remote-private.h"
@@ -79,12 +78,9 @@ static void
 mft_check_trusted(MfTrustedKeys *keys, const char *key_path, gboolean trusted)
 {
     g_autoptr(GBytes) data = g_bytes_new_static("index\n", 6);
-    g_autoptr(MfSigner) signer = mf_signer_new_for_key_file(key_path);
-    g_autoptr(GBytes) signature = NULL;
+    g_autoptr(GBytes) signature = mft_sign(key_path, MF_SIGNATURE_SCOPE_REPO, data);
     g_autoptr(GError) error = NULL;
 
-    signature = mf_signer_sign(signer, MF_SIGNATURE_SCOPE_REPO, data, &error);
-    g_assert_no_error(error);
     g_assert_cmpint(mf_trusted_keys_verify(keys, MF_SIGNATURE_SCOPE_REPO, data, signature, NULL, &error),
                     ==,
                     trusted);
@@ -110,12 +106,6 @@ test_vendor_and_admin(Fixture *f, gconstpointer user_data)
     g_autofree char *masked_key = NULL;
     g_autofree char *admin_key = NULL;
     g_autofree char *link = NULL;
-    g_autofree char *ssh_keygen = g_find_program_in_path("ssh-keygen");
-
-    if (ssh_keygen == NULL) {
-        g_test_skip("ssh-keygen is not installed");
-        return;
-    }
 
     /* without Channels, the remote has the main channel, and the URL loses its trailing slash */
     mft_write_remote(f->vendor_dir, "example", "[Remote]\nURL=https://example.org/repo/\n");
@@ -167,9 +157,7 @@ test_state(Fixture *f, gconstpointer user_data)
     g_autofree char *state_dir = g_build_filename(f->dir, "var-lib", NULL);
     g_autofree char *remote_state = g_build_filename(state_dir, "example", NULL);
     g_autofree char *index_path = g_build_filename(remote_state, "repo-index.json.zst", NULL);
-    size_t bound = ZSTD_compressBound(strlen(json));
-    g_autofree uint8_t *compressed = g_malloc(bound);
-    size_t size = ZSTD_compress(compressed, bound, json, strlen(json), 3);
+    g_autoptr(GBytes) index = mft_zstd(json);
     g_autoptr(MfRemote) remote = NULL;
     g_autoptr(GError) error = NULL;
     g_autofree char *valid_until = NULL;
@@ -183,9 +171,8 @@ test_state(Fixture *f, gconstpointer user_data)
     g_assert_null(mf_remote_get_info(remote));
     g_clear_object(&remote);
 
-    g_assert_false(ZSTD_isError(size));
     mft_make_dirs(remote_state);
-    g_assert_true(g_file_set_contents(index_path, (const char *) compressed, (ssize_t) size, NULL));
+    mft_write_bytes(index_path, index);
     remote = mf_remote_new_for_dirs(f->vendor_dir, f->admin_dir, state_dir, "example", &error);
     g_assert_no_error(error);
     info = mf_remote_get_info(remote);

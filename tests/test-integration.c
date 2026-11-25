@@ -36,13 +36,13 @@ mft_app_manifest(const char *integration)
 }
 
 /**
- * mft_manifest_new:
+ * mft_app_manifest_new:
  * @integration: (nullable): the integration section as JSON
  *
  * Returns: (transfer full) (nullable): the parsed manifest of an application
  */
 static MfManifest *
-mft_manifest_new(const char *integration, GError **error)
+mft_app_manifest_new(const char *integration, GError **error)
 {
     MftTestManifest m = mft_app_manifest(integration);
     g_autofree char *json = mft_manifest_json(&m);
@@ -89,7 +89,7 @@ static void
 test_privileged(void)
 {
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfManifest) rule = mft_manifest_new(
+    g_autoptr(MfManifest) rule = mft_app_manifest_new(
         "{\"udev-rule\": [{\"path\": \"/app/lib/udev/rules.d/60-com.example.app.rules\", " HASHES "}]}",
         &error);
     g_autoptr(MfManifest) unit = NULL;
@@ -102,7 +102,7 @@ test_privileged(void)
     g_assert_no_error(error);
 
     /* a user unit does not make a component privileged, as it only runs as a user */
-    unit = mft_manifest_new(
+    unit = mft_app_manifest_new(
         "{\"systemd-unit-user\": [{\"path\": \"/app/lib/systemd/user/com.example.app.service\", " HASHES
         "}]}",
         &error);
@@ -133,7 +133,7 @@ test_diff_privileged(void)
     g_autoptr(MfManifest) previous = NULL;
     g_autoptr(MfManifest) current = NULL;
 
-    previous = mft_manifest_new(
+    previous = mft_app_manifest_new(
         "{\"udev-rule\": [{\"path\": \"/app/lib/udev/rules.d/60-com.example.app.rules\", " HASHES
         "}], "
         "\"systemd-unit-system\": [{\"path\": \"/app/lib/systemd/system/com.example.app.service\", " HASHES
@@ -141,7 +141,7 @@ test_diff_privileged(void)
         "\"systemd-unit-user\": [{\"path\": \"/app/lib/systemd/user/com.example.app.service\", " HASHES "}]}",
         &error);
     g_assert_no_error(error);
-    current = mft_manifest_new(
+    current = mft_app_manifest_new(
         "{\"udev-rule\": [{\"path\": \"/app/lib/udev/rules.d/60-com.example.app.rules\", " HASHES
         "}], "
         "\"systemd-unit-system\": [{\"path\": \"/app/lib/systemd/system/com.example.app.timer\", " HASHES
@@ -179,7 +179,7 @@ static void
 test_export_paths(void)
 {
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfManifest) manifest = mft_manifest_new(
+    g_autoptr(MfManifest) manifest = mft_app_manifest_new(
         "{\"desktop-entry\": [{\"path\": \"/app/share/applications/com.example.app.desktop\", " HASHES
         "},"
         " {\"path\": \"/app/share/applications/../../../etc/com.example.app.desktop\", " HASHES
@@ -214,7 +214,7 @@ static void
 test_section(void)
 {
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfManifest) manifest = mft_manifest_new(
+    g_autoptr(MfManifest) manifest = mft_app_manifest_new(
         "{\"desktop-entry\": [{\"path\": \"/app/share/applications/com.example.app.desktop\", " HASHES
         "}],"
         " \"systemd-unit-user\": [{\"path\": \"/app/lib/systemd/user/com.example.app.service\", " HASHES
@@ -262,9 +262,9 @@ static void
 test_no_section(void)
 {
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfManifest) without = mft_manifest_new(NULL, &error);
-    g_autoptr(MfManifest) null = mft_manifest_new("null", &error);
-    g_autoptr(MfManifest) empty = mft_manifest_new("{}", &error);
+    g_autoptr(MfManifest) without = mft_app_manifest_new(NULL, &error);
+    g_autoptr(MfManifest) null = mft_app_manifest_new("null", &error);
+    g_autoptr(MfManifest) empty = mft_app_manifest_new("{}", &error);
 
     g_assert_no_error(error);
     g_assert_null(mf_manifest_get_integration(without));
@@ -294,7 +294,7 @@ test_malformed_section(void)
 
     for (size_t i = 0; i < G_N_ELEMENTS(sections); i++) {
         g_autoptr(GError) error = NULL;
-        g_autoptr(MfManifest) manifest = mft_manifest_new(sections[i], &error);
+        g_autoptr(MfManifest) manifest = mft_app_manifest_new(sections[i], &error);
 
         g_test_message("%s", sections[i]);
         g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
@@ -475,7 +475,7 @@ test_render_aliases(void)
         g_autofree char *section = g_strdup_printf("{\"alias\": [{\"name\": \"tool\", \"command\": \"%s\"}]}",
                                                    aliases[i].command);
         g_autoptr(GError) error = NULL;
-        g_autoptr(MfManifest) manifest = mft_manifest_new(section, &error);
+        g_autoptr(MfManifest) manifest = mft_app_manifest_new(section, &error);
         g_autoptr(GBytes) script = NULL;
         g_autofree char *text = NULL;
         gsize size;
@@ -603,7 +603,7 @@ test_check_messages(void)
     /* a manifest must not be able to control the terminal of the admin */
     for (size_t i = 0; i < G_N_ELEMENTS(sections); i++) {
         g_autoptr(GError) error = NULL;
-        g_autoptr(MfManifest) manifest = mft_manifest_new(sections[i], &error);
+        g_autoptr(MfManifest) manifest = mft_app_manifest_new(sections[i], &error);
 
         g_assert_no_error(error);
         g_assert_false(mf_manifest_check_integration(manifest, &error));
@@ -623,7 +623,7 @@ test_permissions(void)
     g_autofree char *implied_json = NULL;
     g_autofree char *core_json = NULL;
     g_autofree char *malformed_json = NULL;
-    g_autoptr(MfManifest) plain = mft_manifest_new(NULL, NULL);
+    g_autoptr(MfManifest) plain = mft_app_manifest_new(NULL, NULL);
     g_autoptr(MfManifest) manifest = NULL;
     g_autoptr(MfManifest) unknown = NULL;
     g_autoptr(MfManifest) implied = NULL;
@@ -704,7 +704,7 @@ mft_render(const char *kind, const char *path, GBytes *content, GError **error)
 {
     g_autofree char *section = g_strdup_printf("{\"%s\": [{\"path\": \"%s\", " HASHES "}]}", kind, path);
     g_autoptr(GError) local_error = NULL;
-    g_autoptr(MfManifest) manifest = mft_manifest_new(section, &local_error);
+    g_autoptr(MfManifest) manifest = mft_app_manifest_new(section, &local_error);
     MfIntegrationFile *file;
 
     g_assert_no_error(local_error);

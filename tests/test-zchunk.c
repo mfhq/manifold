@@ -10,11 +10,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <glib/gstdio.h>
-#include <blake3.h>
 #include <zck.h>
 #include <zstd.h>
 #include <manifold.h>
 
+#include "mf-utils-private.h"
 #include "mf-zchunk-private.h"
 #include "mft-utils.h"
 
@@ -83,36 +83,17 @@ test_chunks(void)
 static MfManifest *
 mft_manifest_for(GBytes *image, const char *sha256)
 {
-    g_autofree char *actual_sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, image);
-    g_autofree char *blake3 = NULL;
-    g_autofree char *json = NULL;
-    g_autoptr(GBytes) json_bytes = NULL;
-    g_autoptr(GError) error = NULL;
-    uint8_t hash[BLAKE3_OUT_LEN];
-    blake3_hasher hasher;
-    MfManifest *manifest;
-    size_t json_size;
+    MfFileEntry entry;
 
-    blake3_hasher_init(&hasher);
-    blake3_hasher_update(&hasher, g_bytes_get_data(image, NULL), g_bytes_get_size(image));
-    blake3_hasher_finalize(&hasher, hash, sizeof(hash));
-    blake3 = g_malloc(2 * BLAKE3_OUT_LEN + 1);
-    for (size_t i = 0; i < BLAKE3_OUT_LEN; i++)
-        g_snprintf(blake3 + 2 * i, 3, "%02x", hash[i]);
-
-    json = mft_manifest_json(&(MftTestManifest){
+    mf_file_entry_set_for_bytes(&entry, image);
+    return mft_manifest_new(&(MftTestManifest){
         .component_id = TEST_CORE_ID,
         .kind = "core",
         .version = "1",
-        .image_size = g_bytes_get_size(image),
-        .sha256 = sha256 != NULL ? sha256 : actual_sha256,
-        .blake3 = blake3,
+        .image_size = entry.size,
+        .sha256 = sha256 != NULL ? sha256 : entry.sha256,
+        .blake3 = entry.blake3,
     });
-    json_size = strlen(json);
-    json_bytes = g_bytes_new_take(g_steal_pointer(&json), json_size);
-    manifest = mf_manifest_new_from_bytes(json_bytes, &error);
-    g_assert_no_error(error);
-    return manifest;
 }
 
 static void
@@ -136,8 +117,7 @@ test_write_image(void)
     g_autofd int image_fd = -1;
     g_autofd int zck_fd = -1;
 
-    g_assert_true(
-        g_file_set_contents(image_path, g_bytes_get_data(image, NULL), g_bytes_get_size(image), NULL));
+    mft_write_bytes(image_path, image);
     image_fd = open(image_path, O_RDONLY | O_CLOEXEC);
     g_assert_cmpint(image_fd, >=, 0);
     zck_fd = open(zck_path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
@@ -190,7 +170,7 @@ mft_open_with(const char *dir, const char *name, GBytes *data)
     g_autofree char *path = g_build_filename(dir, name, NULL);
     int fd;
 
-    g_assert_true(g_file_set_contents(path, g_bytes_get_data(data, NULL), g_bytes_get_size(data), NULL));
+    mft_write_bytes(path, data);
     fd = open(path, O_RDWR | O_CLOEXEC);
     g_assert_cmpint(fd, >=, 0);
     return fd;

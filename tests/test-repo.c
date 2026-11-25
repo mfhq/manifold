@@ -7,7 +7,6 @@
 #include "config.h"
 
 #include <inttypes.h>
-#include <zstd.h>
 #include <manifold.h>
 
 #include "mf-repo-private.h"
@@ -25,15 +24,12 @@ typedef struct {
 static void
 mft_setup(Fixture *f, gconstpointer user_data)
 {
-    g_autofree char *ssh_keygen = g_find_program_in_path("ssh-keygen");
     g_autofree char *public_key = NULL;
     g_autofree char *public_key_path = NULL;
     g_autoptr(GError) error = NULL;
 
     f->dir = mft_make_tmp_dir("repo");
     f->keys = mf_trusted_keys_new();
-    if (ssh_keygen == NULL)
-        return;
     f->key = mft_make_key(f->dir, "repo");
     f->other_key = mft_make_key(f->dir, "other");
     public_key_path = g_strconcat(f->key, ".pub", NULL);
@@ -53,22 +49,6 @@ mft_teardown(Fixture *f, gconstpointer user_data)
 }
 
 /**
- * mft_zstd:
- *
- * Returns: (transfer full): @text, compressed with zstd
- */
-static GBytes *
-mft_zstd(const char *text)
-{
-    size_t bound = ZSTD_compressBound(strlen(text));
-    g_autofree uint8_t *out = g_malloc(bound);
-    size_t size = ZSTD_compress(out, bound, text, strlen(text), 3);
-
-    g_assert_false(ZSTD_isError(size));
-    return g_bytes_new(out, size);
-}
-
-/**
  * mft_entry_json:
  *
  * Returns: (transfer full): the file entry of @data as JSON members
@@ -83,22 +63,6 @@ mft_entry_json(GBytes *data)
                            entry.size,
                            entry.sha256,
                            entry.blake3);
-}
-
-/**
- * mft_sign:
- *
- * Returns: (transfer full): a repository signature over @data, made with the key at @key
- */
-static GBytes *
-mft_sign(const char *key, GBytes *data)
-{
-    g_autoptr(MfSigner) signer = mf_signer_new_for_key_file(key);
-    g_autoptr(GError) error = NULL;
-    GBytes *signature = mf_signer_sign(signer, MF_SIGNATURE_SCOPE_REPO, data, &error);
-
-    g_assert_no_error(error);
-    return signature;
 }
 
 /**
@@ -154,7 +118,7 @@ static MfRepoRootIndex *
 mft_read_root_index(Fixture *f, const char *key, const char *json, GError **error)
 {
     g_autoptr(GBytes) data = mft_zstd(json);
-    g_autoptr(GBytes) signature = mft_sign(key, data);
+    g_autoptr(GBytes) signature = mft_sign(key, MF_SIGNATURE_SCOPE_REPO, data);
 
     return mf_repo_root_index_new_from_signed(data, signature, f->keys, "example", error);
 }
@@ -173,11 +137,6 @@ test_root_index(Fixture *f, gconstpointer user_data)
     g_autofree char *json = NULL;
     MfRepoChannel *channel;
     MfRepoArchitecture *arch;
-
-    if (f->key == NULL) {
-        g_test_skip("ssh-keygen is not installed");
-        return;
-    }
 
     channel_json = mft_channel_json("main", "https://example.org/images");
     json = mft_root_index_json("example", "2027-05-04T14:57:58Z", channel_json);
@@ -224,10 +183,6 @@ test_root_index_refused(Fixture *f, gconstpointer user_data)
         {"",                                                                            "tomorrow"            },
     };
 
-    if (f->key == NULL) {
-        g_test_skip("ssh-keygen is not installed");
-        return;
-    }
     channel_json = mft_channel_json("main", NULL);
     valid = mft_root_index_json("example", "2027-05-04T14:57:58Z", channel_json);
 
@@ -243,7 +198,7 @@ test_root_index_refused(Fixture *f, gconstpointer user_data)
         g_autoptr(GError) error = NULL;
         g_autoptr(MfTrustedKeys) none = mf_trusted_keys_new();
         g_autoptr(GBytes) data = mft_zstd(valid);
-        g_autoptr(GBytes) signature = mft_sign(f->key, data);
+        g_autoptr(GBytes) signature = mft_sign(f->key, MF_SIGNATURE_SCOPE_REPO, data);
         g_autoptr(MfRepoRootIndex)
             index = mf_repo_root_index_new_from_signed(data, signature, none, "example", &error);
 

@@ -12,8 +12,11 @@
 #include <unistd.h>
 #include <glib/gstdio.h>
 #include <libglnx.h>
+#include <zstd.h>
 
+#include "mf-manifest-private.h"
 #include "mf-store-private.h"
+#include "mf-utils-private.h"
 
 /**
  * mft_fake_hash:
@@ -58,6 +61,12 @@ mft_read_file(const char *path)
 
     g_assert_true(g_file_get_contents(path, &content, NULL, NULL));
     return content;
+}
+
+void
+mft_write_bytes(const char *path, GBytes *bytes)
+{
+    g_assert_true(g_file_set_contents(path, g_bytes_get_data(bytes, NULL), g_bytes_get_size(bytes), NULL));
 }
 
 void
@@ -146,10 +155,58 @@ mft_check_signature(const char *dir, const char *sig_namespace, GBytes *data, GB
     g_autofree char *sig_file = g_build_filename(dir, "data.sig", NULL);
     const char *argv[] = {"ssh-keygen", "-Y", "check-novalidate", "-n", sig_namespace, "-s", sig_file, NULL};
 
-    g_assert_true(g_file_set_contents(data_file, g_bytes_get_data(data, NULL), g_bytes_get_size(data), NULL));
-    g_assert_true(
-        g_file_set_contents(sig_file, g_bytes_get_data(signature, NULL), g_bytes_get_size(signature), NULL));
+    mft_write_bytes(data_file, data);
+    mft_write_bytes(sig_file, signature);
     mft_run(data_file, argv);
+}
+
+/**
+ * mft_sign:
+ *
+ * Sign @data with the private key at @key_path.
+ *
+ * Returns: (transfer full): the signature
+ */
+GBytes *
+mft_sign(const char *key_path, MfSignatureScope scope, GBytes *data)
+{
+    g_autoptr(MfSigner) signer = mf_signer_new_for_key_file(key_path);
+    g_autoptr(GError) error = NULL;
+    GBytes *signature = mf_signer_sign(signer, scope, data, &error);
+
+    g_assert_no_error(error);
+    return signature;
+}
+
+/**
+ * mft_blake3_hex:
+ *
+ * Returns: (transfer full): the BLAKE3 hash of @data, hex encoded
+ */
+char *
+mft_blake3_hex(gconstpointer data, size_t size)
+{
+    g_autoptr(GBytes) bytes = g_bytes_new_static(data, size);
+    MfFileEntry entry;
+
+    mf_file_entry_set_for_bytes(&entry, bytes);
+    return g_strdup(entry.blake3);
+}
+
+/**
+ * mft_zstd:
+ *
+ * Returns: (transfer full): @text, compressed with zstd
+ */
+GBytes *
+mft_zstd(const char *text)
+{
+    size_t bound = ZSTD_compressBound(strlen(text));
+    g_autofree uint8_t *out = g_malloc(bound);
+    size_t size = ZSTD_compress(out, bound, text, strlen(text), 3);
+
+    g_assert_false(ZSTD_isError(size));
+    return g_bytes_new(out, size);
 }
 
 /**
@@ -319,6 +376,22 @@ mft_manifest_json(const MftTestManifest *m)
         m->data_offset != 0 ? m->data_offset : 20480,
         m->hash_offset != 0 ? m->hash_offset : 22528);
     /* clang-format on */
+}
+
+/**
+ * mft_manifest_new:
+ *
+ * Returns: (transfer full): the parsed manifest
+ */
+MfManifest *
+mft_manifest_new(const MftTestManifest *m)
+{
+    g_autofree char *json = mft_manifest_json(m);
+    g_autoptr(GError) error = NULL;
+    MfManifest *manifest = mf_manifest_new_from_data(json, -1, &error);
+
+    g_assert_no_error(error);
+    return manifest;
 }
 
 /**

@@ -10,7 +10,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <glib/gstdio.h>
-#include <blake3.h>
 #include <zip.h>
 #include <manifold.h>
 
@@ -64,30 +63,6 @@ typedef struct {
     TestImage app;
 } Fixture;
 
-static char *
-mft_blake3_of(gconstpointer data, size_t size)
-{
-    GString *hex = g_string_new(NULL);
-    uint8_t out[BLAKE3_OUT_LEN];
-    blake3_hasher hasher;
-
-    blake3_hasher_init(&hasher);
-    blake3_hasher_update(&hasher, data, size);
-    blake3_hasher_finalize(&hasher, out, sizeof(out));
-    for (size_t i = 0; i < sizeof(out); i++)
-        g_string_append_printf(hex, "%02x", out[i]);
-    return g_string_free(hex, FALSE);
-}
-
-static char *
-mft_blake3_of_bytes(GBytes *bytes)
-{
-    gsize size;
-    gconstpointer data = g_bytes_get_data(bytes, &size);
-
-    return mft_blake3_of(data, size);
-}
-
 static GBytes *
 mft_fake_image_data(const char *seed, size_t size)
 {
@@ -110,7 +85,9 @@ mft_image_manifest_json(const TestImage *image, gboolean wrong_blake3)
     g_autofree char *file_name = mft_image_file_name(image);
     g_autofree char *content_hash = mft_fake_hash(file_name);
     g_autofree char *sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, image->data);
-    g_autofree char *blake3 = wrong_blake3 ? mft_fake_hash("wrong") : mft_blake3_of_bytes(image->data);
+    g_autofree char *blake3 = wrong_blake3 ? mft_fake_hash("wrong")
+                                           : mft_blake3_hex(g_bytes_get_data(image->data, NULL),
+                                                            g_bytes_get_size(image->data));
     g_autofree char *verity_hash = mft_fake_hash(sha256);
     const TestImage *base = image->base;
 
@@ -146,7 +123,7 @@ static void
 mft_index_add(GString *index, const char *name, gconstpointer data, size_t size)
 {
     g_autofree char *sha256 = g_compute_checksum_for_data(G_CHECKSUM_SHA256, data, size);
-    g_autofree char *blake3 = mft_blake3_of(data, size);
+    g_autofree char *blake3 = mft_blake3_hex(data, size);
 
     /* clang-format off */
     g_string_append_printf(
@@ -379,7 +356,8 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
     g_autoptr(GError) error = NULL;
     g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
     g_autofree char *expected_sha256 = g_compute_checksum_for_bytes(G_CHECKSUM_SHA256, f->app.data);
-    g_autofree char *expected_blake3 = mft_blake3_of_bytes(f->app.data);
+    g_autofree char *expected_blake3 = mft_blake3_hex(g_bytes_get_data(f->app.data, NULL),
+                                                      g_bytes_get_size(f->app.data));
     g_autofree char *expected_verity = mft_fake_hash(expected_sha256);
     g_autofree char *kit_identity = mft_fake_hash(TEST_KIT_ID);
     const MfBaseReference *base;
@@ -903,7 +881,7 @@ test_metadata_limit(Fixture *f, gconstpointer user_data)
     g_autofree char *path = g_build_filename(f->dir, "large.manifold", NULL);
     g_autofree uint8_t *filler = g_malloc0(filler_size);
     g_autofree char *sha256 = g_compute_checksum_for_data(G_CHECKSUM_SHA256, filler, filler_size);
-    g_autofree char *blake3 = mft_blake3_of(filler, filler_size);
+    g_autofree char *blake3 = mft_blake3_hex(filler, filler_size);
     g_autoptr(GString) index = g_string_new("{\"format\": 1, \"files\": [");
     zip_t *zip = zip_open(path, ZIP_CREATE | ZIP_TRUNCATE, NULL);
     g_autoptr(GError) error = NULL;
@@ -976,7 +954,6 @@ mft_sign_file(const char *path, MfSigner *signer, GError **error)
 static void
 test_sign_file(Fixture *f, gconstpointer user_data)
 {
-    g_autofree char *ssh_keygen = g_find_program_in_path("ssh-keygen");
     g_autofree char *path = NULL;
     g_autofree char *key = NULL;
     g_autofree char *other_key = NULL;
@@ -990,10 +967,6 @@ test_sign_file(Fixture *f, gconstpointer user_data)
     g_autofree char *fingerprint = NULL;
     g_autoptr(GError) error = NULL;
 
-    if (ssh_keygen == NULL) {
-        g_test_skip("ssh-keygen is not installed");
-        return;
-    }
     path = mft_write_bundle(f,
                             "unsigned.manifold",
                             (const TestImage *[]){&f->kit, &f->app, NULL},
@@ -1057,17 +1030,12 @@ test_sign_file(Fixture *f, gconstpointer user_data)
 static void
 test_sign_tampered_file(Fixture *f, gconstpointer user_data)
 {
-    g_autofree char *ssh_keygen = g_find_program_in_path("ssh-keygen");
     g_autofree char *path = NULL;
     g_autofree char *key = NULL;
     g_autoptr(MfSigner) signer = NULL;
     g_autoptr(GError) error = NULL;
     zip_t *zip;
 
-    if (ssh_keygen == NULL) {
-        g_test_skip("ssh-keygen is not installed");
-        return;
-    }
     path = mft_write_bundle(f,
                             "tampered.manifold",
                             (const TestImage *[]){&f->kit, &f->app, NULL},
@@ -1111,8 +1079,7 @@ mft_write_image_file(Fixture *f, const TestImage *image)
     g_autofree char *file_name = mft_image_file_name(image);
     char *path = g_build_filename(f->dir, file_name, NULL);
 
-    g_assert_true(
-        g_file_set_contents(path, g_bytes_get_data(image->data, NULL), g_bytes_get_size(image->data), NULL));
+    mft_write_bytes(path, image->data);
     return path;
 }
 
@@ -1220,7 +1187,6 @@ test_writer(Fixture *f, gconstpointer user_data)
 static void
 test_writer_sign(Fixture *f, gconstpointer user_data)
 {
-    g_autofree char *ssh_keygen = g_find_program_in_path("ssh-keygen");
     g_autofree char *path = g_build_filename(f->dir, "written.manifold", NULL);
     g_autofree char *bad_key = g_build_filename(f->dir, "bad-key", NULL);
     g_autofree char *key = NULL;
@@ -1231,10 +1197,6 @@ test_writer_sign(Fixture *f, gconstpointer user_data)
     g_autoptr(GBytes) signature = NULL;
     g_autoptr(GError) error = NULL;
 
-    if (ssh_keygen == NULL) {
-        g_test_skip("ssh-keygen is not installed");
-        return;
-    }
     mft_write_file(bad_key, "not a key\n");
     bad_signer = mf_signer_new_for_key_file(bad_key);
     key = mft_make_key(f->dir, "key");

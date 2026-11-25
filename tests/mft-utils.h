@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 #include <glib.h>
+#include <manifold.h>
 
 G_BEGIN_DECLS
 
@@ -20,38 +21,48 @@ G_BEGIN_DECLS
 #define TEST_APP_ID          "com.example.app"
 #define TEST_APP_SDK_ID      "com.example.app.sdk"
 
-char *mft_fake_hash(const char *seed);
+char   *mft_fake_hash(const char *seed);
 
-void  mft_make_dirs(const char *path);
-void  mft_make_link(const char *target,
-                    const char *path);
-void  mft_replace_link(const char *target,
-                       const char *path);
-void  mft_write_file(const char *path,
-                     const char *content);
-char *mft_read_file(const char *path);
-void  mft_replace_in_file(const char *path,
-                          const char *old,
-                          const char *new);
+void    mft_make_dirs(const char *path);
+void    mft_make_link(const char *target,
+                      const char *path);
+void    mft_replace_link(const char *target,
+                         const char *path);
+void    mft_write_file(const char *path,
+                       const char *content);
+char   *mft_read_file(const char *path);
+void    mft_write_bytes(const char *path,
+                        GBytes     *bytes);
+void    mft_replace_in_file(const char *path,
+                            const char *old,
+                            const char *new);
 
-char *mft_make_tmp_dir(const char *name);
-void  mft_rm_rf(const char *path);
+char   *mft_make_tmp_dir(const char *name);
+void    mft_rm_rf(const char *path);
 
-void  mft_run(const char        *stdin_file,
-              const char *const *argv);
-char *mft_make_key(const char *dir,
-                   const char *name);
-void  mft_check_signature(const char *dir,
-                          const char *sig_namespace,
-                          GBytes     *data,
-                          GBytes     *signature);
+void    mft_run(const char        *stdin_file,
+                const char *const *argv);
+char   *mft_make_key(const char *dir,
+                     const char *name);
+void    mft_check_signature(const char *dir,
+                            const char *sig_namespace,
+                            GBytes     *data,
+                            GBytes     *signature);
 
-void  mft_clear_store(void);
+GBytes *mft_sign(const char      *key_path,
+                 MfSignatureScope scope,
+                 GBytes          *data);
 
-char *mft_catalog_component_xml(const char *component_id,
-                                const char *ref,
-                                const char *extra);
-char *mft_catalog_xml(const char *components);
+char   *mft_blake3_hex(gconstpointer data,
+                       size_t        size);
+GBytes *mft_zstd(const char *text);
+
+void    mft_clear_store(void);
+
+char   *mft_catalog_component_xml(const char *component_id,
+                                  const char *ref,
+                                  const char *extra);
+char   *mft_catalog_xml(const char *components);
 
 /**
  * MftTestManifest:
@@ -92,12 +103,13 @@ typedef struct {
     uint64_t    hash_offset;      /* default: 22528 */
 } MftTestManifest;
 
-char *mft_manifest_json(const MftTestManifest *manifest);
+char       *mft_manifest_json(const MftTestManifest *manifest);
+MfManifest *mft_manifest_new(const MftTestManifest *manifest);
 
-void  mft_write_version(const char            *root,
-                        const char            *subdir,
-                        const MftTestManifest *manifest,
-                        const char            *base_version_dir,
-                        const char            *mode);
+void        mft_write_version(const char            *root,
+                              const char            *subdir,
+                              const MftTestManifest *manifest,
+                              const char            *base_version_dir,
+                              const char            *mode);
 
 G_END_DECLS

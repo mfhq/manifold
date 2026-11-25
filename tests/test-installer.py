@@ -242,8 +242,6 @@ class InstallerTestCase(unittest.TestCase):
     def use_own_signing_keys(self):
         """Give the test an empty directory for signing keys, so it never uses the keys
         of the user who runs the tests. Returns the key directory."""
-        if shutil.which('ssh-keygen') is None:
-            self.skipTest('ssh-keygen is not available')
         config_dir = tempfile.mkdtemp(prefix='config-', dir=self.work)
         patcher = mock.patch.dict(os.environ, {'XDG_CONFIG_HOME': config_dir})
         patcher.start()
