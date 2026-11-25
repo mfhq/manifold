@@ -30,8 +30,7 @@ import tempfile
 import time
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mftest import APP_ID, EXIT_SKIPPED, call_more  # noqa: E402
+from mftest import APP_ID, EXIT_SKIPPED, call_more
 
 INTERFACE = 'org.freedesktop.manifold.host'
 

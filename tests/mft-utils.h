@@ -93,10 +93,9 @@ typedef struct {
     const char *base_version;  /* default: "1" */
     uint64_t    base_revision; /* default: 1 */
 
-    const char *base_sdk_id;       /* default: none */
-    const char *base_sdk_kind;     /* required if there is a base SDK */
-    const char *base_sdk_version;  /* default: "1" */
-    uint64_t    base_sdk_revision; /* default: 1 */
+    const char *base_sdk_id;      /* default: none */
+    const char *base_sdk_kind;    /* required if there is a base SDK */
+    const char *base_sdk_version; /* default: "1" */
 
     const char *command;     /* default: "app", for an application */
     const char *integration; /* the integration section as JSON, default: none */

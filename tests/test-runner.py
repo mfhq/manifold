@@ -37,8 +37,7 @@ import tempfile
 import threading
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mftest import APP_ID, EXIT_SKIPPED, RUNTIME_DIR  # noqa: E402
+from mftest import APP_ID, EXIT_SKIPPED, RUNTIME_DIR
 
 TREE = f'{RUNTIME_DIR}/test-tree'
 # an application with the permission to run programs of the host

@@ -29,11 +29,9 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mftest import (  # noqa: E402
+from mftest import (
     APP_ID,
     CORE_ID,
-    EXIT_SKIPPED,
     JXL_DATA,
     RUNTIME_DIR,
     STORE,
@@ -45,7 +43,7 @@ from mftest import (  # noqa: E402
     VarlinkError,
     host_architecture,
     installed_components,
-    zstd_available,
+    skip_without,
     zstd_compress,
 )
 
@@ -963,10 +961,5 @@ if __name__ == '__main__':
     parser.add_argument('--zchunk-tool', required=True)
     ARGS, remaining = parser.parse_known_args()
     # we need these tools to create the repository, and varlinkctl to call the daemon
-    missing = [tool for tool in ('b3sum', 'varlinkctl', 'openssl') if shutil.which(tool) is None]
-    if not zstd_available():
-        missing.append('zstd')
-    if missing:
-        print(f'SKIP: {" and ".join(missing)} not available')
-        sys.exit(EXIT_SKIPPED)
+    skip_without('b3sum', 'varlinkctl', 'openssl', zstd=True)
     unittest.main(argv=[sys.argv[0], *remaining], verbosity=2)

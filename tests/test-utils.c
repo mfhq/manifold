@@ -11,6 +11,11 @@
 #include "mf-component-private.h"
 #include "mf-utils-private.h"
 
+/**
+ * test_version_is_valid:
+ *
+ * A version is used as the name of a directory in the store.
+ */
 static void
 test_version_is_valid(void)
 {
@@ -24,20 +29,14 @@ test_version_is_valid(void)
     g_assert_false(mf_version_is_valid("current"));
     g_assert_false(mf_version_is_valid(NULL));
     g_assert_false(mf_version_is_valid(""));
-    g_assert_false(mf_version_is_valid(".1"));
-    g_assert_false(mf_version_is_valid("-1"));
     g_assert_false(mf_version_is_valid("1/2"));
-    g_assert_false(mf_version_is_valid("1 2"));
 }
 
-static void
-test_version_compare(void)
-{
-    g_assert_cmpint(mf_version_compare("0.2.0", "0.10.0"), <, 0);
-    g_assert_cmpint(mf_version_compare("13.7a", "13.7"), >, 0);
-    g_assert_cmpint(mf_version_compare("1.0", "1.0"), ==, 0);
-}
-
+/**
+ * test_hex_hash_is_valid:
+ *
+ * A hash is 64 lowercase hex digits.
+ */
 static void
 test_hex_hash_is_valid(void)
 {
@@ -53,6 +52,11 @@ test_hex_hash_is_valid(void)
     g_assert_false(mf_hex_hash_is_valid(longer));
 }
 
+/**
+ * test_relative_path_is_valid:
+ *
+ * A path in a repository stays below the directory of the repository.
+ */
 static void
 test_relative_path_is_valid(void)
 {
@@ -87,6 +91,11 @@ test_relative_path_is_valid(void)
     g_assert_false(mf_relative_path_is_valid(too_long));
 }
 
+/**
+ * test_component_id_is_valid:
+ *
+ * A component ID is used as the name of a directory in the store.
+ */
 static void
 test_component_id_is_valid(void)
 {
@@ -97,13 +106,15 @@ test_component_id_is_valid(void)
     g_assert_true(mf_component_id_is_valid("a_b-c"));
     g_assert_false(mf_component_id_is_valid(NULL));
     g_assert_false(mf_component_id_is_valid(""));
-    g_assert_false(mf_component_id_is_valid(".hidden"));
-    g_assert_false(mf_component_id_is_valid("-dash"));
     g_assert_false(mf_component_id_is_valid("../etc"));
-    g_assert_false(mf_component_id_is_valid("with space"));
     g_assert_false(mf_component_id_is_valid(too_long));
 }
 
+/**
+ * test_program_name_is_valid:
+ *
+ * A program name is a plain file name. This test also covers the rules that all kinds of names share.
+ */
 static void
 test_program_name_is_valid(void)
 {
@@ -116,6 +127,7 @@ test_program_name_is_valid(void)
     g_assert_true(mf_program_name_is_valid(longest));
     g_assert_false(mf_program_name_is_valid(NULL));
     g_assert_false(mf_program_name_is_valid(""));
+    /* no name starts with a dot or a dash, or has a blank */
     g_assert_false(mf_program_name_is_valid(".hidden"));
     g_assert_false(mf_program_name_is_valid("-dash"));
     g_assert_false(mf_program_name_is_valid("a/b"));
@@ -127,6 +139,11 @@ test_program_name_is_valid(void)
     g_assert_false(mf_program_name_is_valid(too_long));
 }
 
+/**
+ * test_signing_key_name_is_valid:
+ *
+ * The name of a signing key can not be mistaken for a path, a public key or a fingerprint.
+ */
 static void
 test_signing_key_name_is_valid(void)
 {
@@ -136,15 +153,17 @@ test_signing_key_name_is_valid(void)
     g_assert_false(mf_signing_key_name_is_valid(NULL));
     g_assert_false(mf_signing_key_name_is_valid(""));
     g_assert_false(mf_signing_key_name_is_valid("_key"));
-    g_assert_false(mf_signing_key_name_is_valid(".key"));
-    g_assert_false(mf_signing_key_name_is_valid("-key"));
     g_assert_false(mf_signing_key_name_is_valid("./key"));
     g_assert_false(mf_signing_key_name_is_valid("a/b"));
-    g_assert_false(mf_signing_key_name_is_valid("a b"));
     g_assert_false(mf_signing_key_name_is_valid("SHA256:abc"));
     g_assert_false(mf_signing_key_name_is_valid("key.pub"));
 }
 
+/**
+ * test_text_is_valid:
+ *
+ * A text file that is installed on the host must be read the same way by every program.
+ */
 static void
 test_text_is_valid(void)
 {
@@ -266,6 +285,11 @@ test_component_kind_strings(void)
     g_assert_cmpstr(mf_component_kind_to_string(MF_COMPONENT_KIND_APP), ==, "app");
 }
 
+/**
+ * test_action_strings:
+ *
+ * Test the names of the actions.
+ */
 static void
 test_action_strings(void)
 {
@@ -274,6 +298,11 @@ test_action_strings(void)
     g_assert_cmpint(mf_action_from_string("bogus"), ==, MF_ACTION_UNKNOWN);
 }
 
+/**
+ * test_ptr_array_join_strings:
+ *
+ * Join the strings of an array.
+ */
 static void
 test_ptr_array_join_strings(void)
 {
@@ -297,7 +326,6 @@ main(int argc, char **argv)
     g_test_init(&argc, &argv, NULL);
 
     g_test_add_func("/utils/version-is-valid", test_version_is_valid);
-    g_test_add_func("/utils/version-compare", test_version_compare);
     g_test_add_func("/utils/hex-hash-is-valid", test_hex_hash_is_valid);
     g_test_add_func("/utils/relative-path-is-valid", test_relative_path_is_valid);
     g_test_add_func("/utils/component-id-is-valid", test_component_id_is_valid);

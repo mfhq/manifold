@@ -45,6 +45,11 @@ mft_has_link(const char *links_dir, const char *name)
     return TRUE;
 }
 
+/**
+ * test_sync:
+ *
+ * A directory of links has one link for every program of the host directories.
+ */
 static void
 test_sync(void)
 {
@@ -105,6 +110,11 @@ mft_wait_for_link(sd_event *event, const char *links_dir, const char *name, gboo
     }
 }
 
+/**
+ * test_watch:
+ *
+ * The links follow the programs of a host directory while the directory is watched.
+ */
 static void
 test_watch(void)
 {

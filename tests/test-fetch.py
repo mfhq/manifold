@@ -21,8 +21,7 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mftest import EXIT_SKIPPED, HttpsServer, call_more  # noqa: E402
+from mftest import HttpsServer, call_more, skip_without
 
 FETCH = 'org.freedesktop.manifold.fetch.Fetch'
 
@@ -193,7 +192,5 @@ if __name__ == '__main__':
     parser.add_argument('--helper', required=True)
     ARGS, remaining = parser.parse_known_args()
     # we need openssl to create the certificate of the server
-    if shutil.which('openssl') is None:
-        print('SKIP: openssl not available')
-        sys.exit(EXIT_SKIPPED)
+    skip_without('openssl')
     unittest.main(argv=[sys.argv[0], *remaining], verbosity=2)

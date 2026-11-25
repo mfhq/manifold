@@ -24,11 +24,9 @@ import unittest
 import zipfile
 from unittest import mock
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from mftest import (  # noqa: E402
+from mftest import (
     APP_ID,
     CORE_ID,
-    EXIT_SKIPPED,
     JXL_DATA,
     RUNTIME_DIR,
     STORE,
@@ -38,6 +36,7 @@ from mftest import (  # noqa: E402
     VarlinkError,
     host_architecture,
     installed_components,
+    skip_without,
     write_bundle,
 )
 
@@ -1506,8 +1505,5 @@ if __name__ == '__main__':
     parser.add_argument('--integration-prefix', required=True)
     ARGS, remaining = parser.parse_known_args()
     # we need b3sum to hash the bundles that the test creates, and varlinkctl to call the daemon
-    missing = [tool for tool in ('b3sum', 'varlinkctl') if shutil.which(tool) is None]
-    if missing:
-        print(f'SKIP: {" and ".join(missing)} not available')
-        sys.exit(EXIT_SKIPPED)
+    skip_without('b3sum', 'varlinkctl')
     unittest.main(argv=[sys.argv[0], *remaining], verbosity=2)

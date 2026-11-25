@@ -477,6 +477,17 @@ def zstd_compress(data):
     return zstd.compress(data)
 
 
+def skip_without(*tools, zstd=False):
+    """End a test script as skipped if one of the tools is not installed. If `zstd` is set,
+    the script also needs a way to compress data with zstd."""
+    missing = [tool for tool in tools if shutil.which(tool) is None]
+    if zstd and not zstd_available():
+        missing.append('zstd')
+    if missing:
+        print(f'SKIP: {" and ".join(missing)} not available')
+        sys.exit(EXIT_SKIPPED)
+
+
 def zstd_available():
     """Check if we can compress data with zstd."""
     return zstd is not None or shutil.which('zstd') is not None

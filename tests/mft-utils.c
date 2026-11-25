@@ -374,7 +374,7 @@ mft_manifest_json(const MftTestManifest *m)
                                           m->base_sdk_id,
                                           m->base_sdk_kind,
                                           m->base_sdk_version,
-                                          m->base_sdk_revision);
+                                          0);
     if (g_strcmp0(m->kind, "app") == 0 && !m->sdk)
         app = g_strdup_printf(",\n   \"app\": {\n      \"command\": \"%s\"\n   }",
                               m->command != NULL ? m->command : "app");
@@ -505,7 +505,7 @@ mft_write_version(const char *root,
             "../../../" MF_STORE_RUNTIMES_SUBDIR "/%s/%s-%" PRIu64,
             manifest->base_sdk_id,
             manifest->base_sdk_version != NULL ? manifest->base_sdk_version : "1",
-            manifest->base_sdk_revision != 0 ? manifest->base_sdk_revision : 1);
+            (uint64_t) 1);
 
         mft_make_link(target, link);
     }
