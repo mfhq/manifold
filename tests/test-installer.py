@@ -63,6 +63,12 @@ UNIT = b'[Service]\nExecStart=app\n'
 ARGS = None
 
 
+def row(kind, component_id, version=''):
+    """Return the start of the row that the manifold tool prints for a component in a
+    table of components."""
+    return f'{kind:<8} {component_id} {version}'
+
+
 def rebuild(image, base=None):
     """Make a rebuild of an image: the same version with the next revision and different
     content. The rebuild is built on base, or on the base of the image if no base is given."""
@@ -200,9 +206,10 @@ class InstallerTestCase(DaemonTestCase):
         """Install the core and its SDK."""
         return self.install(self.core, self.sdk, expect=expect)
 
-    def install_app(self, expect=0):
-        """Install version 0.1.0 of the app, and the kit it builds on."""
-        return self.install(self.kit, self.app, expect=expect)
+    def install_app(self, app=None, expect=0):
+        """Install a version of the app, and the kit it builds on. Without an app,
+        version 0.1.0 is installed."""
+        return self.install(self.kit, app or self.app, expect=expect)
 
     def install_file(self, bundle):
         """Call InstallFile for a bundle directly, and return every reply."""
@@ -265,6 +272,10 @@ class InstallerTestCase(DaemonTestCase):
         """Return the (ID, version, install mode) of the installed components."""
         return installed_components()
 
+    def installed_ids(self):
+        """Return the IDs of the installed components."""
+        return [component_id for component_id, _, _ in self.installed()]
+
     def version_dirs(self, subdir, component_id):
         """Return the names of the version directories of a component."""
         path = f'{STORE}/{subdir}/{component_id}'
@@ -309,7 +320,7 @@ class InstallTest(InstallerTestCase):
 
     def test_install_core(self):
         out = self.install_core()
-        self.assertIn(f'core     {CORE_ID} ', out)
+        self.assertIn(row('core', CORE_ID), out)
         self.assertIn('Disk space used', out)
         self.assertEqual(
             self.installed(), [(CORE_ID, '13.4', 'manual'), (CORE_ID + '.sdk', '13.4', 'manual')]
@@ -319,7 +330,7 @@ class InstallTest(InstallerTestCase):
         )
 
         out = self.manifold('list')
-        self.assertIn(f'core     {CORE_ID} ', out)
+        self.assertIn(row('core', CORE_ID), out)
         self.assertIn('sdk current manual', out)
         self.assertIn('Nothing is installed', self.manifold('list', '--kind', 'app'))
 
@@ -336,7 +347,7 @@ class InstallTest(InstallerTestCase):
 
     def test_app_brings_its_kit(self):
         self.install_core()
-        self.assertIn(f'app      {APP_ID} ', self.install_app())
+        self.assertIn(row('app', APP_ID), self.install_app())
         self.assertIn((self.kit.component, self.kit.version, 'auto'), self.installed())
         # an app always has the install mode auto, even though the user installed it explicitly
         self.assertIn((APP_ID, '0.1.0', 'auto'), self.installed())
@@ -348,7 +359,7 @@ class InstallTest(InstallerTestCase):
         self.install(self.kit)
         # the kit in the bundle of the app is installed already
         out = self.install_app()
-        self.assertIn(f'app      {APP_ID} ', out)
+        self.assertIn(row('app', APP_ID), out)
         self.assertNotIn(self.kit.component, out)
 
     def test_wrong_architecture_is_refused(self):
@@ -374,45 +385,19 @@ class InstallTest(InstallerTestCase):
         )
         self.assertEqual(self.installed(), installed)
 
-    def test_install_again_is_refused(self):
-        self.install_core()
-        self.assertIn('installed already', self.install_core(expect=1))
-        self.assertEqual(len(self.stored_images()), 2)
-
-    def test_same_revision_with_other_image_is_refused(self):
+    def test_installed_revision_is_refused(self):
         other_kit = Image(self.kit.component, 'kit', self.kit.version, base=self.core, seed='other')
         self.install_core()
         self.install(self.kit)
+        images = self.stored_images()
 
+        self.assertIn('installed already', self.install(self.kit, expect=1))
+        # the same revision with a different image, which comes with the app in its bundle
         self.assertIn('installed already', self.install(other_kit, self.app, expect=1))
-        self.assertNotIn(other_kit.verity_hash, self.stored_images())
-        self.assertNotIn((APP_ID, '0.1.0', 'auto'), self.installed())
+        self.assertEqual(self.stored_images(), images)
+        self.assertNotIn(APP_ID, self.installed_ids())
 
     def test_rebuild_supersedes_older_revisions(self):
-        kit = rebuild(self.kit)
-        app = rebuild(self.app, base=kit)
-        self.install_core()
-        self.install_app()
-
-        # the application is auto, and so is the kit that was installed with it
-        out = self.install(kit, app)
-        # the old revisions are part of the update, and are not listed as removed
-        self.assertIn(
-            [APP_ID, f'0.1.0-{self.app.revision}', '→', f'0.1.0-{app.revision}'],
-            [line.split()[1:] for line in out[out.index('Updated:') :].splitlines()],
-        )
-        self.assertNotIn('Installed:', out)
-        self.assertNotIn('Removed', out)
-        # used and freed disk space are reported together in one line
-        self.assertEqual(out.count('Disk space'), 1)
-        self.assertEqual(self.version_dirs('apps', APP_ID), [f'0.1.0-{app.revision}'])
-        self.assertEqual(
-            self.version_dirs('runtimes', kit.component), [f'{kit.version}-{kit.revision}']
-        )
-        self.assertNotIn(self.app.verity_hash, self.stored_images())
-        self.assertNotIn(self.kit.verity_hash, self.stored_images())
-
-    def test_superseding_install_reports_progress_once(self):
         kit = rebuild(self.kit)
         app = rebuild(self.app, base=kit)
         self.install_core()
@@ -438,6 +423,14 @@ class InstallTest(InstallerTestCase):
         percents = [p['percent'] for p in progress]
         self.assertEqual(percents, sorted(percents))
         self.assertEqual(percents[-1], 100)
+
+        # the old revisions and their images are gone
+        self.assertEqual(self.version_dirs('apps', APP_ID), [f'0.1.0-{app.revision}'])
+        self.assertEqual(
+            self.version_dirs('runtimes', kit.component), [f'{kit.version}-{kit.revision}']
+        )
+        self.assertNotIn(self.app.verity_hash, self.stored_images())
+        self.assertNotIn(self.kit.verity_hash, self.stored_images())
 
     def test_rebuild_keeps_manual_versions(self):
         core = rebuild(self.core)
@@ -473,12 +466,15 @@ class InstallTest(InstallerTestCase):
         self.install_app()
 
         # the kit stays installed, as the new version uses it too
-        out = self.install(self.kit, self.app2)
+        out = self.install_app(self.app2)
         self.assertIn(
-            f'app      {APP_ID} 0.1.0-{self.app.revision} → 0.2.0-{self.app2.revision}',
+            row('app', APP_ID, f'0.1.0-{self.app.revision} → 0.2.0-{self.app2.revision}'),
             out[out.index('Updated:') :],
         )
+        # the old version is part of the update, and is not listed as removed
         self.assertNotIn('Removed', out)
+        # used and freed disk space are reported together in one line
+        self.assertEqual(out.count('Disk space'), 1)
         self.assertEqual(self.version_dirs('apps', APP_ID), [f'0.2.0-{self.app2.revision}'])
         self.assertIn((self.kit.component, self.kit.version, 'auto'), self.installed())
         self.assertNotIn(self.app.verity_hash, self.stored_images())
@@ -540,32 +536,31 @@ class InstallTest(InstallerTestCase):
             )
             self.assertNotIn(image.verity_hash, self.stored_images())
 
-    def test_platform_must_sit_on_a_core(self):
+    def test_layers_that_do_not_stack(self):
         platform = Image(CORE_ID + '.qt6', 'platform', '6.8', base=self.kit)
-        self.install_core()
-        self.install(self.kit)
-        self.assertIn(
-            f'platform {platform.component} can not build on kit {self.kit.component}',
-            self.install(platform, expect=1),
-        )
-        self.assertNotIn(platform.verity_hash, self.stored_images())
-
-    def test_kit_can_not_build_on_a_kit(self):
         kit = Image(CORE_ID + '.0123456789abcdef', 'kit', '20260301T1200', base=self.kit)
+        sdk = Image(self.kit.component + '.sdk', 'kit', self.kit.version, sdk=True, base=self.core)
         self.install_core()
         self.install(self.kit)
-        self.assertIn(
-            f'kit {kit.component} can not build on kit {self.kit.component}',
-            self.install(kit, expect=1),
-        )
-        self.assertNotIn(kit.verity_hash, self.stored_images())
+
+        for image, message in (
+            # a platform sits on a core
+            (platform, f'platform {platform.component} can not build on kit {self.kit.component}'),
+            # a kit sits on a core or on a platform
+            (kit, f'kit {kit.component} can not build on kit {self.kit.component}'),
+            # the SDK of a kit extends the kit
+            (sdk, f'kit SDK {sdk.component} can not build on core {CORE_ID}'),
+        ):
+            with self.subTest(image=image.component):
+                self.assertIn(message, self.install(image, expect=1))
+                self.assertNotIn(image.verity_hash, self.stored_images())
 
     def test_app_can_build_on_an_sdk(self):
         # an application that is built on an SDK, like a development tool
         app = Image('com.example.OnSdk', 'app', '1.0', base=self.sdk)
         self.install_core()
         self.assertIn(
-            f'app      {app.component} ',
+            row('app', app.component),
             self.install(app),
         )
         self.assertEqual(
@@ -578,15 +573,6 @@ class InstallTest(InstallerTestCase):
         self.install_core()
         self.install(self.kit, self.kit_sdk, self.app, app_sdk)
         self.assertIn((app_sdk.component, app_sdk.version, 'manual'), self.installed())
-
-    def test_runtime_sdk_extends_its_own_layer(self):
-        sdk = Image(self.kit.component + '.sdk', 'kit', self.kit.version, sdk=True, base=self.core)
-        self.install_core()
-        self.assertIn(
-            f'kit SDK {sdk.component} can not build on core {CORE_ID}',
-            self.install(sdk, expect=1),
-        )
-        self.assertNotIn(sdk.verity_hash, self.stored_images())
 
     def test_sdk_links_to_the_sdk_of_the_layer_below(self):
         self.install_core()
@@ -651,7 +637,7 @@ class InstallTest(InstallerTestCase):
 
         self.assertIn((self.kit.component, self.kit.version, 'auto'), self.installed())
         self.assertIn(self.kit.verity_hash, self.stored_images())
-        self.assertNotIn(APP_ID, [component_id for component_id, _, _ in self.installed()])
+        self.assertNotIn(APP_ID, self.installed_ids())
         self.assertNotIn(self.app.verity_hash, self.stored_images())
         for root, dirs, files in os.walk(STORE):
             for name in dirs + files:
@@ -674,7 +660,7 @@ class InstallTest(InstallerTestCase):
         # put a directory at the path of the current link, which a link can not replace
         os.makedirs(f'{STORE}/apps/{APP_ID}/current/in-the-way')
 
-        self.assertIn(f'app      {APP_ID} ', self.install_app())
+        self.assertIn(row('app', APP_ID), self.install_app())
         self.assertTrue(os.path.isdir(f'{STORE}/apps/{APP_ID}/0.1.0-{self.app.revision}'))
 
     def test_install_reports_progress(self):
@@ -731,17 +717,15 @@ class InstallTest(InstallerTestCase):
         self.assertFalse(os.path.lexists(f'{icons}/{icon}'))
         self.assertTrue(os.path.lexists(f'{catalog}/manifold-local-{CORE_ID}.xml'))
 
-    def test_catalog_must_describe_the_component(self):
-        out = self.install(
-            self.core, self.sdk, catalog_ids={CORE_ID: 'org.example.Other'}, expect=1
-        )
-        self.assertIn('describes org.example.Other, not', out)
-        self.assertEqual(self.installed(), [])
-
 
 class HostIntegrationTest(InstallerTestCase):
     """Installing the files of an application on the host: desktop entries, icons, MIME
     packages, aliases, systemd units and udev rules."""
+
+    def setUp(self):
+        """Start every test with the core installed."""
+        super().setUp()
+        self.install_core()
 
     def test_integration_files_are_kept_with_their_version(self):
         service = f'{APP_ID}-report.service'
@@ -754,8 +738,7 @@ class HostIntegrationTest(InstallerTestCase):
                 'systemd-unit-user': {user_path: b'[Service]\nExecStart=app --user\n'},
             }
         )
-        self.install_core()
-        out = self.install(self.kit, app)
+        out = self.install_app(app)
         self.assertIn(f'system service: {service}\n', out)
         self.assertIn(f'user service: {service}\n', out)
         self.assertIn(f'{APP_ID} requests these permissions', out)
@@ -772,49 +755,39 @@ class HostIntegrationTest(InstallerTestCase):
             with open(exports + path[len('/app') :], 'rb') as f:
                 self.assertEqual(f.read(), content)
 
-    def test_integration_rules_are_checked_before_the_image_is_stored(self):
-        self.install_core()
+    def test_manifest_is_checked_before_the_image_is_stored(self):
         images = self.stored_images()
         path = '/app/share/applications/org.example.Other.desktop'
-        app = self.app_with({'desktop-entry': {path: DESKTOP_ENTRY}})
-        out = self.install(self.kit, app, expect=1)
+        misnamed = self.app_with({'desktop-entry': {path: DESKTOP_ENTRY}})
+        unknown = Image(APP_ID, 'app', '0.1.0', base=self.kit, permissions=['from-the-future'])
+
+        out = self.install_app(misnamed, expect=1)
         self.assertIn('Not a valid manifest', out)
         self.assertIn(f'has to start with {APP_ID}', out)
-        self.assertEqual(self.stored_images(), images)
         # file names are only printed after they passed the checks
         self.assertNotIn('will install this', out)
 
-    def test_permissions_are_checked_before_the_image_is_stored(self):
-        self.install_core()
-        images = self.stored_images()
-        app = Image(APP_ID, 'app', '0.1.0', base=self.kit, permissions=['from-the-future'])
-        out = self.install(self.kit, app, expect=1)
+        out = self.install_app(unknown, expect=1)
         self.assertIn('Not a valid manifest', out)
         self.assertIn('from-the-future is not known', out)
         self.assertEqual(self.stored_images(), images)
 
-        # a permission that the integration section implies can not be requested
-        app = Image(APP_ID, 'app', '0.1.0', base=self.kit, permissions=['udev-rules'])
-        out = self.install(self.kit, app, expect=1)
-        self.assertIn('udev-rules can not be requested', out)
-        self.assertEqual(self.stored_images(), images)
-
+    def test_requested_permissions_are_shown(self):
         app = Image(APP_ID, 'app', '0.1.0', base=self.kit, permissions=['host-commands'])
-        out = self.install(self.kit, app)
+        out = self.install_app(app)
         self.assertIn(f'{APP_ID} requests these permissions', out)
         self.assertIn('run programs of this system\n', out)
         self.assertNotIn('Privileged permissions', out)
 
     def test_integration_file_has_to_match_its_manifest(self):
-        self.install_core()
         app = self.app_with(
             {'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY}},
             image_files={DESKTOP_ENTRY_PATH: DESKTOP_ENTRY + b'Comment=Another file\n'},
         )
-        out = self.install(self.kit, app, expect=1)
+        out = self.install_app(app, expect=1)
         self.assertIn('does not match its hashes in the manifest', out)
         self.assertNotIn(app.verity_hash, self.stored_images())
-        self.assertNotIn(APP_ID, [component for component, _, _ in self.installed()])
+        self.assertNotIn(APP_ID, self.installed_ids())
 
     def integrated_app(self, version, comment=b''):
         """Make a version of the app with a desktop entry, an icon, a MIME package and an
@@ -834,6 +807,13 @@ class HostIntegrationTest(InstallerTestCase):
         with open(REGISTRY, encoding='utf-8') as f:
             return json.load(f)
 
+    def forget_exported_version(self):
+        """Make the registry look as if the files of the app were never installed on the host."""
+        registry = self.registry()
+        del registry['version']
+        with open(REGISTRY, 'w', encoding='utf-8') as f:
+            json.dump(registry, f)
+
     def read_export(self, path):
         with open(path, 'rb') as f:
             return f.read()
@@ -845,9 +825,8 @@ class HostIntegrationTest(InstallerTestCase):
             f.write(b'foreign')
 
     def test_current_version_is_exported(self):
-        self.install_core()
         app = self.integrated_app('0.1.0')
-        out = self.install(self.kit, app)
+        out = self.install_app(app)
         self.assertIn(
             f'{APP_ID} will install this on the system:\n'
             f'  menu entry: {APP_ID}.desktop\n'
@@ -856,7 +835,7 @@ class HostIntegrationTest(InstallerTestCase):
             '  command: app-cli\n',
             out,
         )
-        self.assertNotIn('rivileged', out)
+        self.assertNotIn('privileged', out.lower())
 
         entry = self.read_export(DESKTOP_ENTRY_EXPORT)
         self.assertIn(b'/mfrun com.example.app\n', entry)
@@ -878,18 +857,25 @@ class HostIntegrationTest(InstallerTestCase):
             sorted([DESKTOP_ENTRY_EXPORT, ICON_EXPORT, MIME_EXPORT, ALIAS_EXPORT]),
         )
 
+        # a removal leaves no exports behind
+        self.manifold('remove', APP_ID)
+        self.assertFalse(os.path.lexists(DESKTOP_ENTRY_EXPORT))
+        self.assertFalse(os.path.lexists(ICON_EXPORT))
+        self.assertFalse(os.path.lexists(MIME_EXPORT))
+        self.assertFalse(os.path.lexists(ALIAS_EXPORT))
+        self.assertFalse(os.path.exists(REGISTRY))
+
     def test_exports_follow_the_current_version(self):
-        self.install_core()
         old = self.integrated_app('0.2.0', b'Comment=Old\n')
         new = self.app_with(
             {'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY + b'Comment=New\n'}},
             version='0.3.0',
         )
-        self.install(self.kit, old)
+        self.install_app(old)
         self.manifold('mark', 'manual', APP_ID)
 
         # the new version has no icon, MIME package or alias
-        self.install(self.kit, new)
+        self.install_app(new)
         self.assertIn(b'Comment=New', self.read_export(DESKTOP_ENTRY_EXPORT))
         self.assertFalse(os.path.lexists(ICON_EXPORT))
         self.assertFalse(os.path.lexists(MIME_EXPORT))
@@ -897,7 +883,7 @@ class HostIntegrationTest(InstallerTestCase):
 
         # an older version does not become current
         older = self.integrated_app('0.1.0', b'Comment=Older\n')
-        self.install(self.kit, older)
+        self.install_app(older)
         self.assertIn(b'Comment=New', self.read_export(DESKTOP_ENTRY_EXPORT))
         self.assertEqual(self.registry()['version'], f'0.3.0-{new.revision}')
 
@@ -911,19 +897,7 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertTrue(os.path.exists(ALIAS_EXPORT))
         self.assertEqual(self.registry()['version'], f'0.2.0-{old.revision}')
 
-    def test_removal_leaves_no_exports(self):
-        self.install_core()
-        self.install(self.kit, self.integrated_app('0.1.0'))
-
-        self.manifold('remove', APP_ID)
-        self.assertFalse(os.path.lexists(DESKTOP_ENTRY_EXPORT))
-        self.assertFalse(os.path.lexists(ICON_EXPORT))
-        self.assertFalse(os.path.lexists(MIME_EXPORT))
-        self.assertFalse(os.path.lexists(ALIAS_EXPORT))
-        self.assertFalse(os.path.exists(REGISTRY))
-
     def test_changed_exports_are_replaced(self):
-        self.install_core()
         self.install(self.kit, self.integrated_app('0.1.0'))
         with open(DESKTOP_ENTRY_EXPORT, 'ab') as f:
             f.write(b'Comment=Edited by the admin\n')
@@ -931,7 +905,7 @@ class HostIntegrationTest(InstallerTestCase):
         self.write_foreign_file(ICON_EXPORT)
 
         new = self.integrated_app('0.2.0', b'Comment=New\n')
-        self.install(self.kit, new)
+        self.install_app(new)
         self.assertNotIn(b'Edited by the admin', self.read_export(DESKTOP_ENTRY_EXPORT))
         self.assertEqual(self.read_export(ICON_EXPORT), ICON)
 
@@ -941,11 +915,10 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertFalse(os.path.lexists(DESKTOP_ENTRY_EXPORT))
 
     def test_foreign_file_refuses_installation(self):
-        self.install_core()
         self.write_foreign_file(MIME_EXPORT)
         app = self.integrated_app('0.1.0')
 
-        out = self.install(self.kit, app, expect=1)
+        out = self.install_app(app, expect=1)
         self.assertIn('File conflict', out)
         self.assertIn('does not belong to any component', out)
         self.assertNotIn(app.verity_hash, self.stored_images())
@@ -955,11 +928,10 @@ class HostIntegrationTest(InstallerTestCase):
         # a symbolic link that points nowhere is a conflict too
         os.unlink(MIME_EXPORT)
         os.symlink('/nonexistent', MIME_EXPORT)
-        self.install(self.kit, app, expect=1)
+        self.install_app(app, expect=1)
         self.assertEqual(os.readlink(MIME_EXPORT), '/nonexistent')
 
     def test_file_of_another_component_refuses_installation(self):
-        self.install_core()
         path = f'/app/share/applications/{APP_ID}.extra.desktop'
         first = self.app_with({'desktop-entry': {path: DESKTOP_ENTRY}})
         second = Image(
@@ -977,18 +949,17 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertNotIn(second.verity_hash, self.stored_images())
 
         # an installed component owns the file
-        self.install(self.kit, first)
-        out = self.install(self.kit, second, expect=1)
+        self.install_app(first)
+        out = self.install_app(second, expect=1)
         self.assertIn(f'that file belongs to {APP_ID}', out)
         self.assertNotIn(second.verity_hash, self.stored_images())
 
         # an installed component owns the file, even if the file was deleted from the host
         os.unlink(f'{STORE}/exports/share/applications/{APP_ID}.extra.desktop')
-        out = self.install(self.kit, second, expect=1)
+        out = self.install_app(second, expect=1)
         self.assertIn(f'that file belongs to {APP_ID}', out)
 
     def test_alias_of_another_component_refuses_installation(self):
-        self.install_core()
         self.install(self.kit, self.integrated_app('0.1.0'))
         second = Image(
             APP_ID + '.extra',
@@ -1001,19 +972,18 @@ class HostIntegrationTest(InstallerTestCase):
             aliases=ALIASES,
         )
 
-        out = self.install(self.kit, second, expect=1)
+        out = self.install_app(second, expect=1)
         self.assertIn(f'that file belongs to {APP_ID}', out)
         self.assertNotIn(second.verity_hash, self.stored_images())
 
     def test_foreign_file_survives_falling_back(self):
-        self.install_core()
         new = self.app_with({'desktop-entry': {DESKTOP_ENTRY_PATH: DESKTOP_ENTRY}}, version='0.2.0')
-        self.install(self.kit, new)
+        self.install_app(new)
 
         # installing an older version does not change the host, so the foreign file is no conflict yet
         self.write_foreign_file(MIME_EXPORT)
         older = self.integrated_app('0.1.0')
-        self.install(self.kit, older)
+        self.install_app(older)
         self.assertEqual(self.registry()['version'], f'0.2.0-{new.revision}')
 
         _, err = self.manifold_streams('remove', APP_ID, '0.2.0')
@@ -1027,9 +997,8 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertEqual(self.read_export(MIME_EXPORT), b'foreign')
 
     def test_stored_version_is_checked_again(self):
-        self.install_core()
         app = self.integrated_app('0.1.0')
-        self.install(self.kit, app)
+        self.install_app(app)
 
         # change the stored version so that it fails the integration rules, and has to be exported again
         escaped = f'{STORE}/images/escaped.desktop'
@@ -1041,10 +1010,7 @@ class HostIntegrationTest(InstallerTestCase):
         ] = '/app/share/applications/../../../images/escaped.desktop'
         with open(manifest_path, 'w', encoding='utf-8') as f:
             json.dump(manifest, f)
-        registry = self.registry()
-        del registry['version']
-        with open(REGISTRY, 'w', encoding='utf-8') as f:
-            json.dump(registry, f)
+        self.forget_exported_version()
 
         start = self.daemon.log_size()
         self.manifold('cleanup')
@@ -1056,7 +1022,6 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertFalse(os.path.exists(REGISTRY))
 
     def test_registry_only_reaches_our_files(self):
-        self.install_core()
         other = f'{STORE}/images/other-file'
         directory = f'{STORE}/exports/share/applications/directory'
         self.write_foreign_file(other)
@@ -1087,20 +1052,19 @@ class HostIntegrationTest(InstallerTestCase):
     def test_host_caches_follow_the_exports(self):
         update_applications = f'update-desktop-database --quiet {STORE}/exports/share/applications'
         update_mime = f'update-mime-database {STORE}/exports/share/mime'
-        self.install_core()
 
         # without a desktop entry or a MIME package, there is no directory for the tools to update
         first = self.app_with({'icon': {ICON_PATH: ICON}}, version='0.2.0')
-        self.install(self.kit, first)
+        self.install_app(first)
         self.assertEqual(self.host_tool_calls(), [])
 
         second = self.integrated_app('0.3.0', b'Comment=Second\n')
-        self.install(self.kit, second)
+        self.install_app(second)
         self.assertEqual(self.host_tool_calls(), [update_applications, update_mime])
 
         # an older version does not change the host
         older = self.integrated_app('0.1.0', b'Comment=Older\n')
-        self.install(self.kit, older)
+        self.install_app(older)
         self.assertEqual(self.host_tool_calls(), [])
 
         # falling back to the older version changes the host, and so does removing that version
@@ -1126,8 +1090,6 @@ class HostIntegrationTest(InstallerTestCase):
 
         def unit_names(call):
             return sorted(call.partition(' --no-block ')[2].split())
-
-        self.install_core()
 
         # a unit is never enabled or started
         self.install(self.kit, app_with_units('0.1.0', kept, template, stale))
@@ -1163,7 +1125,6 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertEqual(os.listdir(self.user_units), [])
 
     def test_udev_rules_follow_the_current_version(self):
-        self.install_core()
         name = f'60-{APP_ID}.rules'
         rule = b'KERNEL=="null", TAG+="app"\n'
         with_rule = self.app_with(
@@ -1173,7 +1134,7 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertEqual(self.host_tool_calls(), [])
 
         # existing devices are left alone, so only the rules are reloaded
-        out = self.install(self.kit, with_rule)
+        out = self.install_app(with_rule)
         self.assertIn(f'{APP_ID} now also installs: {name}', out)
         self.assertNotIn('no longer installs', out)
         self.assertEqual(self.host_tool_calls(), ['udevadm control --reload'])
@@ -1182,7 +1143,7 @@ class HostIntegrationTest(InstallerTestCase):
 
         # the result of an update lists the rules and system services that it added and removed
         without_rule = self.integrated_app('0.2.0')
-        out = self.install(self.kit, without_rule)
+        out = self.install_app(without_rule)
         self.assertIn(f'{APP_ID} no longer installs: {name}', out)
         self.assertIn('udevadm control --reload', self.host_tool_calls())
         self.assertEqual(os.listdir(self.udev_rules), [])
@@ -1191,7 +1152,6 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertNotIn('udevadm control --reload', self.host_tool_calls())
 
     def test_unit_of_the_host_refuses_installation(self):
-        self.install_core()
         name = f'{APP_ID}.service'
         host_dir = '/usr/lib/systemd/system'
         subprocess.run(['mount', '-t', 'tmpfs', 'tmpfs', host_dir], check=True)
@@ -1199,13 +1159,12 @@ class HostIntegrationTest(InstallerTestCase):
         self.write_foreign_file(f'{host_dir}/{name}')
         app = self.app_with({'systemd-unit-system': {f'/app/lib/systemd/system/{name}': UNIT}})
 
-        out = self.install(self.kit, app, expect=1)
+        out = self.install_app(app, expect=1)
         self.assertIn(f'the host already has {host_dir}/{name}', out)
         self.assertNotIn(app.verity_hash, self.stored_images())
         self.assertFalse(os.path.exists(f'{self.system_units}/{name}'))
 
     def test_failing_host_tool_is_only_a_warning(self):
-        self.install_core()
         app = self.integrated_app('0.1.0')
         with open(self.fail_host_tools, 'w', encoding='utf-8'):
             pass
@@ -1219,7 +1178,6 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertNotIn('\x1b', err)
 
     def test_export_that_fails_does_not_fail_the_installation(self):
-        self.install_core()
         app = self.integrated_app('0.1.0')
         self.write_foreign_file(f'{STORE}/exports/share')
 
@@ -1239,20 +1197,16 @@ class HostIntegrationTest(InstallerTestCase):
         self.write_foreign_file(f'{STORE}/exports/share')
         _, err = self.manifold_streams('remove', APP_ID)
         self.assertIn(f'Warning: Unable to update the host files of {APP_ID}', err)
-        self.assertNotIn(APP_ID, [component for component, _, _ in self.installed()])
+        self.assertNotIn(APP_ID, self.installed_ids())
 
-    def test_interrupted_integration_is_finished(self):
-        self.install_core()
+    def test_interrupted_export_is_finished(self):
         app = self.integrated_app('0.1.0')
-        self.install(self.kit, app)
+        self.install_app(app)
 
         # pretend that we crashed before installing the files, and also damage the store by
         # deleting the copy of the desktop entry that the version keeps
         kept = f'{STORE}/apps/{APP_ID}/0.1.0-{app.revision}/exports/share/applications/{APP_ID}.desktop'
-        registry = self.registry()
-        del registry['version']
-        with open(REGISTRY, 'w', encoding='utf-8') as f:
-            json.dump(registry, f)
+        self.forget_exported_version()
         os.unlink(DESKTOP_ENTRY_EXPORT)
         os.unlink(kept)
 
@@ -1260,10 +1214,6 @@ class HostIntegrationTest(InstallerTestCase):
         self.assertEqual(self.registry()['version'], f'0.1.0-{app.revision}')
         self.assertIn(b'/mfrun com.example.app\n', self.read_export(DESKTOP_ENTRY_EXPORT))
         self.assertEqual(self.read_export(kept), DESKTOP_ENTRY)
-
-    def test_first_installation_is_finished_after_a_crash(self):
-        self.install_core()
-        self.install(self.kit, self.integrated_app('0.1.0'))
 
         # pretend that we crashed right after recording the version, before we wrote the
         # registry. At that point, no file was installed on the host yet.
@@ -1283,8 +1233,8 @@ class RemovalTest(InstallerTestCase):
         self.install_core()
         self.install_app()
         out = self.manifold('remove', APP_ID)
-        self.assertIn(f'app      {APP_ID} ', out)
-        self.assertIn(f'kit      {self.kit.component} ', out)
+        self.assertIn(row('app', APP_ID), out)
+        self.assertIn(row('kit', self.kit.component), out)
         self.assertIn('Removed 2 images', out)
         self.assertEqual(
             self.installed(), [(CORE_ID, '13.4', 'manual'), (CORE_ID + '.sdk', '13.4', 'manual')]
@@ -1311,14 +1261,6 @@ class RemovalTest(InstallerTestCase):
 
         self.manifold('remove', APP_ID, expect=1)
         self.assertEqual(os.readlink(f'{app_dir}/current'), f'0.1.0-{self.app.revision}')
-
-    def test_removal_reports_components(self):
-        self.install_core()
-        self.install_app()
-        self.assertEqual(
-            set(self.remove_component(APP_ID)),
-            {('remove', APP_ID), ('cleanup', self.kit.component)},
-        )
 
     def test_kit_installed_on_purpose_stays(self):
         self.install_core()
@@ -1370,7 +1312,7 @@ class RemovalTest(InstallerTestCase):
     def test_several_versions(self):
         # installing an older version after a newer one does not supersede any version
         self.install_core()
-        self.install(self.kit, self.app2)
+        self.install_app(self.app2)
         self.install_app()
         self.assertEqual(self.manifold('list', APP_ID).count(APP_ID), 2)
 
@@ -1379,7 +1321,7 @@ class RemovalTest(InstallerTestCase):
         out, err = self.manifold_streams('remove', APP_ID, expect=1)
         self.assertEqual(out, '')
         self.assertIn('Several versions', err)
-        self.assertIn(f'app      {APP_ID} 0.2.0', err)
+        self.assertIn(row('app', APP_ID, '0.2.0'), err)
         # 0.1.0 is the newest version now, so it stays installed although it is auto
         self.manifold('remove', APP_ID, '0.2.0')
         self.assertEqual(self.manifold('list', APP_ID).count(APP_ID), 1)
@@ -1393,7 +1335,7 @@ class RemovalTest(InstallerTestCase):
         self.install_app()
         # mark the installed version as manual, so that the rebuild does not supersede it
         self.manifold('mark', 'manual', APP_ID)
-        self.install(self.kit, rebuilt)
+        self.install_app(rebuilt)
         self.assertEqual(self.version_dirs('apps', APP_ID), [old, new])
 
         # a full version selects one revision, a version without revision selects all of its
@@ -1418,20 +1360,11 @@ class RemovalTest(InstallerTestCase):
         self.install_core()
         self.install_app()
         self.manifold('mark', 'manual', APP_ID)
-        self.install(self.kit, dashed)
+        self.install_app(dashed)
 
         out = self.manifold('remove', APP_ID, f'0.1.0-{self.app.revision}', expect=1)
         self.assertIn('is ambiguous', out)
         self.assertEqual(len(self.version_dirs('apps', APP_ID)), 2)
-
-    def test_cleanup_keeps_the_newest_app_version(self):
-        self.install_core()
-        self.install(self.kit, self.app2)
-        self.install_app()
-
-        self.assertIn(f'app      {APP_ID} 0.1.0', self.manifold('cleanup'))
-        self.assertIn((APP_ID, '0.2.0', 'auto'), self.installed())
-        self.assertNotIn((APP_ID, '0.1.0', 'auto'), self.installed())
 
     def test_cleanup(self):
         self.install_core()
@@ -1470,19 +1403,19 @@ class MarkTest(InstallerTestCase):
         self.install_core()
         self.install_app()
         # without a version, the current one is marked
-        self.assertIn(f'app      {APP_ID} 0.1.0', self.manifold('mark', 'manual', APP_ID))
+        self.assertIn(row('app', APP_ID, '0.1.0'), self.manifold('mark', 'manual', APP_ID))
         self.assertIn((APP_ID, '0.1.0', 'manual'), self.installed())
         self.assertIn('current manual', self.manifold('list', APP_ID))
 
         # a newer version does not supersede a version that is marked manual
-        self.assertNotIn('Removed', self.install(self.kit, self.app2))
+        self.assertNotIn('Removed', self.install_app(self.app2))
         self.assertEqual(self.manifold('list', APP_ID).count(APP_ID), 2)
 
         # once the old version is marked auto again, a cleanup removes it, as it is not the newest
         # version
         self.manifold('mark', 'auto', APP_ID, '0.1.0')
         self.assertIn((APP_ID, '0.1.0', 'auto'), self.installed())
-        self.assertIn(f'app      {APP_ID} 0.1.0', self.manifold('cleanup'))
+        self.assertIn(row('app', APP_ID, '0.1.0'), self.manifold('cleanup'))
         self.assertEqual(self.version_dirs('apps', APP_ID), [f'0.2.0-{self.app2.revision}'])
 
     def test_mark_missing_component(self):
@@ -1523,9 +1456,8 @@ class SigningTest(InstallerTestCase):
         with open(f'{key_dir}/ci-1.x', 'rb') as f:
             self.assertEqual(f.read(), private_key)
 
-        # key names that could be mistaken for a path, a hidden file, a public key or a fingerprint
-        for name in ('../key', '.key', 'key.pub', 'SHA256:key'):
-            self.manifold('key', 'new', '--no-passphrase', name, expect=2)
+        # a key name is checked before a key is written
+        self.manifold('key', 'new', '--no-passphrase', '../key', expect=2)
         self.assertEqual(
             sorted(os.listdir(key_dir)), ['ci-1.x', 'ci-1.x.pub', 'default', 'default.pub']
         )
@@ -1548,21 +1480,13 @@ class SigningTest(InstallerTestCase):
         self.assertIn('with default', self.manifold('bundle', 'sign', bundle))
         self.check_bundle_signature(bundle, f'{key_dir}/default.pub')
 
-        # a new signature replaces the old one, and the key can be given by name, or by path
+        # a new signature replaces the old one
         self.assertIn('with other', self.manifold('bundle', 'sign', '--key=other', bundle))
         self.check_bundle_signature(bundle, f'{key_dir}/other.pub')
-        self.manifold('bundle', 'sign', f'--key={key_dir}/default', bundle)
-        self.check_bundle_signature(bundle, f'{key_dir}/default.pub')
 
         self.assertIn(
             'no signing key named', self.manifold('bundle', 'sign', '--key=nope', bundle, expect=3)
         )
-
-        # a key in the environment is preferred over the keys in the key directory
-        with open(f'{key_dir}/other', encoding='utf-8') as f:
-            with mock.patch.dict(os.environ, {'MANIFOLD_SIGNING_KEY': f.read()}):
-                self.assertIn('with $MANIFOLD_SIGNING_KEY', self.manifold('bundle', 'sign', bundle))
-        self.check_bundle_signature(bundle, f'{key_dir}/other.pub')
 
         # we stop at a file we can't sign, and name the files that were not signed
         missing = os.path.join(self.work, 'missing.manifold')

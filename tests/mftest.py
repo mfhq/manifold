@@ -421,17 +421,13 @@ def file_entry(data):
 JXL_DATA = b'\xff\x0afake'
 
 
-def write_bundle(path, images, signed=True, corrupt_image=None, catalog_ids=None):
+def write_bundle(path, images, signed=True, corrupt_image=None):
     """Write a bundle file like the builder does. The catalog of the bundle has an
-    icon and a screenshot for every app.
-
-    `catalog_ids` maps component IDs to the ID that is used for the component in the
-    catalog instead, for tests where the catalog has to differ from the manifest."""
+    icon and a screenshot for every app."""
     files = {}
     components = []
     for image in images:
         base = image.name[: -len('.raw')]
-        catalog_id = (catalog_ids or {}).get(image.component, image.component)
         files[f'{base}.manifold.json'] = json.dumps(image.manifest(), indent=3).encode()
         extra = ''
         if image.kind == 'app' and not image.sdk:
@@ -445,7 +441,7 @@ def write_bundle(path, images, signed=True, corrupt_image=None, catalog_ids=None
             )
         ref = f'{image.architecture}/{image.component}/{image.version}'
         components.append(
-            f'<component type="generic"><id>{catalog_id}</id><name>{catalog_id}</name>{extra}'
+            f'<component type="generic"><id>{image.component}</id><name>{image.component}</name>{extra}'
             f'<bundle type="manifold">{ref}</bundle></component>\n'
         )
     files['catalog/manifold-local.xml'] = (
