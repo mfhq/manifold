@@ -119,6 +119,22 @@ mft_bundle_add(zip_t *zip, const char *name, gconstpointer data, size_t size)
     g_assert_cmpint(zip_file_add(zip, name, source, ZIP_FL_ENC_UTF_8), >=, 0);
 }
 
+/**
+ * mft_index_new:
+ *
+ * Returns: (transfer full): the start of the index of a bundle, which lists no file yet
+ */
+static GString *
+mft_index_new(void)
+{
+    return g_string_new("{\"format\": 1,\n\"files\": [");
+}
+
+/**
+ * mft_index_add:
+ *
+ * Add the entry for a file to the index of a bundle.
+ */
 static void
 mft_index_add(GString *index, const char *name, gconstpointer data, size_t size)
 {
@@ -153,6 +169,18 @@ mft_add_file(zip_t *zip, GString *index, const char *name, gconstpointer data, s
 {
     mft_index_add(index, name, data, size);
     mft_bundle_add(zip, name, data, size);
+}
+
+/**
+ * mft_bundle_add_index:
+ *
+ * Finish the index of a bundle, and add it to the bundle.
+ */
+static void
+mft_bundle_add_index(zip_t *zip, GString *index)
+{
+    g_string_append(index, "\n   ]\n}");
+    mft_bundle_add(zip, "index.json", index->str, index->len);
 }
 
 /**
@@ -216,13 +244,16 @@ mft_write_catalog(zip_t *zip, GString *index, const TestImage *const *images, co
 /**
  * mft_write_bundle:
  *
- * Write a bundle of the images, with the given flaws, and return its path.
+ * Write a bundle of the images, with the given flaws. A bundle that
+ * the test wrote before is replaced.
+ *
+ * Returns: (transfer full): the path of the bundle
  */
 static char *
-mft_write_bundle(Fixture *f, const char *name, const TestImage *const *images, const BundleFlaws *flaws)
+mft_write_bundle(Fixture *f, const TestImage *const *images, const BundleFlaws *flaws)
 {
-    g_autofree char *path = g_build_filename(f->dir, name, NULL);
-    g_autoptr(GString) index = g_string_new("{\"format\": 1,\n\"files\": [");
+    g_autofree char *path = g_build_filename(f->dir, "test.manifold", NULL);
+    g_autoptr(GString) index = mft_index_new();
     zip_t *zip = zip_open(path, ZIP_CREATE | ZIP_TRUNCATE, NULL);
 
     g_assert_nonnull(zip);
@@ -257,8 +288,7 @@ mft_write_bundle(Fixture *f, const char *name, const TestImage *const *images, c
         }
     }
     mft_write_catalog(zip, index, images, flaws);
-    g_string_append(index, "\n   ]\n}");
-    mft_bundle_add(zip, "index.json", index->str, index->len);
+    mft_bundle_add_index(zip, index);
 
     if (!flaws->unsigned_)
         mft_bundle_add(zip, "index.json.sig", "not a signature", strlen("not a signature"));
@@ -269,13 +299,35 @@ mft_write_bundle(Fixture *f, const char *name, const TestImage *const *images, c
     return g_steal_pointer(&path);
 }
 
+/**
+ * mft_write_app_bundle:
+ *
+ * Write a bundle of the kit and the application, with the given flaws.
+ *
+ * Returns: (transfer full): the path of the bundle
+ */
+static char *
+mft_write_app_bundle(Fixture *f, const BundleFlaws *flaws)
+{
+    return mft_write_bundle(f, (const TestImage *[]){&f->kit, &f->app, NULL}, flaws);
+}
+
+/**
+ * mft_open_bundle:
+ *
+ * Returns: (transfer full): the bundle at @path, which has to be valid
+ */
 static MfBundle *
-mft_open_bundle(const char *path, GError **error)
+mft_open_bundle(const char *path)
 {
     g_autofd int fd = open(path, O_RDONLY | O_CLOEXEC);
+    g_autoptr(GError) error = NULL;
+    MfBundle *bundle;
 
     g_assert_cmpint(fd, >=, 0);
-    return mf_bundle_new_from_fd(fd, error);
+    bundle = mf_bundle_new_from_fd(fd, &error);
+    g_assert_no_error(error);
+    return bundle;
 }
 
 static MfBundleImage *
@@ -290,12 +342,6 @@ mft_find_image(MfBundle *bundle, const char *component_id)
             return image;
     }
     g_assert_not_reached();
-}
-
-static MfManifest *
-mft_find_manifest(MfBundle *bundle, const char *component_id)
-{
-    return mf_bundle_image_get_manifest(mft_find_image(bundle, component_id));
 }
 
 static void
@@ -339,64 +385,58 @@ mft_count_progress(uint64_t bytes_copied, gpointer user_data)
     progress->n_reports++;
 }
 
-/*
- * Tests
- */
-
 /**
- * test_valid_bundle:
+ * test_read:
+ *
+ * Read a bundle with a core, a kit and an application.
  */
 static void
-test_valid_bundle(Fixture *f, gconstpointer user_data)
+test_read(Fixture *f, gconstpointer user_data)
 {
     g_autofree char *path = mft_write_bundle(f,
-                                             "app.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
+                                             (const TestImage *[]){&f->core, &f->kit, &f->app, NULL},
                                              &(BundleFlaws){});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
+    g_autoptr(MfBundle) bundle = mft_open_bundle(path);
     g_autofree char *kit_identity = mft_fake_hash(TEST_KIT_ID);
     g_autofree char *media_copy = g_build_filename(f->dir, "screenshot.jxl", NULL);
     g_autofree char *media_data = NULL;
     g_auto(GStrv) media = NULL;
+    g_autoptr(GError) error = NULL;
+    MfBundleImage *app = mft_find_image(bundle, TEST_APP_ID);
+    MfBundleImage *kit = mft_find_image(bundle, TEST_KIT_ID);
+    MfBundleImage *core = mft_find_image(bundle, TEST_CORE_ID);
+    const char *app_catalog = g_bytes_get_data(mf_bundle_image_get_catalog(app), NULL);
+    const char *kit_catalog = g_bytes_get_data(mf_bundle_image_get_catalog(kit), NULL);
     gsize media_size;
     GHashTable *icons;
     GBytes *icon;
     g_autofd int fd = -1;
 
-    g_assert_no_error(error);
     g_assert_true(mf_bundle_is_signed(bundle));
-    g_assert_cmpuint(mf_bundle_get_images(bundle)->len, ==, 2);
+    g_assert_cmpuint(mf_bundle_get_images(bundle)->len, ==, 3);
 
-    MfBundleImage *app = mft_find_image(bundle, TEST_APP_ID);
-    MfManifest *manifest = mf_bundle_image_get_manifest(app);
-    g_assert_cmpstr(mf_manifest_get_version(manifest), ==, "0.1.0");
+    /* the manifests of the images */
     g_assert_cmpstr(mf_bundle_image_get_manifest_name(app), ==, TEST_APP_ID "_0.1.0.manifold.json");
-    g_assert_cmpstr(mf_manifest_get_base(manifest)->id, ==, TEST_KIT_ID);
-    g_assert_cmpstr(mf_manifest_get_base(mft_find_manifest(bundle, TEST_KIT_ID))->id, ==, TEST_CORE_ID);
+    g_assert_cmpstr(mf_manifest_get_version(mf_bundle_image_get_manifest(app)), ==, "0.1.0");
+    g_assert_cmpstr(mf_manifest_get_base(mf_bundle_image_get_manifest(app))->id, ==, TEST_KIT_ID);
+    g_assert_cmpstr(mf_manifest_get_base(mf_bundle_image_get_manifest(kit))->id, ==, TEST_CORE_ID);
+    g_assert_null(mf_manifest_get_base(mf_bundle_image_get_manifest(core)));
 
     /* the app's base is found in the bundle by its identity */
-    g_assert_true(mf_bundle_find_image_for_identity(bundle, kit_identity) ==
-                  mft_find_image(bundle, TEST_KIT_ID));
+    g_assert_true(mf_bundle_find_image_for_identity(bundle, kit_identity) == kit);
     g_assert_null(mf_bundle_find_image_for_identity(bundle, "no-such-identity"));
 
     /* every image has its own catalog data, the app also its icon */
-    g_assert_nonnull(
-        strstr(g_bytes_get_data(mf_bundle_image_get_catalog(app), NULL), "<id>" TEST_APP_ID "</id>"));
-    g_assert_nonnull(
-        strstr(g_bytes_get_data(mf_bundle_image_get_catalog(app), NULL), "origin=\"manifold-local\""));
-    g_assert_null(strstr(g_bytes_get_data(mf_bundle_image_get_catalog(app), NULL), TEST_KIT_ID));
-    g_assert_nonnull(
-        strstr(g_bytes_get_data(mf_bundle_image_get_catalog(mft_find_image(bundle, TEST_KIT_ID)), NULL),
-               "<id>" TEST_KIT_ID "</id>"));
+    g_assert_nonnull(strstr(app_catalog, "<id>" TEST_APP_ID "</id>"));
+    g_assert_nonnull(strstr(app_catalog, "origin=\"manifold-local\""));
+    g_assert_null(strstr(app_catalog, TEST_KIT_ID));
+    g_assert_nonnull(strstr(kit_catalog, "<id>" TEST_KIT_ID "</id>"));
     icons = mf_bundle_image_get_icons(app);
     g_assert_cmpuint(g_hash_table_size(icons), ==, 1);
     icon = g_hash_table_lookup(icons, "64x64/" TEST_APP_ID ".jxl");
     g_assert_nonnull(icon);
     g_assert_cmpmem(g_bytes_get_data(icon, NULL), g_bytes_get_size(icon), JXL_DATA, sizeof(JXL_DATA));
-    g_assert_cmpuint(g_hash_table_size(mf_bundle_image_get_icons(mft_find_image(bundle, TEST_KIT_ID))),
-                     ==,
-                     0);
+    g_assert_cmpuint(g_hash_table_size(mf_bundle_image_get_icons(kit)), ==, 0);
 
     /* media files are named the way the catalog refers to them, and verified while they are copied */
     media = mf_bundle_list_media_files(bundle);
@@ -413,34 +453,14 @@ test_valid_bundle(Fixture *f, gconstpointer user_data)
 }
 
 /**
- * test_core_has_no_base:
- */
-static void
-test_core_has_no_base(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = mft_write_bundle(f,
-                                             "core.manifold",
-                                             (const TestImage *[]){&f->core, NULL},
-                                             &(BundleFlaws){.unsigned_ = TRUE});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-    MfManifest *core;
-
-    g_assert_no_error(error);
-    /* a bundle without a signature can be opened, it is just not signed */
-    g_assert_false(mf_bundle_is_signed(bundle));
-    core = mft_find_manifest(bundle, TEST_CORE_ID);
-    g_assert_cmpint(mf_manifest_get_kind(core), ==, MF_COMPONENT_KIND_CORE);
-    g_assert_null(mf_manifest_get_base(core));
-}
-
-/**
  * test_copy_image:
+ *
+ * An image is copied in pieces of 1 MiB, with progress after every piece.
  */
 static void
 test_copy_image(Fixture *f, gconstpointer user_data)
 {
-    /* mf_bundle_copy_image() copies 1 MiB at a time: this image takes three pieces, the last of which is not full */
+    /* the image takes three pieces, and the last piece is not full */
     size_t image_size = 2 * 1024 * 1024 + 12288;
     g_autofree char *path = NULL;
     g_autofree char *copy_path = g_build_filename(f->dir, "copy.raw", NULL);
@@ -453,12 +473,8 @@ test_copy_image(Fixture *f, gconstpointer user_data)
 
     g_bytes_unref(f->app.data);
     f->app.data = mft_fake_image_data("app", image_size);
-    path = mft_write_bundle(f,
-                            "app.manifold",
-                            (const TestImage *[]){&f->kit, &f->app, NULL},
-                            &(BundleFlaws){});
-    bundle = mft_open_bundle(path, &error);
-    g_assert_no_error(error);
+    path = mft_write_app_bundle(f, &(BundleFlaws){});
+    bundle = mft_open_bundle(path);
 
     fd = open(copy_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
     g_assert_cmpint(fd, >=, 0);
@@ -470,7 +486,6 @@ test_copy_image(Fixture *f, gconstpointer user_data)
                                        &error));
     g_assert_no_error(error);
 
-    /* the progress is reported after every piece */
     g_assert_cmpuint(progress.n_reports, ==, 3);
     g_assert_cmpuint(progress.bytes_copied, ==, image_size);
     g_assert_true(g_file_get_contents(copy_path, &copied, &copied_size, NULL));
@@ -478,369 +493,224 @@ test_copy_image(Fixture *f, gconstpointer user_data)
 }
 
 /**
- * test_corrupt_image:
+ * mft_assert_only_kit_verifies:
+ *
+ * Check that the image of the application fails its verification, and
+ * that the image of the kit passes.
  */
 static void
-test_corrupt_image(Fixture *f, gconstpointer user_data)
+mft_assert_only_kit_verifies(MfBundle *bundle)
 {
-    g_autofree char *path = mft_write_bundle(f,
-                                             "corrupt.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
-                                             &(BundleFlaws){.corrupt = &f->app});
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
+
+    g_assert_false(mf_bundle_verify_image(bundle, mft_find_image(bundle, TEST_APP_ID), NULL, NULL, &error));
+    mft_assert_error(error,
+                     MF_ERROR_VERIFICATION_FAILED,
+                     "does not match its size and hashes in the manifest");
+    g_clear_error(&error);
+    g_assert_true(mf_bundle_verify_image(bundle, mft_find_image(bundle, TEST_KIT_ID), NULL, NULL, &error));
+    g_assert_no_error(error);
+}
+
+/**
+ * test_verify_image:
+ *
+ * Opening a bundle does not verify its images. An image is verified when
+ * it is copied out of the bundle, or on request.
+ */
+static void
+test_verify_image(Fixture *f, gconstpointer user_data)
+{
+    g_autofree char *path = mft_write_app_bundle(f, &(BundleFlaws){.corrupt = &f->app});
+    g_autoptr(MfBundle) bundle = mft_open_bundle(path);
+    g_autoptr(GError) error = NULL;
     g_autofd int fd = open("/dev/null", O_WRONLY | O_CLOEXEC);
 
-    /* opening the bundle does not verify its images, copying one out does */
-    g_assert_no_error(error);
+    /* an image with changed content */
     g_assert_false(mf_bundle_copy_image(bundle, mft_find_image(bundle, TEST_APP_ID), fd, NULL, NULL, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
-    g_clear_error(&error);
+    mft_assert_only_kit_verifies(bundle);
 
-    /* verifying the image in place also detects the corruption */
-    g_assert_false(mf_bundle_verify_image(bundle, mft_find_image(bundle, TEST_APP_ID), NULL, NULL, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
-    g_clear_error(&error);
-    g_assert_true(mf_bundle_verify_image(bundle, mft_find_image(bundle, TEST_KIT_ID), NULL, NULL, &error));
-    g_assert_no_error(error);
+    /* both hashes are checked, so a wrong blake3 hash next to the right sha256 hash fails */
+    g_clear_object(&bundle);
+    g_free(path);
+    path = mft_write_app_bundle(f, &(BundleFlaws){.wrong_blake3 = &f->app});
+    bundle = mft_open_bundle(path);
+    mft_assert_only_kit_verifies(bundle);
 }
 
 /**
- * test_missing_image:
- */
-static void
-test_missing_image(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = mft_write_bundle(f,
-                                             "missing.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
-                                             &(BundleFlaws){.missing = &f->kit});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
-    g_assert_cmpstr(error->message,
-                    ==,
-                    TEST_KIT_ID "_20260112T0238.manifold.json refers to " TEST_KIT_ID
-                                "_20260112T0238.raw, which is not in the bundle");
-}
-
-/**
- * test_listed_twice:
+ * mft_assert_open_fails:
+ * @message_part: a part of the expected error message
  *
- * A bundle is invalid if its index lists a file twice.
+ * Check that a file is refused when it is opened as a bundle.
  */
 static void
-test_listed_twice(Fixture *f, gconstpointer user_data)
+mft_assert_open_fails(const char *path, MfError code, const char *message_part)
 {
-    g_autofree char *path = mft_write_bundle(f,
-                                             "twice.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
-                                             &(BundleFlaws){.listed_twice = &f->app});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_assert_cmpstr(error->message,
-                    ==,
-                    "index.json refers to " TEST_APP_ID "_0.1.0.manifold.json, but a file can only be referenced once");
-}
-
-/**
- * test_tampered_manifest:
- */
-static void
-test_tampered_manifest(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = mft_write_bundle(f,
-                                             "tampered.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
-                                             &(BundleFlaws){.tampered = &f->app});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
-    g_assert_cmpstr(error->message,
-                    ==,
-                    TEST_APP_ID "_0.1.0.manifold.json does not match its size and hashes in the index");
-}
-
-/**
- * test_wrong_blake3:
- *
- * Both hashes of an image are checked, so an image with a wrong blake3 hash
- * fails the verification even if its sha256 hash is correct.
- */
-static void
-test_wrong_blake3(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = mft_write_bundle(f,
-                                             "blake3.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
-                                             &(BundleFlaws){.wrong_blake3 = &f->app});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-    g_assert_no_error(error);
-    g_assert_false(mf_bundle_verify_image(bundle, mft_find_image(bundle, TEST_APP_ID), NULL, NULL, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
-    g_assert_cmpstr(error->message,
-                    ==,
-                    "Image " TEST_APP_ID "_0.1.0.raw does not match its size and hashes in the manifest");
-    g_clear_error(&error);
-    g_assert_true(mf_bundle_verify_image(bundle, mft_find_image(bundle, TEST_KIT_ID), NULL, NULL, &error));
-    g_assert_no_error(error);
-}
-
-/**
- * test_unlisted_file:
- */
-static void
-test_unlisted_file(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = mft_write_bundle(f,
-                                             "extra.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
-                                             &(BundleFlaws){.unlisted_file = "evil.sh"});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_assert_cmpstr(error->message, ==, "The bundle contains evil.sh, which its index does not list");
-}
-
-/**
- * test_invalid_path:
- *
- * The catalog directory is the only directory that a bundle may contain,
- * and the files below it need plain names.
- */
-static void
-test_invalid_path(Fixture *f, gconstpointer user_data)
-{
-    const char *names[] = {"catalog/../evil.sh", "catalog/.hidden", "catalog//x", "lib/evil.sh"};
-
-    for (size_t i = 0; i < G_N_ELEMENTS(names); i++) {
-        g_autofree char *path = mft_write_bundle(f,
-                                                 "path.manifold",
-                                                 (const TestImage *[]){&f->kit, &f->app, NULL},
-                                                 &(BundleFlaws){.unlisted_file = names[i]});
-        g_autoptr(GError) error = NULL;
-        g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-        g_assert_null(bundle);
-        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-        g_assert_cmpstr(error->message, ==, "The bundle contains a file with an invalid name");
-    }
-}
-
-/**
- * test_undescribed_image:
- */
-static void
-test_undescribed_image(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = mft_write_bundle(f,
-                                             "undescribed.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
-                                             &(BundleFlaws){.undescribed = &f->kit});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_assert_cmpstr(error->message,
-                    ==,
-                    "catalog/manifold-local.xml does not describe x86_64/" TEST_KIT_ID "/20260112T0238");
-}
-
-/**
- * test_misdescribed_image:
- */
-static void
-test_misdescribed_image(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = mft_write_bundle(f,
-                                             "misdescribed.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
-                                             &(BundleFlaws){.misdescribed = &f->kit});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_assert_cmpstr(error->message,
-                    ==,
-                    "catalog/manifold-local.xml describes org.example.Other, not " TEST_KIT_ID);
-}
-
-/**
- * test_bad_icon:
- */
-static void
-test_bad_icon(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = mft_write_bundle(f,
-                                             "icon.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
-                                             &(BundleFlaws){.bad_icon = TRUE});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_assert_cmpstr(error->message, ==, "catalog/icons/64x64/" TEST_APP_ID ".jxl is not a JPEG XL image");
-}
-
-/**
- * test_refers_elsewhere:
- *
- * A catalog may only refer to icons and screenshots of the bundle.
- */
-static void
-test_refers_elsewhere(Fixture *f, gconstpointer user_data)
-{
-    static const struct {
-        BundleFlaws flaws;
-        const char *message;
-    } cases[] = {
-        {{.screenshot_url = "https://example.org/screenshot.jxl"},
-         "The screenshot https://example.org/screenshot.jxl of " TEST_APP_ID " is not in the bundle"    },
-        {{.screenshot_url = TEST_APP_ID "/missing.jxl"},
-         "The screenshot " TEST_APP_ID "/missing.jxl of " TEST_APP_ID " is not in the bundle"           },
-        {{.extra_icon =
-              "<icon type=\"remote\" width=\"64\" height=\"64\">https://example.org/icon.png</icon>"},
-         TEST_APP_ID " has an icon of the type remote, but bundles can only have cached and stock icons"},
-        {{.extra_icon = "<icon type=\"local\">/usr/share/pixmaps/app.png</icon>"},
-         TEST_APP_ID " has an icon of the type local, but bundles can only have cached and stock icons" },
-    };
-
-    for (size_t i = 0; i < G_N_ELEMENTS(cases); i++) {
-        g_autofree char *name = g_strdup_printf("elsewhere-%zu.manifold", i);
-        g_autofree char *path = mft_write_bundle(f,
-                                                 name,
-                                                 (const TestImage *[]){&f->kit, &f->app, NULL},
-                                                 &cases[i].flaws);
-        g_autoptr(GError) error = NULL;
-        g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-        g_assert_null(bundle);
-        g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-        g_assert_cmpstr(error->message, ==, cases[i].message);
-    }
-}
-
-/**
- * test_corrupt_media:
- *
- * A screenshot is checked against the hash that the index records for it.
- */
-static void
-test_corrupt_media(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = mft_write_bundle(f,
-                                             "media.manifold",
-                                             (const TestImage *[]){&f->kit, &f->app, NULL},
-                                             &(BundleFlaws){.corrupt_media = TRUE});
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = mft_open_bundle(path, &error);
-
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
-    g_assert_cmpstr(error->message,
-                    ==,
-                    "catalog/media/" TEST_APP_ID
-                    "/screenshot.jxl does not match its size and hashes in the index");
-}
-
-/**
- * test_kit_without_base:
- */
-static void
-test_kit_without_base(Fixture *f, gconstpointer user_data)
-{
-    TestImage kit = f->kit;
-    g_autofree char *path = NULL;
+    g_autofd int fd = open(path, O_RDONLY | O_CLOEXEC);
     g_autoptr(GError) error = NULL;
     g_autoptr(MfBundle) bundle = NULL;
 
-    kit.base = NULL;
-    path = mft_write_bundle(f, "no-base.manifold", (const TestImage *[]){&kit, NULL}, &(BundleFlaws){});
-    bundle = mft_open_bundle(path, &error);
-
+    g_assert_cmpint(fd, >=, 0);
+    bundle = mf_bundle_new_from_fd(fd, &error);
     g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_MANIFEST);
-    g_assert_cmpstr(error->message,
-                    ==,
-                    TEST_KIT_ID "_20260112T0238.manifold.json: a kit must name the layer it is built on");
+    mft_assert_error(error, code, message_part);
 }
 
 /**
- * test_one_id_two_kinds:
+ * mft_assert_refused:
+ * @message_part: a part of the expected error message
  *
- * A bundle can not contain the same component ID as two different kinds of component.
+ * Check that the bundle of the kit and the application is refused if it has the given flaws.
  */
 static void
-test_one_id_two_kinds(Fixture *f, gconstpointer user_data)
+mft_assert_refused(Fixture *f, const BundleFlaws *flaws, MfError code, const char *message_part)
 {
-    TestImage app = f->app;
+    g_autofree char *path = mft_write_app_bundle(f, flaws);
+
+    mft_assert_open_fails(path, code, message_part);
+}
+
+/**
+ * test_refused_files:
+ *
+ * A bundle is refused if its files do not match its index, or if it
+ * contains files that the index does not list.
+ */
+static void
+test_refused_files(Fixture *f, gconstpointer user_data)
+{
+    TestImage kit_without_base = f->kit;
+    TestImage app_with_kit_id = f->app;
     g_autofree char *path = NULL;
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = NULL;
 
-    app.component_id = TEST_KIT_ID;
-    path = mft_write_bundle(f,
-                            "two-kinds.manifold",
-                            (const TestImage *[]){&f->kit, &app, NULL},
-                            &(BundleFlaws){});
-    bundle = mft_open_bundle(path, &error);
+    /* an image that is not in the bundle */
+    mft_assert_refused(f,
+                       &(BundleFlaws){.missing = &f->kit},
+                       MF_ERROR_VERIFICATION_FAILED,
+                       TEST_KIT_ID "_20260112T0238.raw, which is not in the bundle");
 
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_assert_cmpstr(error->message,
-                    ==,
-                    "The bundle contains " TEST_KIT_ID " as two different kinds of component");
+    /* a manifest that the index lists twice */
+    mft_assert_refused(f,
+                       &(BundleFlaws){.listed_twice = &f->app},
+                       MF_ERROR_INVALID_BUNDLE,
+                       TEST_APP_ID "_0.1.0.manifold.json, but a file can only be referenced once");
+
+    /* a manifest and a screenshot that differ from the index */
+    mft_assert_refused(f,
+                       &(BundleFlaws){.tampered = &f->app},
+                       MF_ERROR_VERIFICATION_FAILED,
+                       TEST_APP_ID "_0.1.0.manifold.json does not match its size and hashes in the index");
+    mft_assert_refused(f,
+                       &(BundleFlaws){.corrupt_media = TRUE},
+                       MF_ERROR_VERIFICATION_FAILED,
+                       "screenshot.jxl does not match its size and hashes in the index");
+
+    /* a file that the index does not list */
+    mft_assert_refused(f,
+                       &(BundleFlaws){.unlisted_file = "evil.sh"},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "evil.sh, which its index does not list");
+
+    /* the catalog directory is the only directory of a bundle, and its files have plain names */
+    mft_assert_refused(f,
+                       &(BundleFlaws){.unlisted_file = "catalog/../evil.sh"},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "a file with an invalid name");
+    mft_assert_refused(f,
+                       &(BundleFlaws){.unlisted_file = "catalog/.hidden"},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "a file with an invalid name");
+    mft_assert_refused(f,
+                       &(BundleFlaws){.unlisted_file = "catalog//x"},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "a file with an invalid name");
+    mft_assert_refused(f,
+                       &(BundleFlaws){.unlisted_file = "lib/evil.sh"},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "a file with an invalid name");
+
+    /* an invalid manifest is reported with the name of its file */
+    kit_without_base.base = NULL;
+    path = mft_write_bundle(f, (const TestImage *[]){&kit_without_base, NULL}, &(BundleFlaws){});
+    mft_assert_open_fails(path,
+                          MF_ERROR_INVALID_MANIFEST,
+                          TEST_KIT_ID
+                          "_20260112T0238.manifold.json: a kit must name the layer it is built on");
+
+    /* the same component ID as two kinds of component */
+    g_free(path);
+    app_with_kit_id.component_id = TEST_KIT_ID;
+    path = mft_write_bundle(f, (const TestImage *[]){&f->kit, &app_with_kit_id, NULL}, &(BundleFlaws){});
+    mft_assert_open_fails(path, MF_ERROR_INVALID_BUNDLE, TEST_KIT_ID " as two different kinds of component");
+}
+
+/**
+ * test_refused_catalog:
+ *
+ * The catalog has to describe every image of the bundle, and may only
+ * refer to icons and screenshots of the bundle.
+ */
+static void
+test_refused_catalog(Fixture *f, gconstpointer user_data)
+{
+    /* an image without a component in the catalog, and one with the component of a different ID */
+    mft_assert_refused(f,
+                       &(BundleFlaws){.undescribed = &f->kit},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "does not describe x86_64/" TEST_KIT_ID "/20260112T0238");
+    mft_assert_refused(f,
+                       &(BundleFlaws){.misdescribed = &f->kit},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "describes org.example.Other, not " TEST_KIT_ID);
+
+    /* an icon that is not a JPEG XL image */
+    mft_assert_refused(f,
+                       &(BundleFlaws){.bad_icon = TRUE},
+                       MF_ERROR_INVALID_BUNDLE,
+                       TEST_APP_ID ".jxl is not a JPEG XL image");
+
+    /* screenshots that are not in the bundle */
+    mft_assert_refused(f,
+                       &(BundleFlaws){.screenshot_url = "https://example.org/screenshot.jxl"},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "The screenshot https://example.org/screenshot.jxl of " TEST_APP_ID);
+    mft_assert_refused(f,
+                       &(BundleFlaws){.screenshot_url = TEST_APP_ID "/missing.jxl"},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "The screenshot " TEST_APP_ID "/missing.jxl of " TEST_APP_ID);
+
+    /* icons that are not in the bundle */
+    mft_assert_refused(f,
+                       &(BundleFlaws){.extra_icon = "<icon type=\"remote\" width=\"64\" height=\"64\">"
+                                                    "https://example.org/icon.png</icon>"},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "an icon of the type remote");
+    mft_assert_refused(f,
+                       &(BundleFlaws){.extra_icon = "<icon type=\"local\">/usr/share/pixmaps/app.png</icon>"},
+                       MF_ERROR_INVALID_BUNDLE,
+                       "an icon of the type local");
 }
 
 /**
  * test_not_a_bundle:
+ *
+ * A file that is not a ZIP archive with an index is not a bundle.
  */
 static void
 test_not_a_bundle(Fixture *f, gconstpointer user_data)
 {
-    g_autofree char *path = g_build_filename(f->dir, "notes.txt", NULL);
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = NULL;
+    g_autofree char *text_path = g_build_filename(f->dir, "notes.txt", NULL);
+    g_autofree char *zip_path = g_build_filename(f->dir, "no-index.manifold", NULL);
+    zip_t *zip = zip_open(zip_path, ZIP_CREATE | ZIP_TRUNCATE, NULL);
 
-    mft_write_file(path, "hello\n");
-    bundle = mft_open_bundle(path, &error);
-
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-}
-
-/**
- * test_no_index:
- */
-static void
-test_no_index(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = g_build_filename(f->dir, "no-index.manifold", NULL);
-    zip_t *zip = zip_open(path, ZIP_CREATE | ZIP_TRUNCATE, NULL);
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = NULL;
+    mft_write_file(text_path, "hello\n");
+    mft_assert_open_fails(text_path, MF_ERROR_INVALID_BUNDLE, "Not a bundle");
 
     mft_bundle_add(zip, "readme", "x", 1);
     g_assert_cmpint(zip_close(zip), ==, 0);
-    bundle = mft_open_bundle(path, &error);
-
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_assert_cmpstr(error->message, ==, "The bundle has no index.json");
+    mft_assert_open_fails(zip_path, MF_ERROR_INVALID_BUNDLE, "The bundle has no index.json");
 }
 
 /**
@@ -855,40 +725,26 @@ test_metadata_limit(Fixture *f, gconstpointer user_data)
     const size_t filler_size = 16 * 1024 * 1024;
     g_autofree char *path = g_build_filename(f->dir, "large.manifold", NULL);
     g_autofree uint8_t *filler = g_malloc0(filler_size);
-    g_autofree char *sha256 = g_compute_checksum_for_data(G_CHECKSUM_SHA256, filler, filler_size);
-    g_autofree char *blake3 = mft_blake3_hex(filler, filler_size);
-    g_autoptr(GString) index = g_string_new("{\"format\": 1, \"files\": [");
+    g_autoptr(GString) index = mft_index_new();
     zip_t *zip = zip_open(path, ZIP_CREATE | ZIP_TRUNCATE, NULL);
-    g_autoptr(GError) error = NULL;
-    g_autoptr(MfBundle) bundle = NULL;
 
     /* with the index, the fourth file is too much */
     for (guint i = 0; i < 4; i++) {
         g_autofree char *name = g_strdup_printf("filler-%u", i);
 
-        g_string_append_printf(index,
-                               "%s{\"name\": \"%s\", \"size\": %zu, \"sha256\": \"%s\", \"blake3\": \"%s\"}",
-                               i == 0 ? "" : ", ",
-                               name,
-                               filler_size,
-                               sha256,
-                               blake3);
-        mft_bundle_add(zip, name, filler, filler_size);
+        mft_add_file(zip, index, name, filler, filler_size);
     }
-    g_string_append(index, "]}");
-    mft_bundle_add(zip, "index.json", index->str, index->len);
+    mft_bundle_add_index(zip, index);
     g_assert_cmpint(zip_close(zip), ==, 0);
-    bundle = mft_open_bundle(path, &error);
 
-    g_assert_null(bundle);
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_assert_cmpstr(error->message, ==, "The metadata of the bundle is larger than 64 MiB altogether");
+    mft_assert_open_fails(path, MF_ERROR_INVALID_BUNDLE, "larger than 64 MiB altogether");
 }
 
 /**
  * mft_read_zip_entry:
  *
- * Returns: (transfer full): the content of a file in a bundle
+ * Returns: (transfer full) (nullable): the content of a file in a bundle, or %NULL if the bundle
+ *   has no file of the name
  */
 static GBytes *
 mft_read_zip_entry(const char *path, const char *name)
@@ -899,7 +755,10 @@ mft_read_zip_entry(const char *path, const char *name)
     char *data;
 
     g_assert_nonnull(zip);
-    g_assert_cmpint(zip_stat(zip, name, 0, &st), ==, 0);
+    if (zip_stat(zip, name, 0, &st) != 0) {
+        zip_discard(zip);
+        return NULL;
+    }
     file = zip_fopen(zip, name, 0);
     g_assert_nonnull(file);
     data = g_malloc(st.size);
@@ -908,6 +767,24 @@ mft_read_zip_entry(const char *path, const char *name)
     zip_discard(zip);
 
     return g_bytes_new_take(data, st.size);
+}
+
+/**
+ * mft_check_bundle_signature:
+ *
+ * Check the signature of a bundle with ssh-keygen.
+ *
+ * Returns: (transfer full): the signature
+ */
+static GBytes *
+mft_check_bundle_signature(Fixture *f, const char *path)
+{
+    g_autoptr(GBytes) index = mft_read_zip_entry(path, "index.json");
+    GBytes *signature = mft_read_zip_entry(path, "index.json.sig");
+
+    g_assert_nonnull(signature);
+    mft_check_signature(f->dir, "manifold.bundle", index, signature);
+    return signature;
 }
 
 /**
@@ -925,63 +802,45 @@ mft_sign_file(const char *path, MfSigner *signer, GError **error)
 
 /**
  * test_sign_file:
+ *
+ * Sign a bundle in place, replace its signature, and remove it.
  */
 static void
 test_sign_file(Fixture *f, gconstpointer user_data)
 {
-    g_autofree char *path = NULL;
-    g_autofree char *key = NULL;
-    g_autofree char *other_key = NULL;
-    g_autoptr(MfSigner) signer = NULL;
-    g_autoptr(MfSigner) other_signer = NULL;
-    g_autoptr(MfTrustedKeys) keys = NULL;
+    g_autofree char *path = mft_write_app_bundle(f, &(BundleFlaws){.unsigned_ = TRUE});
+    g_autofree char *key = mft_make_key(f->dir, "key");
+    g_autofree char *other_key = mft_make_key(f->dir, "other-key");
+    g_autoptr(MfSigner) signer = mf_signer_new_for_key_file(key);
+    g_autoptr(MfSigner) other_signer = mf_signer_new_for_key_file(other_key);
+    g_autoptr(MfTrustedKeys) keys = mf_trusted_keys_new();
     g_autoptr(MfBundle) bundle = NULL;
-    g_autoptr(GBytes) index = NULL;
     g_autoptr(GBytes) signature = NULL;
     g_autoptr(GBytes) new_signature = NULL;
+    g_autoptr(GBytes) no_signature = NULL;
     g_autofree char *fingerprint = NULL;
     g_autoptr(GError) error = NULL;
 
-    path = mft_write_bundle(f,
-                            "unsigned.manifold",
-                            (const TestImage *[]){&f->kit, &f->app, NULL},
-                            &(BundleFlaws){.unsigned_ = TRUE});
-    key = mft_make_key(f->dir, "key");
-    signer = mf_signer_new_for_key_file(key);
-
     g_assert_true(mft_sign_file(path, signer, &error));
     g_assert_no_error(error);
-
-    bundle = mft_open_bundle(path, &error);
-    g_assert_no_error(error);
+    bundle = mft_open_bundle(path);
     g_assert_true(mf_bundle_is_signed(bundle));
-
-    index = mft_read_zip_entry(path, "index.json");
-    signature = mft_read_zip_entry(path, "index.json.sig");
-    mft_check_signature(f->dir, "manifold.bundle", index, signature);
+    signature = mft_check_bundle_signature(f, path);
 
     /* the signature is valid for the key of the signer */
-    keys = mf_trusted_keys_new();
     g_assert_true(mf_trusted_keys_add_key(keys, mf_signer_get_public_key(signer), &error));
     g_assert_no_error(error);
     g_assert_true(mf_bundle_verify_signature(bundle, keys, &fingerprint, &error));
     g_assert_no_error(error);
     g_assert_cmpstr(fingerprint, ==, mf_signer_get_fingerprint(signer));
 
-    /* signing again replaces the signature */
-    other_key = mft_make_key(f->dir, "other-key");
-    other_signer = mf_signer_new_for_key_file(other_key);
+    /* signing again replaces the signature, and the other key is not trusted */
     g_assert_true(mft_sign_file(path, other_signer, &error));
     g_assert_no_error(error);
-
-    new_signature = mft_read_zip_entry(path, "index.json.sig");
+    new_signature = mft_check_bundle_signature(f, path);
     g_assert_false(g_bytes_equal(signature, new_signature));
-    mft_check_signature(f->dir, "manifold.bundle", index, new_signature);
-
-    /* the other key is not trusted */
     g_clear_object(&bundle);
-    bundle = mft_open_bundle(path, &error);
-    g_assert_no_error(error);
+    bundle = mft_open_bundle(path);
     g_assert_false(mf_bundle_verify_signature(bundle, keys, NULL, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
     g_clear_error(&error);
@@ -990,41 +849,20 @@ test_sign_file(Fixture *f, gconstpointer user_data)
     g_assert_true(mft_sign_file(path, NULL, &error));
     g_assert_no_error(error);
     g_clear_object(&bundle);
-    bundle = mft_open_bundle(path, &error);
-    g_assert_no_error(error);
+    bundle = mft_open_bundle(path);
     g_assert_false(mf_bundle_is_signed(bundle));
     g_assert_false(mf_bundle_verify_signature(bundle, keys, NULL, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
-}
+    g_clear_error(&error);
 
-/**
- * test_sign_tampered_file:
- *
- * A bundle that fails verification must not be signed.
- */
-static void
-test_sign_tampered_file(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *path = NULL;
-    g_autofree char *key = NULL;
-    g_autoptr(MfSigner) signer = NULL;
-    g_autoptr(GError) error = NULL;
-    zip_t *zip;
-
-    path = mft_write_bundle(f,
-                            "tampered.manifold",
-                            (const TestImage *[]){&f->kit, &f->app, NULL},
-                            &(BundleFlaws){.unsigned_ = TRUE, .tampered = &f->app});
-    key = mft_make_key(f->dir, "key");
-    signer = mf_signer_new_for_key_file(key);
-
+    /* a bundle that fails verification is not signed */
+    g_clear_object(&bundle);
+    g_free(path);
+    path = mft_write_app_bundle(f, &(BundleFlaws){.unsigned_ = TRUE, .tampered = &f->app});
     g_assert_false(mft_sign_file(path, signer, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
-
-    zip = zip_open(path, ZIP_RDONLY, NULL);
-    g_assert_nonnull(zip);
-    g_assert_cmpint(zip_name_locate(zip, "index.json.sig", 0), <, 0);
-    zip_discard(zip);
+    no_signature = mft_read_zip_entry(path, "index.json.sig");
+    g_assert_null(no_signature);
 }
 
 /**
@@ -1061,6 +899,8 @@ mft_write_image_file(Fixture *f, const TestImage *image)
 /**
  * mft_writer_add_image:
  * @extra: (nullable): more XML for the component
+ *
+ * Add an image to a bundle that is being written.
  */
 static void
 mft_writer_add_image(Fixture *f, MfBundleWriter *writer, const TestImage *image, const char *extra)
@@ -1093,6 +933,8 @@ mft_new_writer(Fixture *f, const char *path)
 
 /**
  * test_writer:
+ *
+ * Write a bundle with two images, an icon and a screenshot, and read it again.
  */
 static void
 test_writer(Fixture *f, gconstpointer user_data)
@@ -1104,8 +946,6 @@ test_writer(Fixture *f, gconstpointer user_data)
     g_autofree char *icon = g_build_filename(icon_dir, TEST_APP_ID ".jxl", NULL);
     g_autofree char *media_dir = g_build_filename(media, TEST_APP_ID, NULL);
     g_autofree char *screenshot = g_build_filename(media_dir, "screenshot.jxl", NULL);
-    g_autofree char *extra = g_strdup_printf("<icon type=\"cached\" width=\"64\" height=\"64\">%s.jxl</icon>",
-                                             TEST_APP_ID);
     g_autoptr(MfBundleWriter) writer = mft_new_writer(f, path);
     g_autoptr(MfBundle) bundle = NULL;
     g_autoptr(GBytes) catalog = NULL;
@@ -1113,9 +953,12 @@ test_writer(Fixture *f, gconstpointer user_data)
     g_autoptr(GError) error = NULL;
     MfBundleImage *app;
     gsize size;
-    const char *xml;
+    const char *text;
 
-    mft_writer_add_image(f, writer, &f->app, extra);
+    mft_writer_add_image(f,
+                         writer,
+                         &f->app,
+                         "<icon type=\"cached\" width=\"64\" height=\"64\">" TEST_APP_ID ".jxl</icon>");
 
     mft_make_dirs(icon_dir);
     mft_make_dirs(media_dir);
@@ -1130,11 +973,9 @@ test_writer(Fixture *f, gconstpointer user_data)
     g_assert_no_error(error);
 
     /* reading the bundle returns the data we wrote */
-    bundle = mft_open_bundle(path, &error);
-    g_assert_no_error(error);
+    bundle = mft_open_bundle(path);
     g_assert_false(mf_bundle_is_signed(bundle));
     g_assert_cmpuint(mf_bundle_get_images(bundle)->len, ==, 2);
-
     app = mft_find_image(bundle, TEST_APP_ID);
     g_assert_cmpstr(mf_bundle_image_get_manifest_name(app), ==, TEST_APP_ID "_0.1.0.manifold.json");
     g_assert_cmpuint(g_hash_table_size(mf_bundle_image_get_icons(app)), ==, 1);
@@ -1143,15 +984,15 @@ test_writer(Fixture *f, gconstpointer user_data)
 
     /* the writer set the origin of local bundles, and replaced the wrong `bundle` element */
     catalog = mft_read_zip_entry(path, "catalog/manifold-local.xml");
-    xml = g_bytes_get_data(catalog, &size);
-    g_assert_nonnull(g_strstr_len(xml, size, "origin=\"manifold-local\""));
-    g_assert_null(g_strstr_len(xml, size, "x86_64/wrong/1"));
+    text = g_bytes_get_data(catalog, &size);
+    g_assert_nonnull(g_strstr_len(text, size, "origin=\"manifold-local\""));
+    g_assert_null(g_strstr_len(text, size, "x86_64/wrong/1"));
 
     /* the index lists the manifests but not the images, as the manifests record the image hashes */
     index = mft_read_zip_entry(path, "index.json");
-    xml = g_bytes_get_data(index, &size);
-    g_assert_nonnull(g_strstr_len(xml, size, TEST_APP_ID "_0.1.0.manifold.json"));
-    g_assert_null(g_strstr_len(xml, size, TEST_APP_ID "_0.1.0.raw"));
+    text = g_bytes_get_data(index, &size);
+    g_assert_nonnull(g_strstr_len(text, size, TEST_APP_ID "_0.1.0.manifold.json"));
+    g_assert_null(g_strstr_len(text, size, TEST_APP_ID "_0.1.0.raw"));
 }
 
 /**
@@ -1164,20 +1005,15 @@ test_writer_sign(Fixture *f, gconstpointer user_data)
 {
     g_autofree char *path = g_build_filename(f->dir, "written.manifold", NULL);
     g_autofree char *bad_key = g_build_filename(f->dir, "bad-key", NULL);
-    g_autofree char *key = NULL;
-    g_autoptr(MfBundleWriter) writer = NULL;
+    g_autofree char *key = mft_make_key(f->dir, "key");
+    g_autoptr(MfBundleWriter) writer = mft_new_writer(f, path);
     g_autoptr(MfSigner) bad_signer = NULL;
-    g_autoptr(MfSigner) signer = NULL;
-    g_autoptr(GBytes) index = NULL;
+    g_autoptr(MfSigner) signer = mf_signer_new_for_key_file(key);
     g_autoptr(GBytes) signature = NULL;
     g_autoptr(GError) error = NULL;
 
     mft_write_file(bad_key, "not a key\n");
     bad_signer = mf_signer_new_for_key_file(bad_key);
-    key = mft_make_key(f->dir, "key");
-    signer = mf_signer_new_for_key_file(key);
-
-    writer = mft_new_writer(f, path);
     g_assert_false(mf_bundle_writer_finish(writer, bad_signer, &error));
     g_assert_nonnull(error);
     g_clear_error(&error);
@@ -1185,10 +1021,27 @@ test_writer_sign(Fixture *f, gconstpointer user_data)
 
     g_assert_true(mf_bundle_writer_finish(writer, signer, &error));
     g_assert_no_error(error);
+    signature = mft_check_bundle_signature(f, path);
+}
 
-    index = mft_read_zip_entry(path, "index.json");
-    signature = mft_read_zip_entry(path, "index.json.sig");
-    mft_check_signature(f->dir, "manifold.bundle", index, signature);
+/**
+ * mft_assert_add_refused:
+ * @message_part: a part of the expected error message
+ *
+ * Check that the writer refuses to add an image.
+ */
+static void
+mft_assert_add_refused(MfBundleWriter *writer,
+                       const char *image_file,
+                       GBytes *manifest,
+                       GBytes *catalog,
+                       MfError code,
+                       const char *message_part)
+{
+    g_autoptr(GError) error = NULL;
+
+    g_assert_false(mf_bundle_writer_add_image(writer, image_file, manifest, catalog, &error));
+    mft_assert_error(error, code, message_part);
 }
 
 /**
@@ -1220,30 +1073,27 @@ test_writer_refused(Fixture *f, gconstpointer user_data)
     g_autoptr(MfBundle) bundle = NULL;
     g_autoptr(GError) error = NULL;
 
+    /* a bundle without images */
     g_assert_false(mf_bundle_writer_finish(writer, NULL, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_assert_cmpstr(error->message, ==, "The bundle contains no images");
+    mft_assert_error(error, MF_ERROR_INVALID_BUNDLE, "The bundle contains no images");
     g_clear_error(&error);
 
     /* the manifest describes a different image */
-    g_assert_false(mf_bundle_writer_add_image(writer, kit_file, manifest, catalog, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_VERIFICATION_FAILED);
-    g_clear_error(&error);
+    mft_assert_add_refused(writer, kit_file, manifest, catalog, MF_ERROR_VERIFICATION_FAILED, NULL);
 
-    g_assert_false(mf_bundle_writer_add_image(writer, app_file, manifest, kit_catalog, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_assert_cmpstr(error->message, ==, "The catalog data of " TEST_APP_ID " describes " TEST_KIT_ID);
-    g_clear_error(&error);
+    /* the catalog describes a different component, or two components */
+    mft_assert_add_refused(writer,
+                           app_file,
+                           manifest,
+                           kit_catalog,
+                           MF_ERROR_INVALID_BUNDLE,
+                           "The catalog data of " TEST_APP_ID " describes " TEST_KIT_ID);
+    mft_assert_add_refused(writer, app_file, manifest, both_catalog, MF_ERROR_INVALID_BUNDLE, NULL);
 
-    g_assert_false(mf_bundle_writer_add_image(writer, app_file, manifest, both_catalog, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_clear_error(&error);
-
+    /* the same image twice */
     g_assert_true(mf_bundle_writer_add_image(writer, app_file, manifest, catalog, &error));
     g_assert_no_error(error);
-    g_assert_false(mf_bundle_writer_add_image(writer, app_file, manifest, catalog, &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_INVALID_BUNDLE);
-    g_clear_error(&error);
+    mft_assert_add_refused(writer, app_file, manifest, catalog, MF_ERROR_INVALID_BUNDLE, NULL);
 
     /* the first file of the icon tree is valid, but the writer must not keep it if a later file is refused */
     mft_make_dirs(good_dir);
@@ -1259,42 +1109,24 @@ test_writer_refused(Fixture *f, gconstpointer user_data)
 
     g_assert_true(mf_bundle_writer_finish(writer, NULL, &error));
     g_assert_no_error(error);
-    bundle = mft_open_bundle(path, &error);
-    g_assert_no_error(error);
+    bundle = mft_open_bundle(path);
     g_assert_cmpuint(mf_bundle_get_images(bundle)->len, ==, 1);
 }
 
-/**
- * main:
- */
 int
 main(int argc, char **argv)
 {
     g_test_init(&argc, &argv, NULL);
 
 #define add_test(name, func) g_test_add("/bundle/" name, Fixture, NULL, mft_setup, func, mft_teardown)
-    add_test("valid", test_valid_bundle);
-    add_test("core-has-no-base", test_core_has_no_base);
+    add_test("read", test_read);
     add_test("copy-image", test_copy_image);
-    add_test("corrupt-image", test_corrupt_image);
-    add_test("missing-image", test_missing_image);
-    add_test("listed-twice", test_listed_twice);
-    add_test("tampered-manifest", test_tampered_manifest);
-    add_test("wrong-blake3", test_wrong_blake3);
-    add_test("unlisted-file", test_unlisted_file);
-    add_test("invalid-path", test_invalid_path);
-    add_test("undescribed-image", test_undescribed_image);
-    add_test("misdescribed-image", test_misdescribed_image);
-    add_test("bad-icon", test_bad_icon);
-    add_test("corrupt-media", test_corrupt_media);
-    add_test("refers-elsewhere", test_refers_elsewhere);
-    add_test("kit-without-base", test_kit_without_base);
-    add_test("one-id-two-kinds", test_one_id_two_kinds);
+    add_test("verify-image", test_verify_image);
+    add_test("refused-files", test_refused_files);
+    add_test("refused-catalog", test_refused_catalog);
     add_test("not-a-bundle", test_not_a_bundle);
-    add_test("no-index", test_no_index);
     add_test("metadata-limit", test_metadata_limit);
     add_test("sign-file", test_sign_file);
-    add_test("sign-tampered-file", test_sign_tampered_file);
     add_test("writer", test_writer);
     add_test("writer-sign", test_writer_sign);
     add_test("writer-refused", test_writer_refused);

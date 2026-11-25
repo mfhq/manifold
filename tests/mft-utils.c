@@ -118,6 +118,21 @@ mft_rm_rf(const char *path)
 }
 
 /**
+ * mft_assert_error:
+ * @code: the expected code of the error
+ * @message_part: (nullable): a part of the expected error message
+ *
+ * Check that an operation failed with a certain #MfError.
+ */
+void
+mft_assert_error(const GError *error, MfError code, const char *message_part)
+{
+    g_assert_error(error, MF_ERROR, (int) code);
+    if (message_part != NULL && strstr(error->message, message_part) == NULL)
+        g_error("The error message \"%s\" does not contain \"%s\"", error->message, message_part);
+}
+
+/**
  * mft_run:
  *
  * Run a command and fail the test if it fails.

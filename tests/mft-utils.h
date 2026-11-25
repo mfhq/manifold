@@ -52,6 +52,10 @@ void    mft_check_signature(const char *dir,
                             GBytes     *data,
                             GBytes     *signature);
 
+void    mft_assert_error(const GError *error,
+                         MfError       code,
+                         const char   *message_part);
+
 GBytes *mft_sign(const char      *key_path,
                  MfSignatureScope scope,
                  GBytes          *data);
