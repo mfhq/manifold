@@ -339,7 +339,7 @@ mf_read_image_link(const char *version_dir, const char *link_name, GError **erro
                     MF_ERROR,
                     MF_ERROR_FAILED,
                     /* TRANSLATORS: the path of a symbolic link, and where it points to */
-                    _("Link %s does not point into the image store: %s"),
+                    _("Link %s does not point to an installed image: %s"),
                     path,
                     target);
         return NULL;
@@ -649,7 +649,7 @@ mf_store_read_link(MfComponent *component, const char *link_name, GError **error
                     MF_ERROR,
                     MF_ERROR_NOT_FOUND,
                     /* TRANSLATORS: a component and its version */
-                    _("%s %s was not read from a store"),
+                    _("The manifest of %s %s is not available"),
                     mf_component_get_id(component),
                     mf_component_get_version(component));
         return NULL;
@@ -679,7 +679,7 @@ mf_store_read_link(MfComponent *component, const char *link_name, GError **error
                     MF_ERROR,
                     MF_ERROR_FAILED,
                     /* TRANSLATORS: the path of a symbolic link, and where it points to */
-                    _("Link %s does not point into the store: %s"),
+                    _("Link %s does not point to an installed component: %s"),
                     link_path,
                     target);
         return NULL;

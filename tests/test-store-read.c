@@ -216,7 +216,8 @@ static void
 test_base_link_must_name_a_component(Fixture *f, gconstpointer user_data)
 {
     g_autofree char *link = g_build_filename(f->dir, "apps", TEST_APP_ID, "0.1.0-1", "base", NULL);
-    g_autofree char *expected = g_strdup_printf("Link %s does not point into the store: /etc", link);
+    g_autofree char *expected = g_strdup_printf("Link %s does not point to an installed component: /etc",
+                                                link);
     g_autoptr(GError) error = NULL;
     g_autoptr(MfComponent) app = mf_store_get_component(f->store, TEST_APP_ID, NULL, &error);
 
@@ -390,7 +391,7 @@ test_image_link_must_point_into_store(Fixture *f, gconstpointer user_data)
     g_autofree char *expected = NULL;
 
     /* reading the component directly fails, and the loaded store does not list it */
-    expected = g_strdup_printf("Link %s does not point into the image store: /etc/passwd", link);
+    expected = g_strdup_printf("Link %s does not point to an installed image: /etc/passwd", link);
     mft_replace_link("/etc/passwd", link);
     mft_assert_read_fails(f, TEST_APP_ID, MF_ERROR_FAILED, expected);
     g_assert_null(mf_store_get_component(f->store, TEST_APP_ID, NULL, &error));
@@ -502,7 +503,7 @@ test_fetch_manifest(Fixture *f, gconstpointer user_data)
     g_assert_null(mf_component_get_dir(reported));
     g_assert_null(mf_component_fetch_manifest(reported, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
-    g_assert_cmpstr(error->message, ==, TEST_CORE_ID " 13.8 was not read from a store");
+    g_assert_cmpstr(error->message, ==, "The manifest of " TEST_CORE_ID " 13.8 is not available");
 }
 
 /**

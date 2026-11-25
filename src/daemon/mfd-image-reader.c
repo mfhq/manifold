@@ -286,7 +286,7 @@ mfd_image_read_integration(MfStore *store, MfManifest *manifest, GError **error)
 
     /* we only read images from the store */
     if (!mf_store_has_image(store, verity_hash)) {
-        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, "Image %s is not in the store", verity_hash);
+        g_set_error(error, MF_ERROR, MF_ERROR_NOT_FOUND, "Image %s is not installed", verity_hash);
         return NULL;
     }
     image_path = mf_store_image_path_at(mf_store_get_path(store), verity_hash);

@@ -447,7 +447,7 @@ mf_component_fetch_manifest(MfComponent *component, GError **error)
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_NOT_FOUND,
-                    _("%s %s was not read from a store"),
+                    _("The manifest of %s %s is not available"),
                     component->component_id,
                     component->version);
         return NULL;
