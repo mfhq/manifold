@@ -327,7 +327,7 @@ mfc_run_install_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
     }
 
     for (int i = 1; i < argc; i++) {
-        g_autoptr(GString) skipped = NULL;
+        g_autofree char *skipped = NULL;
 
         ret = mfc_argument_is_bundle_file(argv[i]) ? mfc_install_bundle(ctx, argv[i])
                                                    : mfc_install_component(ctx, argv[i], optn_origin);
@@ -336,10 +336,8 @@ mfc_run_install_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **argv)
 
         /* we stop at the first argument that fails, and list the arguments that were not installed */
         if (i + 1 < argc) {
-            skipped = g_string_new(argv[i + 1]);
-            for (int j = i + 2; j < argc; j++)
-                g_string_append_printf(skipped, ", %s", argv[j]);
-            g_printerr(_("The rest was not installed: %s\n"), skipped->str);
+            skipped = mfc_join_arguments(argc - i - 1, argv + i + 1);
+            g_printerr(_("The remaining components were not installed: %s\n"), skipped);
         }
         return ret;
     }

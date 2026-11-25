@@ -884,7 +884,7 @@ class RemoteTest(unittest.TestCase):
 
         # we stop at the first component that fails, and name the ones that were not installed
         out = self.manifold('install', 'org.example.Missing', APP_ID, expect=1)
-        self.assertIn(f'The rest was not installed: {APP_ID}', out)
+        self.assertIn(f'The remaining components were not installed: {APP_ID}', out)
 
     def test_remote_add_asks_before_it_trusts_a_key(self):
         self.repo.publisher = {'name': 'Example Inc.', 'email': 'repo@example.org'}

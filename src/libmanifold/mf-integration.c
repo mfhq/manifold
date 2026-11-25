@@ -1010,6 +1010,23 @@ mf_integration_set_line_error(GError **error, MfIntegrationFile *file, guint num
 }
 
 /**
+ * mf_integration_check_text:
+ *
+ * Returns: %TRUE if the file is a short UTF-8 text file with Unix line endings
+ */
+static gboolean
+mf_integration_check_text(MfIntegrationFile *file, GBytes *content, GError **error)
+{
+    if (mf_text_is_valid(content))
+        return TRUE;
+
+    mf_integration_set_error(error,
+                             _("%s: this is not a short UTF-8 text file with Unix line endings"),
+                             file->path);
+    return FALSE;
+}
+
+/**
  * mf_integration_split_lines:
  *
  * Split a text file into lines.
@@ -1024,12 +1041,8 @@ mf_integration_split_lines(MfIntegrationFile *file, GBytes *content, GError **er
     const char *data = g_bytes_get_data(content, &size);
     g_autofree char *text = g_strndup(data != NULL ? data : "", size);
 
-    if (!mf_text_is_valid(content)) {
-        mf_integration_set_error(error,
-                                 _("%s: this is not a short UTF-8 text file with Unix line endings"),
-                                 file->path);
+    if (!mf_integration_check_text(file, content, error))
         return NULL;
-    }
 
     return g_strsplit(text, "\n", -1);
 }
@@ -1561,11 +1574,10 @@ mf_integration_render_mime_package(MfIntegrationFile *file, GBytes *content, GEr
     };
     g_autoptr(GMarkupParseContext) context = NULL;
     g_autoptr(GError) local_error = NULL;
-    g_auto(GStrv) lines = mf_integration_split_lines(file, content, error);
     gsize size;
     const char *data = g_bytes_get_data(content, &size);
 
-    if (lines == NULL) {
+    if (!mf_integration_check_text(file, content, error)) {
         g_string_free(render.output, TRUE);
         return NULL;
     }

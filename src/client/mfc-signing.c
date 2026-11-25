@@ -266,7 +266,7 @@ mfc_run_bundle_sign_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **a
 
     for (int i = 1; i < argc; i++) {
         g_autoptr(MfBundleWriter) writer = mf_bundle_writer_new_for_file(argv[i], &error);
-        g_autoptr(GString) skipped = NULL;
+        g_autofree char *skipped = NULL;
 
         if (writer != NULL && mf_bundle_writer_finish(writer, signer, &error)) {
             /* TRANSLATORS: the bundle file, and the name of the signing key */
@@ -277,10 +277,8 @@ mfc_run_bundle_sign_command(MfcContext *ctx, MfcCommand *cmd, int argc, char **a
 
         /* we stop at the first file that fails, and list the files that were not signed */
         if (i + 1 < argc) {
-            skipped = g_string_new(argv[i + 1]);
-            for (int j = i + 2; j < argc; j++)
-                g_string_append_printf(skipped, ", %s", argv[j]);
-            g_printerr(_("The remaining files were not signed: %s\n"), skipped->str);
+            skipped = mfc_join_arguments(argc - i - 1, argv + i + 1);
+            g_printerr(_("The remaining files were not signed: %s\n"), skipped);
         }
         return MFC_EXIT_FAILURE;
     }

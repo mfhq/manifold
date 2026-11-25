@@ -22,6 +22,8 @@ int             mfc_parse_command_options(GOptionContext *context,
                                           int            *argc,
                                           char         ***argv);
 
+char           *mfc_join_arguments(int    argc,
+                                   char **argv);
 void            mfc_string_append_column(GString    *row,
                                          const char *text,
                                          size_t      width);

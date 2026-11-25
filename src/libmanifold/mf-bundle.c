@@ -341,6 +341,8 @@ mf_zip_read_entry(zip_t *zip, uint64_t index, const char *name, uint64_t *budget
  * mf_zip_hash_entry:
  * @size_max: the expected size of the file, we stop reading once the file exceeds it
  * @dest_fd: file descriptor to write the file to, or -1 to only hash it
+ * @progress_func: (nullable) (scope call): called after every piece that was read
+ * @user_data: passed to @progress_func
  * @ret_entry: (out caller-allocates): the size and hashes of the file
  *
  * Compute the size and hashes of a file of the bundle, without keeping it in memory.
@@ -351,6 +353,8 @@ mf_zip_hash_entry(zip_t *zip,
                   const char *name,
                   uint64_t size_max,
                   int dest_fd,
+                  MfCopyProgressFunc progress_func,
+                  gpointer user_data,
                   MfFileEntry *ret_entry,
                   GError **error)
 {
@@ -365,7 +369,7 @@ mf_zip_hash_entry(zip_t *zip,
         return FALSE;
     }
 
-    while (total <= size_max) {
+    for (;;) {
         zip_int64_t n = zip_fread(file, buffer, COPY_BUFFER_SIZE);
 
         if (n < 0) {
@@ -375,12 +379,20 @@ mf_zip_hash_entry(zip_t *zip,
         }
         if (n == 0)
             break;
+
         total += (uint64_t) n;
         mf_hasher_update(hasher, buffer, (size_t) n);
+
+        /* the caller refuses a file that is larger than expected, so we stop copying it */
+        if (total > size_max)
+            break;
+
         if (dest_fd >= 0 && !mf_write_all(dest_fd, buffer, (size_t) n, error)) {
             zip_fclose(file);
             return FALSE;
         }
+        if (progress_func != NULL)
+            progress_func(total, user_data);
     }
     zip_fclose(file);
 
@@ -484,7 +496,15 @@ mf_bundle_reader_verify_indexed_file(MfBundleReader *reader,
 
     if (g_str_has_prefix(name, MF_BUNDLE_CATALOG_MEDIA_PREFIX)) {
         /* screenshots and videos can be large, so we only hash them */
-        if (!mf_zip_hash_entry(priv->zip, archive_entry->index, name, expected.size, -1, &actual, error))
+        if (!mf_zip_hash_entry(priv->zip,
+                               archive_entry->index,
+                               name,
+                               expected.size,
+                               -1,
+                               NULL,
+                               NULL,
+                               &actual,
+                               error))
             return FALSE;
     } else {
         data = mf_zip_read_entry(priv->zip, archive_entry->index, name, &reader->budget, error);
@@ -1285,6 +1305,8 @@ mf_bundle_copy_media_file(MfBundle *bundle, const char *name, int dest_fd, GErro
                            entry_name,
                            media_file->entry.size,
                            dest_fd,
+                           NULL,
+                           NULL,
                            &actual,
                            error))
         return FALSE;
@@ -1323,68 +1345,39 @@ mf_bundle_copy_image(MfBundle *bundle,
                      gpointer user_data,
                      GError **error)
 {
-    g_autofree char *buffer = g_malloc(COPY_BUFFER_SIZE);
-    g_autoptr(MfHasher) hasher = mf_hasher_new();
     MfFileEntry actual;
     MfBundlePrivate *priv;
     const char *image_name;
-    uint64_t image_size;
-    zip_file_t *file;
-    uint64_t total = 0;
-    gboolean ret = FALSE;
 
     g_return_val_if_fail(MF_IS_BUNDLE(bundle), FALSE);
     g_return_val_if_fail(MF_IS_BUNDLE_IMAGE(image), FALSE);
 
     priv = GET_PRIVATE(bundle);
     image_name = mf_manifest_get_image_file(image->manifest);
-    image_size = mf_manifest_get_image_size(image->manifest);
 
-    file = zip_fopen_index(priv->zip, image->image_index, 0);
-    if (file == NULL) {
-        mf_set_error_from_zip(error, MF_ERROR_INVALID_BUNDLE, zip_get_error(priv->zip), image_name);
+    if (!mf_zip_hash_entry(priv->zip,
+                           image->image_index,
+                           image_name,
+                           mf_manifest_get_image_size(image->manifest),
+                           dest_fd,
+                           progress_func,
+                           user_data,
+                           &actual,
+                           error))
         return FALSE;
-    }
-
-    for (;;) {
-        zip_int64_t n = zip_fread(file, buffer, COPY_BUFFER_SIZE);
-
-        if (n < 0) {
-            mf_set_error_from_zip(error, MF_ERROR_INVALID_BUNDLE, zip_file_get_error(file), image_name);
-            goto out;
-        }
-        if (n == 0)
-            break;
-
-        /* an image that is larger than its manifest records can not match, so we stop writing it */
-        total += (uint64_t) n;
-        mf_hasher_update(hasher, buffer, (size_t) n);
-        if (total > image_size)
-            break;
-
-        if (dest_fd >= 0 && !mf_write_all(dest_fd, buffer, (size_t) n, error))
-            goto out;
-        if (progress_func != NULL)
-            progress_func(total, user_data);
-    }
 
     /* TODO: Also check that the dm-verity hash tree of the image produces its
      * root hash, before the image is ever mounted. */
-    mf_hasher_finish(hasher, &actual);
     if (!mf_manifest_image_matches(image->manifest, &actual)) {
         g_set_error(error,
                     MF_ERROR,
                     MF_ERROR_VERIFICATION_FAILED,
                     _("Image %s does not match its size and hashes in the manifest"),
                     image_name);
-        goto out;
+        return FALSE;
     }
 
-    ret = TRUE;
-
-out:
-    zip_fclose(file);
-    return ret;
+    return TRUE;
 }
 
 /**

@@ -128,12 +128,8 @@ mf_remote_info_to_reply(MfRemoteInfo *info, sd_json_variant **ret_reply)
                                                               SD_JSON_BUILD_STRING(info->publisher_email)),
                                  SD_JSON_BUILD_PAIR_STRING("validUntil", valid_until),
                                  SD_JSON_BUILD_PAIR("channels", SD_JSON_BUILD_STRV(info->available_channels)),
-                                 SD_JSON_BUILD_PAIR_CONDITION(info->public_key != NULL,
-                                                              "publicKey",
-                                                              SD_JSON_BUILD_STRING(info->public_key)),
-                                 SD_JSON_BUILD_PAIR_CONDITION(info->fingerprint != NULL,
-                                                              "fingerprint",
-                                                              SD_JSON_BUILD_STRING(info->fingerprint)))));
+                                 SD_JSON_BUILD_PAIR_STRING("publicKey", info->public_key),
+                                 SD_JSON_BUILD_PAIR_STRING("fingerprint", info->fingerprint))));
 }
 
 /**

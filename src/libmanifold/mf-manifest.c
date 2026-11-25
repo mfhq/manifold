@@ -262,6 +262,22 @@ mf_set_error_invalid_manifest(GError **error, const char *format, ...)
 }
 
 /**
+ * mf_set_error_invalid_field:
+ * @section: (nullable): the section of the manifest that contains the field
+ *
+ * Set an %MF_ERROR_INVALID_MANIFEST error for a field of a manifest. The
+ * message starts with the name of the section, if the field is in a section.
+ */
+static void
+mf_set_error_invalid_field(GError **error, const char *section, const char *message)
+{
+    if (section != NULL)
+        mf_set_error_invalid_manifest(error, "%s: %s", section, message);
+    else
+        mf_set_error_invalid_manifest(error, "%s", message);
+}
+
+/**
  * mf_manifest_json_get_component_id:
  *
  * Read a component ID from a field, and check that the ID is valid.
@@ -274,11 +290,7 @@ mf_manifest_json_get_component_id(sd_json_variant *object, const char *section, 
     if (component_id == NULL)
         return NULL;
     if (!mf_component_id_is_valid(component_id)) {
-        mf_set_error_invalid_manifest(error,
-                                      "%s%s%s",
-                                      section ? section : "",
-                                      section ? ": " : "",
-                                      _("component identifier is not valid"));
+        mf_set_error_invalid_field(error, section, _("component identifier is not valid"));
         return NULL;
     }
     return g_strdup(component_id);
@@ -297,11 +309,7 @@ mf_manifest_json_get_version(sd_json_variant *object, const char *section, GErro
     if (version == NULL)
         return NULL;
     if (!mf_version_is_valid(version)) {
-        mf_set_error_invalid_manifest(error,
-                                      "%s%s%s",
-                                      section ? section : "",
-                                      section ? ": " : "",
-                                      _("version is not valid"));
+        mf_set_error_invalid_field(error, section, _("version is not valid"));
         return NULL;
     }
     return g_strdup(version);
@@ -331,7 +339,7 @@ mf_manifest_json_get_kind(sd_json_variant *object, const char *section, GError *
     shown = g_strescape(value, NULL);
     /* TRANSLATORS: "kind" is a field of the manifest, and not translated, %s is its value */
     message = g_strdup_printf(_("kind %s is not known"), shown);
-    mf_set_error_invalid_manifest(error, "%s%s%s", section ? section : "", section ? ": " : "", message);
+    mf_set_error_invalid_field(error, section, message);
     return MF_COMPONENT_KIND_UNKNOWN;
 }
 

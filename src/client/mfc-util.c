@@ -83,6 +83,27 @@ mfc_parse_command_options(GOptionContext *context, MfcCommand *cmd, int *argc, c
 }
 
 /**
+ * mfc_join_arguments:
+ *
+ * Join command line arguments into a comma-separated list.
+ *
+ * Returns: (transfer full): the list
+ */
+char *
+mfc_join_arguments(int argc, char **argv)
+{
+    g_autoptr(GString) list = g_string_new(NULL);
+
+    for (int i = 0; i < argc; i++) {
+        if (i > 0)
+            g_string_append(list, ", ");
+        g_string_append(list, argv[i]);
+    }
+
+    return g_string_free(g_steal_pointer(&list), FALSE);
+}
+
+/**
  * mfc_string_append_column:
  *
  * Append a column to a table row. The @text is padded with spaces to @width

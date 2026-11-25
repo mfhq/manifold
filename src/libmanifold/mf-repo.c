@@ -334,6 +334,7 @@ mf_repo_read_publisher(MfRepoRootIndex *index, sd_json_variant *root, GError **e
     sd_json_variant *publisher = sd_json_variant_by_key(root, "publisher");
     sd_json_variant *email;
     const char *name;
+    const char *address;
 
     if (publisher == NULL || sd_json_variant_is_null(publisher))
         return TRUE;
@@ -344,23 +345,16 @@ mf_repo_read_publisher(MfRepoRootIndex *index, sd_json_variant *root, GError **e
     name = mf_repo_get_display_text_field(publisher, MF_REPO_ROOT_INDEX_NAME, "name", error);
     if (name == NULL)
         return FALSE;
-    email = sd_json_variant_by_key(publisher, "email");
-    if (email != NULL && !sd_json_variant_is_null(email) && !sd_json_variant_is_string(email)) {
-        mf_repo_set_invalid(error, MF_REPO_ROOT_INDEX_NAME, _("%s is not a string"), "email");
-        return FALSE;
-    }
-
     index->publisher_name = g_strdup(name);
-    if (email != NULL && sd_json_variant_is_string(email)) {
-        const char *address = mf_repo_get_display_text_field(publisher,
-                                                             MF_REPO_ROOT_INDEX_NAME,
-                                                             "email",
-                                                             error);
 
-        if (address == NULL)
-            return FALSE;
-        index->publisher_email = g_strdup(address);
-    }
+    /* the email address is optional */
+    email = sd_json_variant_by_key(publisher, "email");
+    if (email == NULL || sd_json_variant_is_null(email))
+        return TRUE;
+    address = mf_repo_get_display_text_field(publisher, MF_REPO_ROOT_INDEX_NAME, "email", error);
+    if (address == NULL)
+        return FALSE;
+    index->publisher_email = g_strdup(address);
     return TRUE;
 }
 
@@ -856,11 +850,17 @@ mf_repo_component_index_new(GBytes *data, const MfFileEntry *entry, const char *
         const char *component_id = sd_json_variant_string(sd_json_variant_by_index(components, i));
         GPtrArray *versions;
 
-        if (!mf_component_id_is_valid(component_id) ||
-            g_hash_table_contains(index->components, component_id)) {
+        if (!mf_component_id_is_valid(component_id)) {
             mf_repo_set_invalid(error,
                                 MF_REPO_COMPONENT_INDEX_NAME,
-                                _("%s is not a valid component ID, or it is listed twice"),
+                                _("%s is not a valid component ID"),
+                                component_id);
+            return NULL;
+        }
+        if (g_hash_table_contains(index->components, component_id)) {
+            mf_repo_set_invalid(error,
+                                MF_REPO_COMPONENT_INDEX_NAME,
+                                _("the component %s is listed twice"),
                                 component_id);
             return NULL;
         }
