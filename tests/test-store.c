@@ -7,6 +7,7 @@
 #include "config.h"
 
 #include <fcntl.h>
+#include <inttypes.h>
 #include <glib/gstdio.h>
 #include <libglnx.h>
 #include <manifold.h>
@@ -24,10 +25,50 @@
 #define APPS     MF_STORE_APPS_DIR
 #define RUNTIMES MF_STORE_RUNTIMES_DIR
 
+/* a kit that only an old version of the application uses */
+#define OLD_KIT_ID TEST_CORE_ID ".0123456789abcdef"
+
+/* the sizes of the images that the tests install */
+#define CORE_IMAGE_SIZE 4096
+#define KIT_IMAGE_SIZE  2048
+#define APP_IMAGE_SIZE  1024
+
 /* the store of the sandbox */
 static MfStore *store = NULL;
 static MfdStoreWriter *writer = NULL;
 static MfdManager *manager = NULL;
+
+/**
+ * mft_reset_store:
+ *
+ * Remove everything from the store.
+ */
+static void
+mft_reset_store(void)
+{
+    g_autoptr(GError) error = NULL;
+
+    mft_clear_store();
+    /* the directories were deleted, so the store has to drop its cached components */
+    mf_store_invalidate(store);
+    g_assert_true(mfd_store_writer_ensure_root(writer, &error));
+    g_assert_no_error(error);
+}
+
+/**
+ * mft_reload_store:
+ *
+ * Make the store read the installed components again, after a test
+ * changed files of the store by hand.
+ */
+static void
+mft_reload_store(void)
+{
+    g_autoptr(GError) error = NULL;
+
+    g_assert_true(mf_store_load(store, &error));
+    g_assert_no_error(error);
+}
 
 static void
 mft_add_image(const char *hash, size_t size)
@@ -36,6 +77,20 @@ mft_add_image(const char *hash, size_t size)
     g_autofree char *data = g_strnfill(size, 'x');
 
     g_assert_true(g_file_set_contents(path, data, (ssize_t) size, NULL));
+}
+
+/**
+ * mft_image_hash:
+ *
+ * Returns: (transfer full): the root hash of the image that mft_install() creates
+ *   for a version and revision of a component
+ */
+static char *
+mft_image_hash(const char *component_id, const char *version, uint64_t revision)
+{
+    g_autofree char *seed = g_strdup_printf("%s %s-%" PRIu64, component_id, version, revision);
+
+    return mft_fake_hash(seed);
 }
 
 static GBytes *
@@ -49,23 +104,36 @@ mft_catalog_of(const char *component_id)
 
 /**
  * mft_install:
- * @manifest: the manifest of the component, the image is looked up by its verity_root_hash
+ * @manifest: the manifest of the component, without the root hash of its image
  * @base_version_dir: the version directory of the base that the `base` link points to,
  *   or %NULL for "current"
  * @mode: the install mode to record
  *
- * Install a component with the store writer, as the install daemon does. The
- * base of the component is a runtime.
+ * Create the image of a component, and install the component with the store
+ * writer. The base of the component is always a runtime.
  */
 static void
 mft_install(const MftTestManifest *manifest, const char *base_version_dir, MfInstallMode mode)
 {
+    g_autofree char *hash = mft_image_hash(manifest->component_id,
+                                           manifest->version,
+                                           manifest->revision != 0 ? manifest->revision : 1);
+    MftTestManifest with_image = *manifest;
     g_autoptr(GBytes) catalog = mft_catalog_of(manifest->component_id);
     g_autoptr(GHashTable) icons = g_hash_table_new(g_str_hash, g_str_equal);
     g_autoptr(GError) error = NULL;
-    g_autoptr(MfManifest) parsed = mft_manifest_new(manifest);
+    g_autoptr(MfManifest) parsed = NULL;
     g_autoptr(MfBaseLink) base = NULL;
+    size_t image_size = APP_IMAGE_SIZE;
 
+    if (g_str_equal(manifest->kind, "core"))
+        image_size = CORE_IMAGE_SIZE;
+    else if (g_str_equal(manifest->kind, "kit"))
+        image_size = KIT_IMAGE_SIZE;
+    mft_add_image(hash, image_size);
+
+    with_image.verity_root_hash = hash;
+    parsed = mft_manifest_new(&with_image);
     if (manifest->base_id != NULL)
         base = mf_base_link_new(MF_STORE_RUNTIMES_SUBDIR, manifest->base_id, base_version_dir);
     g_assert_true(mfd_store_writer_install_component(writer,
@@ -81,47 +149,87 @@ mft_install(const MftTestManifest *manifest, const char *base_version_dir, MfIns
     g_assert_no_error(error);
 }
 
-/* the root hashes of the images that mft_install_usual() installs */
-typedef struct {
-    char *core_hash;
-    char *kit_hash;
-    char *app_hash;
-} Fixture;
+/**
+ * mft_install_core:
+ *
+ * Install a version of the core with the install mode manual.
+ */
+static void
+mft_install_core(const char *version)
+{
+    mft_install(&(MftTestManifest){.component_id = TEST_CORE_ID, .kind = "core", .version = version},
+                NULL,
+                MF_INSTALL_MODE_MANUAL);
+}
+
+/**
+ * mft_install_core_sdk:
+ *
+ * Install the SDK of the core, which needs version 13.4 of the core.
+ */
+static void
+mft_install_core_sdk(void)
+{
+    mft_install(&(MftTestManifest){.component_id = TEST_SDK_ID,
+                                   .kind = "core",
+                                   .version = "13.4",
+                                   .sdk = TRUE,
+                                   .base_id = TEST_CORE_ID,
+                                   .base_kind = "core"},
+                "13.4-1",
+                MF_INSTALL_MODE_MANUAL);
+}
+
+/**
+ * mft_install_kit:
+ *
+ * Install a version of a kit on the core.
+ */
+static void
+mft_install_kit(const char *kit_id, const char *version, MfInstallMode mode)
+{
+    mft_install(&(MftTestManifest){.component_id = kit_id,
+                                   .kind = "kit",
+                                   .version = version,
+                                   .base_id = TEST_CORE_ID,
+                                   .base_kind = "core"},
+                NULL,
+                mode);
+}
+
+/**
+ * mft_install_app:
+ * @revision: the revision of the version, or 0 for the first revision
+ *
+ * Install a version of an application on a kit. An application is always
+ * installed with the install mode auto.
+ */
+static void
+mft_install_app(const char *app_id, const char *version, uint64_t revision, const char *kit_id)
+{
+    mft_install(&(MftTestManifest){.component_id = app_id,
+                                   .kind = "app",
+                                   .version = version,
+                                   .revision = revision,
+                                   .base_id = kit_id,
+                                   .base_kind = "kit"},
+                NULL,
+                MF_INSTALL_MODE_AUTO);
+}
 
 /**
  * mft_install_usual:
  *
- * Install the usual setup: a manually installed core, and a manually installed app with a
- * kit that was installed automatically as its dependency.
+ * Empty the store, and install the usual setup: a manually installed core,
+ * and an app with a kit that was installed automatically as its dependency.
  */
 static void
-mft_install_usual(Fixture *f)
+mft_install_usual(void)
 {
-    mft_add_image(f->core_hash, 4096);
-    mft_add_image(f->kit_hash, 2048);
-    mft_add_image(f->app_hash, 1024);
-    mft_install(&(MftTestManifest){.component_id = TEST_CORE_ID,
-                                   .kind = "core",
-                                   .version = "13.4",
-                                   .verity_root_hash = f->core_hash},
-                NULL,
-                MF_INSTALL_MODE_MANUAL);
-    mft_install(&(MftTestManifest){.component_id = TEST_KIT_ID,
-                                   .kind = "kit",
-                                   .version = "20260112T0238",
-                                   .verity_root_hash = f->kit_hash,
-                                   .base_id = TEST_CORE_ID,
-                                   .base_kind = "core"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.1.0",
-                                   .verity_root_hash = f->app_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
+    mft_reset_store();
+    mft_install_core("13.4");
+    mft_install_kit(TEST_KIT_ID, "20260112T0238", MF_INSTALL_MODE_AUTO);
+    mft_install_app(TEST_APP_ID, "0.1.0", 0, TEST_KIT_ID);
 }
 
 static void
@@ -130,6 +238,19 @@ mft_assert_link(const char *path, const char *expected_target)
     g_autofree char *target = g_file_read_link(path, NULL);
 
     g_assert_cmpstr(target, ==, expected_target);
+}
+
+/**
+ * mft_assert_file:
+ *
+ * Check the content of a text file.
+ */
+static void
+mft_assert_file(const char *path, const char *expected_content)
+{
+    g_autofree char *content = mft_read_file(path);
+
+    g_assert_cmpstr(content, ==, expected_content);
 }
 
 /**
@@ -176,204 +297,156 @@ mft_count_versions(const char *component_id)
     return components->len;
 }
 
+/**
+ * mft_plan:
+ * @component_id: (nullable): the component to remove, or %NULL to only clean up
+ *
+ * Plan a removal, and assert that the removal is possible.
+ *
+ * Returns: (transfer full): the removal plan
+ */
+static MfdRemovalPlan *
+mft_plan(const char *component_id, const char *version)
+{
+    g_autoptr(GError) error = NULL;
+    MfdRemovalPlan *rmplan = mfd_removal_plan_new_for_removal(store, component_id, version, &error);
+
+    g_assert_no_error(error);
+    return rmplan;
+}
+
+/**
+ * mft_plan_find:
+ * @dir: the version directory of a component
+ *
+ * Returns: the position of a component in a removal plan, or -1 if the plan does not remove it
+ */
+static int
+mft_plan_find(MfdRemovalPlan *rmplan, const char *dir)
+{
+    for (guint i = 0; i < rmplan->items->len; i++) {
+        MfdRemovalItem *item = g_ptr_array_index(rmplan->items, i);
+
+        if (g_str_equal(mf_component_get_dir(item->component), dir))
+            return (int) i;
+    }
+    return -1;
+}
+
+/**
+ * mft_assert_in_use:
+ *
+ * Check that a version of a component can not be removed, as @used_by needs it.
+ */
 static void
-mft_setup(Fixture *f, gconstpointer user_data)
+mft_assert_in_use(const char *component_id, const char *version, const char *used_by)
 {
     g_autoptr(GError) error = NULL;
 
-    mft_clear_store();
-    /* the directories were deleted, so the store has to drop its cached components */
-    mf_store_invalidate(store);
-    g_assert_true(mfd_store_writer_ensure_root(writer, &error));
-    g_assert_no_error(error);
-
-    f->core_hash = mft_fake_hash("core");
-    f->kit_hash = mft_fake_hash("kit");
-    f->app_hash = mft_fake_hash("app");
+    g_assert_null(mfd_removal_plan_new_for_removal(store, component_id, version, &error));
+    g_assert_error(error, MF_ERROR, MF_ERROR_COMPONENT_IN_USE);
+    g_assert_cmpstr(mf_error_get_field(error, MF_ERROR_FIELD_COMPONENT_ID), ==, component_id);
+    g_assert_cmpstr(mf_error_get_field(error, MF_ERROR_FIELD_USED_BY), ==, used_by);
 }
-
-static void
-mft_teardown(Fixture *f, gconstpointer user_data)
-{
-    g_free(f->core_hash);
-    g_free(f->kit_hash);
-    g_free(f->app_hash);
-}
-
-/*
- * Tests
- */
 
 /**
- * test_install_runtime:
+ * test_install:
+ *
+ * Check the files that the store writer creates for installed components.
  */
 static void
-test_install_runtime(Fixture *f, gconstpointer user_data)
+test_install(void)
 {
-    g_autofree char *hash = mft_fake_hash("core");
-    g_autofree char *expected_link = g_strdup_printf("../../../images/by-verity/%s.raw", hash);
-    g_autofree char *origin = NULL;
-    g_autofree char *mode = NULL;
-    g_autofree char *manifest = NULL;
+    g_autofree char *core_hash = mft_image_hash(TEST_CORE_ID, "13.4", 1);
+    g_autofree char *image_link = g_strdup_printf("../../../images/by-verity/%s.raw", core_hash);
     MftTestManifest core_manifest = {.component_id = TEST_CORE_ID,
                                      .kind = "core",
                                      .version = "13.4",
-                                     .verity_root_hash = hash};
-    g_autofree char *expected_manifest = mft_manifest_json(&core_manifest);
+                                     .verity_root_hash = core_hash};
+    g_autofree char *core_json = mft_manifest_json(&core_manifest);
     g_autoptr(GPtrArray) components = NULL;
-    MfComponent *core;
 
-    mft_add_image(hash, 4096);
-    mft_install(&core_manifest, NULL, MF_INSTALL_MODE_MANUAL);
+    mft_install_usual();
+    mft_install_core_sdk();
 
-    /* check the version directory and its contents */
-    mft_assert_link(RUNTIMES "/" TEST_CORE_ID "/13.4-1/runtime.raw", expected_link);
-    g_assert_false(g_file_test(RUNTIMES "/" TEST_CORE_ID "/13.4-1/base", G_FILE_TEST_EXISTS));
-    origin = mft_read_file(RUNTIMES "/" TEST_CORE_ID "/13.4-1/origin");
-    g_assert_cmpstr(origin, ==, "manifold-local\n");
-    mode = mft_read_file(RUNTIMES "/" TEST_CORE_ID "/13.4-1/mode");
-    g_assert_cmpstr(mode, ==, "manual\n");
-    manifest = mft_read_file(RUNTIMES "/" TEST_CORE_ID "/13.4-1/manifest.json");
-    g_assert_cmpstr(manifest, ==, expected_manifest);
+    /* the version directory of the core */
     mft_assert_link(RUNTIMES "/" TEST_CORE_ID "/current", "13.4-1");
+    mft_assert_link(RUNTIMES "/" TEST_CORE_ID "/13.4-1/runtime.raw", image_link);
+    mft_assert_file(RUNTIMES "/" TEST_CORE_ID "/13.4-1/manifest.json", core_json);
+    mft_assert_file(RUNTIMES "/" TEST_CORE_ID "/13.4-1/origin", "manifold-local\n");
+    g_assert_false(g_file_test(RUNTIMES "/" TEST_CORE_ID "/13.4-1/base", G_FILE_TEST_EXISTS));
 
-    /* check how the store lists it */
-    components = mft_list_components();
-    g_assert_cmpuint(components->len, ==, 1);
-    core = mft_find_component(components, TEST_CORE_ID, "13.4");
-    g_assert_nonnull(core);
-    g_assert_cmpint(mf_component_get_kind(core), ==, MF_COMPONENT_KIND_CORE);
-    g_assert_cmpuint(mf_component_get_revision(core), ==, 1);
-    g_assert_cmpstr(mf_component_get_full_version(core), ==, "13.4-1");
-    g_assert_false(mf_component_is_sdk(core));
-    g_assert_cmpstr(mf_component_get_verity_hash(core), ==, hash);
-    g_assert_true(mf_component_is_current(core));
-    g_assert_cmpint(mf_component_get_install_mode(core), ==, MF_INSTALL_MODE_MANUAL);
-    g_assert_cmpstr(mf_component_get_origin(core), ==, "manifold-local");
-
-    g_assert_true(mf_store_has_image(store, hash));
-}
-
-/**
- * test_install_app_with_dependency:
- */
-static void
-test_install_app_with_dependency(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *sdk_hash = mft_fake_hash("sdk");
-    g_autofree char *mode = NULL;
-    g_autoptr(GPtrArray) components = NULL;
-    g_autoptr(MfComponent) kit = NULL;
-    g_autoptr(MfComponent) app = NULL;
-
-    mft_install_usual(f);
-    /* install an SDK that is pinned to one exact version of the core */
-    mft_add_image(sdk_hash, 512);
-    mft_install(&(MftTestManifest){.component_id = TEST_SDK_ID,
-                                   .kind = "core",
-                                   .version = "13.4",
-                                   .sdk = TRUE,
-                                   .verity_root_hash = sdk_hash,
-                                   .base_id = TEST_CORE_ID,
-                                   .base_kind = "core"},
-                "13.4-1",
-                MF_INSTALL_MODE_MANUAL);
-
-    /* a base link points to the current version of the base, or to an exact version if pinned */
+    /* a base link points to the current version of the base, or to an exact version for an SDK */
     mft_assert_link(APPS "/" TEST_APP_ID "/0.1.0-1/base", "../../../runtimes/" TEST_KIT_ID "/current");
     mft_assert_link(RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1/base",
                     "../../../runtimes/" TEST_CORE_ID "/current");
     mft_assert_link(RUNTIMES "/" TEST_SDK_ID "/13.4-1/base", "../../../runtimes/" TEST_CORE_ID "/13.4-1");
-    /* every version records its install mode, and an app is always auto */
-    mode = mft_read_file(APPS "/" TEST_APP_ID "/0.1.0-1/mode");
-    g_assert_cmpstr(mode, ==, "auto\n");
-    g_clear_pointer(&mode, g_free);
-    mode = mft_read_file(RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1/mode");
-    g_assert_cmpstr(mode, ==, "auto\n");
 
-    /* check the installed components and their install modes */
+    /* every version records its install mode */
+    mft_assert_file(RUNTIMES "/" TEST_CORE_ID "/13.4-1/mode", "manual\n");
+    mft_assert_file(RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1/mode", "auto\n");
+    mft_assert_file(APPS "/" TEST_APP_ID "/0.1.0-1/mode", "auto\n");
+
+    /* the store reader finds all of them */
     components = mft_list_components();
     g_assert_cmpuint(components->len, ==, 4);
-    kit = mf_store_get_component(store, TEST_KIT_ID, "20260112T0238", NULL);
-    g_assert_cmpstr(mf_component_get_verity_hash(kit), ==, f->kit_hash);
-    g_assert_cmpint(mf_component_get_install_mode(kit), ==, MF_INSTALL_MODE_AUTO);
-    app = mf_store_get_component(store, TEST_APP_ID, "0.1.0", NULL);
-    g_assert_cmpstr(mf_component_get_verity_hash(app), ==, f->app_hash);
-    g_assert_cmpint(mf_component_get_install_mode(app), ==, MF_INSTALL_MODE_AUTO);
+    g_assert_cmpstr(mf_component_get_full_version(mft_find_component(components, TEST_CORE_ID, "13.4")),
+                    ==,
+                    "13.4-1");
     g_assert_true(mf_component_is_sdk(mft_find_component(components, TEST_SDK_ID, "13.4")));
+    g_assert_true(mf_store_has_image(store, core_hash));
 }
 
 /**
  * test_install_again:
+ *
+ * A manual installation switches an automatically installed version to
+ * manual, and an automatic installation never switches it back.
  */
 static void
-test_install_again(Fixture *f, gconstpointer user_data)
+test_install_again(void)
 {
-    g_autofree char *mode = NULL;
     g_autoptr(MfComponent) kit = NULL;
 
-    mft_install_usual(f);
+    mft_install_usual();
 
-    /* installing an automatically installed dependency manually switches it to manual mode;
-     * installing it automatically again does not switch it back */
-    mft_install(&(MftTestManifest){.component_id = TEST_KIT_ID,
-                                   .kind = "kit",
-                                   .version = "20260112T0238",
-                                   .verity_root_hash = f->kit_hash,
-                                   .base_id = TEST_CORE_ID,
-                                   .base_kind = "core"},
-                NULL,
-                MF_INSTALL_MODE_MANUAL);
-    mode = mft_read_file(RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1/mode");
-    g_assert_cmpstr(mode, ==, "manual\n");
-    mft_install(&(MftTestManifest){.component_id = TEST_KIT_ID,
-                                   .kind = "kit",
-                                   .version = "20260112T0238",
-                                   .verity_root_hash = f->kit_hash,
-                                   .base_id = TEST_CORE_ID,
-                                   .base_kind = "core"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
-    g_clear_pointer(&mode, g_free);
-    mode = mft_read_file(RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1/mode");
-    g_assert_cmpstr(mode, ==, "manual\n");
+    mft_install_kit(TEST_KIT_ID, "20260112T0238", MF_INSTALL_MODE_MANUAL);
+    mft_assert_file(RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1/mode", "manual\n");
+    mft_install_kit(TEST_KIT_ID, "20260112T0238", MF_INSTALL_MODE_AUTO);
+    mft_assert_file(RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1/mode", "manual\n");
     kit = mf_store_get_component(store, TEST_KIT_ID, "20260112T0238", NULL);
     g_assert_cmpint(mf_component_get_install_mode(kit), ==, MF_INSTALL_MODE_MANUAL);
 
     /* installing an app version that is already installed does not add another version */
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.1.0",
-                                   .verity_root_hash = f->app_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
+    mft_install_app(TEST_APP_ID, "0.1.0", 0, TEST_KIT_ID);
     g_assert_cmpuint(mft_count_versions(TEST_APP_ID), ==, 1);
 }
 
 /**
- * test_resolve_identity:
+ * test_find_identity:
+ *
+ * An installed component can be found by its identity.
  */
 static void
-test_resolve_identity(Fixture *f, gconstpointer user_data)
+test_find_identity(void)
 {
     g_autofree char *core_identity = mft_fake_hash(TEST_CORE_ID);
     g_autofree char *app_identity = mft_fake_hash(TEST_APP_ID);
     g_autofree char *other_identity = mft_fake_hash("nothing");
-    g_autofree char *app_image_path = NULL;
-    g_autofree char *core2_hash = mft_fake_hash("core2");
+    g_autofree char *core_hash = mft_image_hash(TEST_CORE_ID, "13.4", 1);
+    g_autofree char *app_hash = mft_image_hash(TEST_APP_ID, "0.1.0", 1);
+    g_autofree char *app_image_path = g_strdup_printf(IMAGES "/%s.raw", app_hash);
     g_autoptr(MfComponent) core = NULL;
     g_autoptr(MfComponent) app = NULL;
     g_autoptr(MfComponent) current = NULL;
     g_autoptr(MfComponent) previous = NULL;
     g_autoptr(GError) error = NULL;
 
-    mft_install_usual(f);
+    mft_install_usual();
 
     core = mf_store_find_identity(store, core_identity, &error);
     g_assert_no_error(error);
-    g_assert_cmpstr(mf_component_get_verity_hash(core), ==, f->core_hash);
+    g_assert_cmpstr(mf_component_get_verity_hash(core), ==, core_hash);
     g_assert_cmpint(mf_component_get_kind(core), ==, MF_COMPONENT_KIND_CORE);
     g_assert_null(mf_store_find_identity(store, other_identity, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
@@ -382,22 +455,15 @@ test_resolve_identity(Fixture *f, gconstpointer user_data)
     /* apps can be found by their identity too, but only while their image exists */
     app = mf_store_find_identity(store, app_identity, &error);
     g_assert_no_error(error);
-    g_assert_cmpstr(mf_component_get_verity_hash(app), ==, f->app_hash);
+    g_assert_cmpstr(mf_component_get_verity_hash(app), ==, app_hash);
     g_assert_cmpint(mf_component_get_kind(app), ==, MF_COMPONENT_KIND_APP);
-    app_image_path = g_strdup_printf(IMAGES "/%s.raw", f->app_hash);
     g_assert_cmpint(g_unlink(app_image_path), ==, 0);
     g_assert_null(mf_store_find_identity(store, app_identity, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
     g_clear_error(&error);
 
     /* if several versions have the identity, the current version is found */
-    mft_add_image(core2_hash, 4096);
-    mft_install(&(MftTestManifest){.component_id = TEST_CORE_ID,
-                                   .kind = "core",
-                                   .version = "13.6",
-                                   .verity_root_hash = core2_hash},
-                NULL,
-                MF_INSTALL_MODE_MANUAL);
+    mft_install_core("13.6");
     current = mf_store_find_identity(store, core_identity, &error);
     g_assert_no_error(error);
     g_assert_cmpstr(mf_component_get_version(current), ==, "13.6");
@@ -413,68 +479,31 @@ test_resolve_identity(Fixture *f, gconstpointer user_data)
 
 /**
  * test_current_is_newest:
+ *
+ * The `current` link of a component always points to its newest version.
  */
 static void
-test_current_is_newest(Fixture *f, gconstpointer user_data)
+test_current_is_newest(void)
 {
-    g_autofree char *v2_hash = mft_fake_hash("app2");
-    g_autofree char *v10_hash = mft_fake_hash("app10");
     g_autoptr(GPtrArray) components = NULL;
     g_autoptr(MfResult) result = NULL;
     g_autoptr(GError) error = NULL;
 
-    mft_install_usual(f);
-    mft_add_image(v2_hash, 1024);
-    mft_add_image(v10_hash, 1024);
+    mft_install_usual();
 
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.2.0",
-                                   .verity_root_hash = v2_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
+    mft_install_app(TEST_APP_ID, "0.2.0", 0, TEST_KIT_ID);
     mft_assert_link(APPS "/" TEST_APP_ID "/current", "0.2.0-1");
+
     /* versions are compared by version rules, not as strings: 0.10.0 is newer than 0.2.0,
      * and installing the older 0.3.0 afterwards does not change current */
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.10.0",
-                                   .verity_root_hash = v10_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
+    mft_install_app(TEST_APP_ID, "0.10.0", 0, TEST_KIT_ID);
     mft_assert_link(APPS "/" TEST_APP_ID "/current", "0.10.0-1");
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.3.0",
-                                   .verity_root_hash = f->app_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
+    mft_install_app(TEST_APP_ID, "0.3.0", 0, TEST_KIT_ID);
     mft_assert_link(APPS "/" TEST_APP_ID "/current", "0.10.0-1");
+
     /* a rebuild of the same version has a higher revision, and the highest revision becomes current */
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.10.0",
-                                   .revision = 22910000,
-                                   .verity_root_hash = v10_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.10.0",
-                                   .revision = 22910119,
-                                   .verity_root_hash = v10_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
+    mft_install_app(TEST_APP_ID, "0.10.0", 22910000, TEST_KIT_ID);
+    mft_install_app(TEST_APP_ID, "0.10.0", 22910119, TEST_KIT_ID);
     mft_assert_link(APPS "/" TEST_APP_ID "/current", "0.10.0-22910119");
     g_assert_cmpuint(mft_count_versions(TEST_APP_ID), ==, 6);
 
@@ -490,331 +519,86 @@ test_current_is_newest(Fixture *f, gconstpointer user_data)
 }
 
 /**
- * mft_removal_item:
+ * mft_count_finished:
  *
- * Get the item at @index of a removal plan.
+ * Count the items that a removal reported as finished.
  */
-static MfdRemovalItem *
-mft_removal_item(MfdRemovalPlan *rmplan, guint index)
+static void
+mft_count_finished(const MfProgress *progress, gpointer user_data)
 {
-    return g_ptr_array_index(rmplan->items, index);
+    const MfItemProgress *item = mf_progress_get_item(progress);
+    guint *n_finished = user_data;
+
+    g_assert_nonnull(item);
+    /* an item is reported when it starts and when it finishes, so we only count finished items */
+    if (mf_item_progress_get_percent(item) >= 100)
+        (*n_finished)++;
 }
 
 /**
- * test_plan_removal:
+ * test_remove:
+ *
+ * Removing an application also removes the kit that was installed for it,
+ * and the images that no component uses anymore.
  */
 static void
-test_plan_removal(Fixture *f, gconstpointer user_data)
+test_remove(void)
 {
     g_autofree char *stray_hash = mft_fake_hash("stray");
-    g_autoptr(MfdRemovalPlan) app_removal = NULL;
+    g_autofree char *core_hash = mft_image_hash(TEST_CORE_ID, "13.4", 1);
+    g_autofree char *kit_hash = mft_image_hash(TEST_KIT_ID, "20260112T0238", 1);
+    g_autofree char *kit_image = g_strdup_printf(IMAGES "/%s.raw", kit_hash);
     g_autoptr(MfdRemovalPlan) cleanup = NULL;
+    g_autoptr(MfdRemovalPlan) removal = NULL;
+    g_autoptr(MfResult) result = NULL;
     g_autoptr(GError) error = NULL;
+    guint n_finished = 0;
 
-    mft_install_usual(f);
+    mft_install_usual();
     mft_add_image(stray_hash, 8192);
 
-    /* removing the app also removes the kit that was installed as its dependency, their images,
-     * and the stray image that no component uses */
-    app_removal = mfd_removal_plan_new_for_removal(store, TEST_APP_ID, NULL, &error);
-    g_assert_no_error(error);
-    g_assert_cmpuint(app_removal->items->len, ==, 2);
-    g_assert_cmpstr(mf_component_get_dir(mft_removal_item(app_removal, 0)->component),
-                    ==,
-                    APPS "/" TEST_APP_ID "/0.1.0-1");
-    g_assert_cmpstr(mf_component_get_dir(mft_removal_item(app_removal, 1)->component),
-                    ==,
-                    RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1");
-    g_assert_cmpstr(mf_component_get_id(mft_removal_item(app_removal, 1)->component), ==, TEST_KIT_ID);
-    /* the app is removed on request, and the kit because no component needs it anymore */
-    g_assert_cmpint(mft_removal_item(app_removal, 0)->action, ==, MF_ACTION_REMOVE);
-    g_assert_cmpint(mft_removal_item(app_removal, 1)->action, ==, MF_ACTION_CLEANUP);
-    g_assert_cmpuint(app_removal->images->len, ==, 3);
-    g_assert_cmpuint(app_removal->image_bytes, ==, 1024 + 2048 + 8192);
-
     /* the core can not be removed, as the kit needs it and no other version of the core is installed */
-    g_assert_null(mfd_removal_plan_new_for_removal(store, TEST_CORE_ID, "13.4", &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_COMPONENT_IN_USE);
-    g_assert_cmpstr(mf_error_get_field(error, MF_ERROR_FIELD_COMPONENT_ID), ==, TEST_CORE_ID);
-    g_assert_cmpstr(mf_error_get_field(error, MF_ERROR_FIELD_USED_BY), ==, TEST_KIT_ID);
-    g_clear_error(&error);
+    mft_assert_in_use(TEST_CORE_ID, "13.4", TEST_KIT_ID);
 
-    /* a cleanup that finds no unneeded component only removes the images that no component uses */
-    cleanup = mfd_removal_plan_new_for_removal(store, NULL, NULL, &error);
-    g_assert_no_error(error);
-    g_assert_cmpuint(cleanup->items->len, ==, 0);
-    g_assert_cmpuint(cleanup->images->len, ==, 1);
-    g_assert_cmpstr(g_ptr_array_index(cleanup->images, 0), ==, stray_hash);
-    g_assert_cmpuint(cleanup->image_bytes, ==, 8192);
-
+    /* a component and a version that are not installed */
     g_assert_null(mfd_removal_plan_new_for_removal(store, "org.example.nothing", NULL, &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
     g_assert_cmpstr(mf_error_get_field(error, MF_ERROR_FIELD_COMPONENT_ID), ==, "org.example.nothing");
     g_assert_null(mf_error_get_field(error, MF_ERROR_FIELD_USED_BY));
     g_clear_error(&error);
-    g_assert_null(mfd_removal_plan_new_for_removal(store, TEST_APP_ID, "9.9.9", &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
-    g_clear_error(&error);
-    /* a version that is not installed is reported as not found, not as in use */
     g_assert_null(mfd_removal_plan_new_for_removal(store, TEST_CORE_ID, "9.9", &error));
     g_assert_error(error, MF_ERROR, MF_ERROR_NOT_FOUND);
-}
-
-/**
- * test_exact_base_stays:
- */
-static void
-test_exact_base_stays(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *sdk_hash = mft_fake_hash("sdk");
-    g_autofree char *core2_hash = mft_fake_hash("core2");
-    g_autoptr(GError) error = NULL;
-
-    mft_install_usual(f);
-    mft_add_image(sdk_hash, 512);
-    mft_add_image(core2_hash, 4096);
-    mft_install(&(MftTestManifest){.component_id = TEST_CORE_ID,
-                                   .kind = "core",
-                                   .version = "13.6",
-                                   .verity_root_hash = core2_hash},
-                NULL,
-                MF_INSTALL_MODE_MANUAL);
-    mft_install(&(MftTestManifest){.component_id = TEST_SDK_ID,
-                                   .kind = "core",
-                                   .version = "13.4",
-                                   .sdk = TRUE,
-                                   .verity_root_hash = sdk_hash,
-                                   .base_id = TEST_CORE_ID,
-                                   .base_kind = "core"},
-                "13.4-1",
-                MF_INSTALL_MODE_MANUAL);
-
-    /* core 13.4 can not be removed, as the SDK is pinned to it, even though 13.6 is installed too */
-    g_assert_null(mfd_removal_plan_new_for_removal(store, TEST_CORE_ID, "13.4", &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_COMPONENT_IN_USE);
-    g_assert_cmpstr(mf_error_get_field(error, MF_ERROR_FIELD_USED_BY), ==, TEST_SDK_ID);
     g_clear_error(&error);
 
-    /* core 13.6 can not be removed either: the kit follows the current version of the core,
-     * and removing 13.6 would downgrade the core under the kit */
-    g_assert_null(mfd_removal_plan_new_for_removal(store, TEST_CORE_ID, "13.6", &error));
-    g_assert_error(error, MF_ERROR, MF_ERROR_COMPONENT_IN_USE);
-    g_assert_cmpstr(mf_error_get_field(error, MF_ERROR_FIELD_USED_BY), ==, TEST_KIT_ID);
-}
-
-/**
- * test_shared_dependency_stays:
- */
-static void
-test_shared_dependency_stays(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *other_hash = mft_fake_hash("other");
-    g_autoptr(MfdRemovalPlan) removal = NULL;
-    g_autoptr(GError) error = NULL;
-
-    mft_install_usual(f);
-    mft_add_image(other_hash, 1024);
-    mft_install(&(MftTestManifest){.component_id = "com.example.other",
-                                   .kind = "app",
-                                   .version = "1.0",
-                                   .verity_root_hash = other_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
-
-    removal = mfd_removal_plan_new_for_removal(store, TEST_APP_ID, NULL, &error);
-    g_assert_no_error(error);
-    g_assert_cmpuint(removal->items->len, ==, 1);
-    g_assert_cmpuint(removal->images->len, ==, 1);
-    g_assert_cmpstr(g_ptr_array_index(removal->images, 0), ==, f->app_hash);
-}
-
-/**
- * test_old_dependency_is_removed:
- */
-static void
-test_old_dependency_is_removed(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *kit2_hash = mft_fake_hash("kit2");
-    g_autoptr(MfdRemovalPlan) cleanup = NULL;
-    g_autoptr(GError) error = NULL;
-
-    mft_install_usual(f);
-    mft_add_image(kit2_hash, 2048);
-    mft_install(&(MftTestManifest){.component_id = TEST_KIT_ID,
-                                   .kind = "kit",
-                                   .version = "20261101T0000",
-                                   .verity_root_hash = kit2_hash,
-                                   .base_id = TEST_CORE_ID,
-                                   .base_kind = "core"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
-
-    /* the app follows the current version of the kit, so the old kit version is no longer
-     * needed, and a cleanup removes it */
-    cleanup = mfd_removal_plan_new_for_removal(store, NULL, NULL, &error);
-    g_assert_no_error(error);
-    g_assert_cmpuint(cleanup->items->len, ==, 1);
-    g_assert_cmpstr(mf_component_get_dir(mft_removal_item(cleanup, 0)->component),
-                    ==,
-                    RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1");
+    /* a cleanup that finds no unneeded component only removes the images that no component uses */
+    cleanup = mft_plan(NULL, NULL);
+    g_assert_cmpuint(cleanup->items->len, ==, 0);
     g_assert_cmpuint(cleanup->images->len, ==, 1);
-    g_assert_cmpstr(g_ptr_array_index(cleanup->images, 0), ==, f->kit_hash);
-}
+    g_assert_cmpstr(g_ptr_array_index(cleanup->images, 0), ==, stray_hash);
+    g_assert_cmpuint(cleanup->image_bytes, ==, 8192);
 
-/**
- * test_dependency_chain_removal:
- *
- * A cleanup can remove a chain of dependencies in one run: an old version of
- * an app is removed together with the kit that only this version used.
- */
-static void
-test_dependency_chain_removal(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *old_kit_hash = mft_fake_hash("old-kit");
-    g_autofree char *old_app_hash = mft_fake_hash("old-app");
-    g_autoptr(MfdRemovalPlan) cleanup = NULL;
-    g_autoptr(GError) error = NULL;
+    /* the app is removed on request, and the kit because no component needs it anymore */
+    removal = mft_plan(TEST_APP_ID, NULL);
+    g_assert_cmpuint(removal->items->len, ==, 2);
+    g_assert_cmpint(mft_plan_find(removal, APPS "/" TEST_APP_ID "/0.1.0-1"), ==, 0);
+    g_assert_cmpint(mft_plan_find(removal, RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1"), ==, 1);
+    g_assert_cmpint(((MfdRemovalItem *) g_ptr_array_index(removal->items, 0))->action, ==, MF_ACTION_REMOVE);
+    g_assert_cmpint(((MfdRemovalItem *) g_ptr_array_index(removal->items, 1))->action, ==, MF_ACTION_CLEANUP);
+    g_assert_cmpuint(removal->images->len, ==, 3);
+    g_assert_cmpuint(removal->image_bytes, ==, APP_IMAGE_SIZE + KIT_IMAGE_SIZE + 8192);
 
-    mft_install_usual(f);
-    mft_add_image(old_kit_hash, 2048);
-    mft_add_image(old_app_hash, 1024);
-    mft_install(&(MftTestManifest){.component_id = TEST_CORE_ID ".0123456789abcdef",
-                                   .kind = "kit",
-                                   .version = "20251201T0000",
-                                   .verity_root_hash = old_kit_hash,
-                                   .base_id = TEST_CORE_ID,
-                                   .base_kind = "core"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.0.1",
-                                   .verity_root_hash = old_app_hash,
-                                   .base_id = TEST_CORE_ID ".0123456789abcdef",
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
-
-    cleanup = mfd_removal_plan_new_for_removal(store, NULL, NULL, &error);
-    g_assert_no_error(error);
-    g_assert_cmpuint(cleanup->items->len, ==, 2);
-    g_assert_cmpstr(mf_component_get_dir(mft_removal_item(cleanup, 0)->component),
-                    ==,
-                    APPS "/" TEST_APP_ID "/0.0.1-1");
-    g_assert_cmpstr(mf_component_get_dir(mft_removal_item(cleanup, 1)->component),
-                    ==,
-                    RUNTIMES "/" TEST_CORE_ID ".0123456789abcdef/20251201T0000-1");
-    g_assert_cmpuint(cleanup->images->len, ==, 2);
-}
-
-/**
- * test_newest_app_stays:
- *
- * An application is always installed with the install mode auto, so a
- * removal or a cleanup also removes its older versions, unless they were set
- * to manual. The newest version that is not planned for removal is always kept.
- */
-static void
-test_newest_app_stays(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *v2_hash = mft_fake_hash("app2");
-    g_autofree char *v3_hash = mft_fake_hash("app3");
-    g_autoptr(MfdRemovalPlan) cleanup = NULL;
-    g_autoptr(MfdRemovalPlan) removal = NULL;
-    g_autoptr(GError) error = NULL;
-
-    mft_install_usual(f);
-    mft_add_image(v2_hash, 1024);
-    mft_add_image(v3_hash, 1024);
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.2.0",
-                                   .verity_root_hash = v2_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.3.0",
-                                   .verity_root_hash = v3_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit"},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
-    mft_write_file(APPS "/" TEST_APP_ID "/0.1.0-1/mode", "manual\n");
-    g_assert_true(mf_store_load(store, &error));
-    g_assert_no_error(error);
-
-    cleanup = mfd_removal_plan_new_for_removal(store, NULL, NULL, &error);
-    g_assert_no_error(error);
-    g_assert_cmpuint(cleanup->items->len, ==, 1);
-    g_assert_cmpstr(mf_component_get_dir(mft_removal_item(cleanup, 0)->component),
-                    ==,
-                    APPS "/" TEST_APP_ID "/0.2.0-1");
-
-    /* if 0.3.0 is removed, 0.2.0 is the newest remaining version and is kept */
-    removal = mfd_removal_plan_new_for_removal(store, TEST_APP_ID, "0.3.0", &error);
-    g_assert_no_error(error);
-    g_assert_cmpuint(removal->items->len, ==, 1);
-    g_assert_cmpstr(mf_component_get_dir(mft_removal_item(removal, 0)->component),
-                    ==,
-                    APPS "/" TEST_APP_ID "/0.3.0-1");
-}
-
-/* the number of removed components that a removal reported, counted by the reason for their removal */
-typedef struct {
-    guint requested;  /* removed on request */
-    guint cleaned_up; /* removed as they are not needed anymore */
-} RemovalCounts;
-
-/**
- * mft_count_removed:
- */
-static void
-mft_count_removed(const MfProgress *progress, gpointer user_data)
-{
-    const MfItemProgress *item = mf_progress_get_item(progress);
-    RemovalCounts *counts = user_data;
-
-    /* each item is reported when it starts and when it finishes; only count finished ones */
-    g_assert_nonnull(item);
-    if (mf_item_progress_get_percent(item) < 100)
-        return;
-    if (mf_item_progress_get_action(item) == MF_ACTION_REMOVE)
-        counts->requested++;
-    if (mf_item_progress_get_action(item) == MF_ACTION_CLEANUP)
-        counts->cleaned_up++;
-}
-
-/**
- * test_remove:
- */
-static void
-test_remove(Fixture *f, gconstpointer user_data)
-{
-    g_autofree char *kit_image = NULL;
-    g_autoptr(MfResult) result = NULL;
-    g_autoptr(GError) error = NULL;
-    RemovalCounts counts = {};
-
-    mft_install_usual(f);
     /* leftovers of interrupted installations: in the app's directory, which is removed completely,
      * and in the core's directory, which stays */
     g_assert_cmpint(g_mkdir(APPS "/" TEST_APP_ID "/.tmp-9.9.9-1", 0755), ==, 0);
     g_assert_cmpint(g_mkdir(RUNTIMES "/" TEST_CORE_ID "/.tmp-13.6-1", 0755), ==, 0);
 
-    result = mfd_manager_remove(manager, TEST_APP_ID, NULL, mft_count_removed, &counts, &error);
+    /* remove the app */
+    result = mfd_manager_remove(manager, TEST_APP_ID, NULL, mft_count_finished, &n_finished, &error);
     g_assert_no_error(error);
-    g_assert_nonnull(result);
-    /* the app was removed on request, the kit was cleaned up, and images are not reported as items */
-    g_assert_cmpuint(counts.requested, ==, 1);
-    g_assert_cmpuint(counts.cleaned_up, ==, 1);
+    g_assert_cmpuint(n_finished, ==, 2);
     g_assert_cmpuint(mf_result_get_removed(result)->len, ==, 2);
-    g_assert_cmpuint(mf_result_get_removed_images(result)->len, ==, 2);
-    g_assert_cmpuint(mf_result_get_bytes_freed(result), ==, 1024 + 2048);
+    g_assert_cmpuint(mf_result_get_removed_images(result)->len, ==, 3);
+    g_assert_cmpuint(mf_result_get_bytes_freed(result), ==, APP_IMAGE_SIZE + KIT_IMAGE_SIZE + 8192);
 
     /* the app and kit directories are removed with their last version; the core stays, but its
      * leftover is removed */
@@ -822,109 +606,123 @@ test_remove(Fixture *f, gconstpointer user_data)
     g_assert_false(g_file_test(RUNTIMES "/" TEST_KIT_ID, G_FILE_TEST_EXISTS));
     g_assert_true(g_file_test(RUNTIMES "/" TEST_CORE_ID "/13.4-1", G_FILE_TEST_IS_DIR));
     g_assert_false(g_file_test(RUNTIMES "/" TEST_CORE_ID "/.tmp-13.6-1", G_FILE_TEST_EXISTS));
-    kit_image = g_strdup_printf(IMAGES "/%s.raw", f->kit_hash);
     g_assert_false(g_file_test(kit_image, G_FILE_TEST_EXISTS));
-    g_assert_true(mf_store_has_image(store, f->core_hash));
-}
-
-static void
-test_writes_stay_below_their_directory(void)
-{
-    g_autoptr(GError) error = NULL;
-    g_autofree char *dir = g_dir_make_tmp("mft-writes-XXXXXX", &error);
-    g_autofree char *inside = g_build_filename(dir, "inside", NULL);
-    g_autofree char *outside = g_build_filename(dir, "outside", NULL);
-    g_autofree char *outside_file = g_build_filename(outside, "file", NULL);
-    g_autofree char *link = g_build_filename(inside, "link", NULL);
-    g_autofree char *up = g_build_filename(inside, "up", NULL);
-    g_autofree char *escaped = g_build_filename(dir, "escaped", NULL);
-    g_autofree char *self = g_build_filename(inside, "self", NULL);
-    g_autofree char *tmp_dir = g_build_filename(inside, MF_TMP_PREFIX "..", NULL);
-    g_autofree char *outside_sub = g_build_filename(outside, "sub", NULL);
-    g_autofd int inside_fd = -1;
-    g_autofd int sub_fd = -1;
-
-    g_assert_no_error(error);
-    g_assert_cmpint(g_mkdir(inside, 0755), ==, 0);
-    g_assert_cmpint(g_mkdir(outside, 0755), ==, 0);
-
-    /* a file name must not contain a path, so it can not lead out of the directory */
-    g_assert_false(mfd_write_contents_safe(inside, "../escaped", "x", -1, &error));
-    g_clear_error(&error);
-    /* the temporary link would be `.tmp-../escaped`, which can only be created if the directory
-     * `.tmp-..` exists */
-    g_assert_cmpint(g_mkdir(tmp_dir, 0755), ==, 0);
-    g_assert_false(mfd_replace_link("target", inside, "../escaped", &error));
-    g_clear_error(&error);
-    g_assert_false(g_file_test(escaped, G_FILE_TEST_IS_SYMLINK));
-
-    /* an existing link with the file name is replaced, and its target is not written to */
-    g_assert_cmpint(symlink(outside_file, link), ==, 0);
-    g_assert_true(mfd_write_contents_safe(inside, "link", "x", -1, &error));
-    g_assert_no_error(error);
-    g_assert_false(g_file_test(outside_file, G_FILE_TEST_EXISTS));
-    g_assert_false(g_file_test(link, G_FILE_TEST_IS_SYMLINK));
-
-    /* a subdirectory path can not lead out of the directory either, by `..` or by a link */
-    g_assert_true(glnx_opendirat(AT_FDCWD, inside, TRUE, &inside_fd, &error));
-    g_assert_cmpint(mfd_make_dir_below(inside_fd, "../outside/sub", &error), ==, -1);
-    g_clear_error(&error);
-    g_assert_cmpint(symlink("../outside", up), ==, 0);
-    g_assert_cmpint(mfd_make_dir_below(inside_fd, "up/sub", &error), ==, -1);
-    g_clear_error(&error);
-    g_assert_false(g_file_test(outside_sub, G_FILE_TEST_EXISTS));
-
-    /* no link is followed at all, even if it points into the directory */
-    g_assert_cmpint(symlink(".", self), ==, 0);
-    g_assert_cmpint(mfd_make_dir_below(inside_fd, "self/sub", &error), ==, -1);
-    g_clear_error(&error);
-
-    sub_fd = mfd_make_dir_below(inside_fd, "48x48/apps", &error);
-    g_assert_no_error(error);
-    g_assert_cmpint(sub_fd, >=, 0);
-    g_assert_true(mfd_write_file_at(sub_fd, "icon.png", "png", 3, 0644, &error));
-    g_assert_no_error(error);
-
-    g_assert_true(glnx_shutil_rm_rf_at(AT_FDCWD, dir, NULL, &error));
+    g_assert_true(mf_store_has_image(store, core_hash));
 }
 
 /**
- * mft_app_manifest_new:
- * @version: the version of the application
- * @integration: (nullable): the integration section as JSON
+ * test_used_base_stays:
  *
- * Returns: (transfer full): the parsed manifest of a version of the application
+ * A component is not removed while another component is built on it.
  */
-static MfManifest *
-mft_app_manifest_new(const char *version, const char *integration)
+static void
+test_used_base_stays(void)
 {
-    return mft_manifest_new(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                               .kind = "app",
-                                               .version = version,
-                                               .base_id = TEST_KIT_ID,
-                                               .base_kind = "kit",
-                                               .integration = integration});
+    g_autofree char *app_hash = mft_image_hash(TEST_APP_ID, "0.1.0", 1);
+    g_autoptr(MfdRemovalPlan) removal = NULL;
+
+    mft_install_usual();
+    mft_install_app("com.example.other", "1.0", 0, TEST_KIT_ID);
+    mft_install_core("13.6");
+    mft_install_core_sdk();
+
+    /* the other application still needs the kit */
+    removal = mft_plan(TEST_APP_ID, NULL);
+    g_assert_cmpuint(removal->items->len, ==, 1);
+    g_assert_cmpuint(removal->images->len, ==, 1);
+    g_assert_cmpstr(g_ptr_array_index(removal->images, 0), ==, app_hash);
+
+    /* the SDK needs core 13.4, even though 13.6 is installed too */
+    mft_assert_in_use(TEST_CORE_ID, "13.4", TEST_SDK_ID);
+
+    /* the kit follows the current version of the core, and removing 13.6 would downgrade
+     * the core under the kit */
+    mft_assert_in_use(TEST_CORE_ID, "13.6", TEST_KIT_ID);
 }
 
+/**
+ * test_cleanup:
+ *
+ * A cleanup removes the automatically installed versions that no component
+ * needs anymore. An application is always installed automatically, so its
+ * older versions are removed too, unless they were set to manual.
+ */
 static void
-test_update_gains_privileges(Fixture *f, gconstpointer user_data)
+test_cleanup(void)
 {
-    const char *rule = "{\"udev-rule\": [{\"path\": \"/app/lib/udev/rules.d/60-" TEST_APP_ID
-                       ".rules\", "
-                       "\"sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", "
-                       "\"blake3\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}]}";
-    g_autoptr(MfManifest) plain = mft_app_manifest_new("0.2.0", NULL);
-    g_autoptr(MfManifest) with_rule = mft_app_manifest_new("0.2.0", rule);
+    g_autofree char *kit_hash = mft_image_hash(TEST_KIT_ID, "20260112T0238", 1);
+    g_autoptr(MfdRemovalPlan) cleanup = NULL;
+    int old_app;
+    int old_kit;
+
+    mft_install_usual();
+    /* a newer version of the kit, which the application follows */
+    mft_install_kit(TEST_KIT_ID, "20261101T0000", MF_INSTALL_MODE_AUTO);
+    /* an old version of the application, on a kit that nothing else uses */
+    mft_install_kit(OLD_KIT_ID, "20251201T0000", MF_INSTALL_MODE_AUTO);
+    mft_install_app(TEST_APP_ID, "0.0.1", 0, OLD_KIT_ID);
+    /* two newer versions of the application, and 0.1.0 is set to manual */
+    mft_install_app(TEST_APP_ID, "0.2.0", 0, TEST_KIT_ID);
+    mft_install_app(TEST_APP_ID, "0.3.0", 0, TEST_KIT_ID);
+    mft_write_file(APPS "/" TEST_APP_ID "/0.1.0-1/mode", "manual\n");
+    mft_reload_store();
+
+    /* the newest version 0.3.0 and the manual version 0.1.0 of the application stay */
+    cleanup = mft_plan(NULL, NULL);
+    g_assert_cmpuint(cleanup->items->len, ==, 4);
+    g_assert_cmpint(mft_plan_find(cleanup, APPS "/" TEST_APP_ID "/0.2.0-1"), >=, 0);
+    g_assert_cmpint(mft_plan_find(cleanup, RUNTIMES "/" TEST_KIT_ID "/20260112T0238-1"), >=, 0);
+    g_assert_true(g_ptr_array_find_with_equal_func(cleanup->images, kit_hash, g_str_equal, NULL));
+    g_assert_cmpuint(cleanup->images->len, ==, 4);
+
+    /* a chain of dependencies is removed in one run, and the application before its kit */
+    old_app = mft_plan_find(cleanup, APPS "/" TEST_APP_ID "/0.0.1-1");
+    old_kit = mft_plan_find(cleanup, RUNTIMES "/" OLD_KIT_ID "/20251201T0000-1");
+    g_assert_cmpint(old_app, >=, 0);
+    g_assert_cmpint(old_kit, >, old_app);
+}
+
+/**
+ * test_update_gains_privileges:
+ *
+ * An update that adds privileged files to an application needs the approval
+ * of an admin, unless an installed version of the application has privileged
+ * files already.
+ */
+static void
+test_update_gains_privileges(void)
+{
+    /* clang-format off */
+    const char *rule =
+        "{\"udev-rule\": [{"
+        "  \"path\": \"/app/lib/udev/rules.d/60-" TEST_APP_ID ".rules\","
+        "  \"sha256\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\","
+        "  \"blake3\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\""
+        "}]}";
+    /* clang-format on */
+    MftTestManifest app = {.component_id = TEST_APP_ID,
+                           .kind = "app",
+                           .version = "0.2.0",
+                           .base_id = TEST_KIT_ID,
+                           .base_kind = "kit"};
+    MftTestManifest app_with_rule = app;
+    MftTestManifest other_with_rule = app;
+    g_autoptr(MfManifest) plain = NULL;
+    g_autoptr(MfManifest) with_rule = NULL;
     g_autoptr(MfManifest) other = NULL;
-    g_autofree char *with_rule_hash = mft_fake_hash("app with rule");
     g_autoptr(MfdInstallSet) set = mfd_install_set_new();
-    g_autoptr(GError) error = NULL;
 
-    mft_install_usual(f);
-    g_assert_true(mf_store_load(store, &error));
-    g_assert_no_error(error);
+    app_with_rule.integration = rule;
+    other_with_rule.component_id = "org.example.other";
+    other_with_rule.integration = rule;
+    plain = mft_manifest_new(&app);
+    with_rule = mft_manifest_new(&app_with_rule);
+    other = mft_manifest_new(&other_with_rule);
 
-    /* an update without integration files that an admin has to approve */
+    mft_install_usual();
+    mft_reload_store();
+
+    /* an update without privileged files */
     mfd_install_set_add(set, plain, "app", "example-main");
     g_assert_false(mfd_manager_install_set_gains_privileges(manager, set));
 
@@ -934,36 +732,101 @@ test_update_gains_privileges(Fixture *f, gconstpointer user_data)
     g_clear_pointer(&set, mfd_install_set_free);
 
     /* once a version with the rule is installed, an update that has it needs no approval */
-    mft_add_image(with_rule_hash, 1024);
-    mft_install(&(MftTestManifest){.component_id = TEST_APP_ID,
-                                   .kind = "app",
-                                   .version = "0.1.5",
-                                   .verity_root_hash = with_rule_hash,
-                                   .base_id = TEST_KIT_ID,
-                                   .base_kind = "kit",
-                                   .integration = rule},
-                NULL,
-                MF_INSTALL_MODE_AUTO);
-    g_assert_true(mf_store_load(store, &error));
-    g_assert_no_error(error);
+    app_with_rule.version = "0.1.5";
+    mft_install(&app_with_rule, NULL, MF_INSTALL_MODE_AUTO);
+    mft_reload_store();
     set = mfd_install_set_new();
     mfd_install_set_add(set, with_rule, "app", "example-main");
     g_assert_false(mfd_manager_install_set_gains_privileges(manager, set));
 
     /* a privileged component that is not installed at all needs approval */
-    other = mft_manifest_new(&(MftTestManifest){.component_id = "org.example.other",
-                                                .kind = "app",
-                                                .version = "1.0",
-                                                .base_id = TEST_KIT_ID,
-                                                .base_kind = "kit",
-                                                .integration = rule});
     mfd_install_set_add(set, other, "other", "example-main");
     g_assert_true(mfd_manager_install_set_gains_privileges(manager, set));
 }
 
 /**
- * main:
+ * mft_assert_not_a_file_name:
+ *
+ * Check that a write was refused because of the name of its file.
  */
+static void
+mft_assert_not_a_file_name(GError **error)
+{
+    g_assert_error(*error, G_IO_ERROR, G_IO_ERROR_FAILED);
+    g_assert_nonnull(strstr((*error)->message, "is not the name of a file"));
+    g_clear_error(error);
+}
+
+/**
+ * test_writes_stay_below_their_directory:
+ *
+ * The file and link helpers of the daemon never write outside of their
+ * target directory.
+ */
+static void
+test_writes_stay_below_their_directory(void)
+{
+    g_autofree char *dir = mft_make_tmp_dir("store-writes");
+    g_autofree char *inside = g_build_filename(dir, "inside", NULL);
+    g_autofree char *outside = g_build_filename(dir, "outside", NULL);
+    g_autofree char *outside_file = g_build_filename(outside, "file", NULL);
+    g_autofree char *outside_sub = g_build_filename(outside, "sub", NULL);
+    g_autofree char *escaped = g_build_filename(dir, "escaped", NULL);
+    g_autofree char *tmp_dir = g_build_filename(inside, MF_TMP_PREFIX "..", NULL);
+    g_autofree char *link = g_build_filename(inside, "link", NULL);
+    g_autofree char *up = g_build_filename(inside, "up", NULL);
+    g_autofree char *self = g_build_filename(inside, "self", NULL);
+    g_autoptr(GError) error = NULL;
+    g_autofd int inside_fd = -1;
+    g_autofd int sub_fd = -1;
+
+    mft_make_dirs(inside);
+    mft_make_dirs(outside);
+
+    /* a file name must not contain a path, so it can not lead out of the directory */
+    g_assert_false(mfd_write_contents_safe(inside, "../escaped", "x", -1, &error));
+    mft_assert_not_a_file_name(&error);
+    /* the temporary link would be `.tmp-../escaped`, which can only be created if the directory
+     * `.tmp-..` exists */
+    mft_make_dirs(tmp_dir);
+    g_assert_false(mfd_replace_link("target", inside, "../escaped", &error));
+    mft_assert_not_a_file_name(&error);
+    g_assert_false(g_file_test(escaped, G_FILE_TEST_EXISTS | G_FILE_TEST_IS_SYMLINK));
+
+    /* an existing link with the file name is replaced, and its target is not written to */
+    mft_make_link(outside_file, link);
+    g_assert_true(mfd_write_contents_safe(inside, "link", "x", -1, &error));
+    g_assert_no_error(error);
+    g_assert_false(g_file_test(outside_file, G_FILE_TEST_EXISTS));
+    g_assert_false(g_file_test(link, G_FILE_TEST_IS_SYMLINK));
+
+    /* a subdirectory path can not lead out of the directory either, by `..` or by a link */
+    g_assert_true(glnx_opendirat(AT_FDCWD, inside, TRUE, &inside_fd, &error));
+    g_assert_cmpint(mfd_make_dir_below(inside_fd, "../outside/sub", &error), ==, -1);
+    g_assert_nonnull(error);
+    g_clear_error(&error);
+    mft_make_link("../outside", up);
+    g_assert_cmpint(mfd_make_dir_below(inside_fd, "up/sub", &error), ==, -1);
+    g_assert_nonnull(error);
+    g_clear_error(&error);
+    g_assert_false(g_file_test(outside_sub, G_FILE_TEST_EXISTS));
+
+    /* no link is followed at all, even if it points into the directory */
+    mft_make_link(".", self);
+    g_assert_cmpint(mfd_make_dir_below(inside_fd, "self/sub", &error), ==, -1);
+    g_assert_nonnull(error);
+    g_clear_error(&error);
+
+    /* a path below the directory */
+    sub_fd = mfd_make_dir_below(inside_fd, "48x48/apps", &error);
+    g_assert_no_error(error);
+    g_assert_cmpint(sub_fd, >=, 0);
+    g_assert_true(mfd_write_file_at(sub_fd, "icon.png", "png", 3, 0644, &error));
+    g_assert_no_error(error);
+
+    mft_rm_rf(dir);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -973,21 +836,14 @@ main(int argc, char **argv)
     writer = mfd_store_writer_new(store);
     manager = mfd_manager_new_for_store(store);
 
-#define add_test(name, func) g_test_add("/store/" name, Fixture, NULL, mft_setup, func, mft_teardown)
-    add_test("install-runtime", test_install_runtime);
-    add_test("install-app-with-dependency", test_install_app_with_dependency);
-    add_test("install-again", test_install_again);
-    add_test("resolve-identity", test_resolve_identity);
-    add_test("current-is-newest", test_current_is_newest);
-    add_test("plan-removal", test_plan_removal);
-    add_test("exact-base-stays", test_exact_base_stays);
-    add_test("shared-dependency-stays", test_shared_dependency_stays);
-    add_test("old-dependency-is-removed", test_old_dependency_is_removed);
-    add_test("dependency-chain-is-removed", test_dependency_chain_removal);
-    add_test("newest-app-stays", test_newest_app_stays);
-    add_test("remove", test_remove);
-    add_test("update-gains-privileges", test_update_gains_privileges);
-#undef add_test
+    g_test_add_func("/store/install", test_install);
+    g_test_add_func("/store/install-again", test_install_again);
+    g_test_add_func("/store/find-identity", test_find_identity);
+    g_test_add_func("/store/current-is-newest", test_current_is_newest);
+    g_test_add_func("/store/remove", test_remove);
+    g_test_add_func("/store/used-base-stays", test_used_base_stays);
+    g_test_add_func("/store/cleanup", test_cleanup);
+    g_test_add_func("/store/update-gains-privileges", test_update_gains_privileges);
     g_test_add_func("/store/writes-stay-below-their-directory", test_writes_stay_below_their_directory);
 
     return g_test_run();
